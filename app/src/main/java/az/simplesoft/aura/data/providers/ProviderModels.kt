@@ -3,6 +3,11 @@ package az.simplesoft.aura.data.providers
 import android.net.Uri
 import az.simplesoft.aura.data.Track
 
+enum class SearchMediaKind {
+    TRACK,
+    RADIO
+}
+
 data class MusicSearchRequest(
     val rawQuery: String,
     val artist: String? = null,
@@ -11,7 +16,8 @@ data class MusicSearchRequest(
     val year: Int? = null,
     val preferredProviderId: String? = null,
     val limit: Int = 10,
-    val autoPlay: Boolean = true
+    val autoPlay: Boolean = true,
+    val mediaKind: SearchMediaKind = SearchMediaKind.TRACK
 ) {
     val query: String get() = listOfNotNull(artist, title).joinToString(" ").ifBlank { rawQuery }
 }
@@ -26,7 +32,15 @@ data class TrackCandidate(
     val durationMs: Long? = null,
     val bitrateKbps: Int? = null,
     val playbackToken: String? = null,
-    val confidence: Double = 0.0
+    val confidence: Double = 0.0,
+    val album: String? = null,
+    val year: Int? = null,
+    val isExplicit: Boolean? = null,
+    val popularity: Long? = null,
+    val channel: String? = null,
+    val isOfficial: Boolean = false,
+    val isrc: String? = null,
+    val musicBrainzId: String? = null
 )
 
 data class PlayableSource(
