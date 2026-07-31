@@ -40,11 +40,11 @@ No existing production or test source file was changed in Stage 1.
 
 ## 7. Physical verification
 
-Prior Xiaomi `2201117SG` verification remains documented, but the fresh Stage 1 rerun is pending because no adb device was connected.
+The fresh Stage 1 run passed on Xiaomi `2201117SG`: Zaycev search resolved `Капкан — Мот`, MediaSession played with a four-item queue, position advanced in the background, Next switched to `Малая — Мот`, and no fatal exception or ANR appeared in logcat. Playback was paused after the test.
 
 ## 8. Errors found
 
-- No adb device was available for the mandatory fresh physical test.
+- The phone was temporarily absent from adb during the first attempt, then reconnected and passed the full check.
 - Five deprecated icon warnings exist.
 - Multi-provider orchestration, cross-source deduplication, durable queue state, and provider-neutral diagnostics are absent.
 
@@ -54,7 +54,7 @@ The repository had no Git metadata and no portable Gradle wrapper. Both were add
 
 ## 10. Remaining work
 
-Reconnect the phone and rerun Zaycev playback/background/queue checks. After that gate, implement Plugin Core tests and types without switching production wiring prematurely.
+Implement Plugin Core tests and types without switching production wiring prematurely, then pass the same Zaycev scenario through the compatibility adapter.
 
 ## 11. Regression risk
 
@@ -67,4 +67,3 @@ Low for Stage 1 because production code was not modified. Future risk is concent
 ## 13. Version
 
 `0.2.0` (`versionCode 2`).
-

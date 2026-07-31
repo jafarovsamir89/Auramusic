@@ -48,9 +48,16 @@ Compiler warnings: five uses of deprecated non-auto-mirrored Material icons. The
 
 ## Physical verification status
 
-The same build line and vertical scenario were successfully tested on Xiaomi `2201117SG` immediately before this audit: Zaycev search, native playback, real artwork/progress, MediaSession state, a four-item prepared queue, next, and background playback all worked.
+The mandatory fresh run passed on Xiaomi `2201117SG`:
 
-The mandatory fresh audit run could not be repeated because `adb devices -l` returned no connected devices. This item remains open and must be rerun before Plugin Core is integrated into the app entry path.
+- the debug command `Включи Мот Капкан` selected `Капкан — Мот`;
+- MediaSession reported `PLAYING`, real metadata, and a four-item queue;
+- position advanced from 49,839 ms to 52,838 ms while AURA was in the background;
+- the system Next command moved to queue item 1, `Малая — Мот`;
+- artwork was visible in the native UI;
+- logcat contained no AURA fatal exception or ANR.
+
+Playback was paused after verification and the application task was brought back to the foreground.
 
 ## Gaps relative to AURA 2.0
 
@@ -81,4 +88,3 @@ The mandatory fresh audit run could not be repeated because `adb devices -l` ret
 ## Release artifact
 
 `app/build/outputs/apk/debug/app-debug.apk`
-
