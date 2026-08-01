@@ -28,6 +28,7 @@ import az.simplesoft.aura.data.providers.zaycev.ZaycevProvider
 import az.simplesoft.aura.data.search.CandidateRankerV2
 import az.simplesoft.aura.data.search.TrackIdentityResolver
 import az.simplesoft.aura.data.search.UnifiedSearchEngine
+import az.simplesoft.aura.data.search.UnifiedTrackSession
 import az.simplesoft.aura.domain.music.EmptyRecommendationEngine
 import az.simplesoft.aura.domain.music.MusicBrain
 import az.simplesoft.aura.domain.music.SearchOutcome
@@ -39,6 +40,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 enum class AuraDestination { HOME, SEARCH, LIBRARY, ASSISTANT, DIAGNOSTICS }
 enum class LibrarySection { FAVORITES, HISTORY, LOCAL, PLAYLISTS }
@@ -46,6 +48,7 @@ enum class SearchPhase { IDLE, SEARCHING, MATCHING, RESOLVING, BUFFERING, PLAYIN
 
 data class ProviderDiagnostics(
     val engine: String = "Legacy · Zaycev",
+    val selectedProvider: String = "—",
     val query: String = "—",
     val candidates: List<String> = emptyList(),
     val selectedPage: String = "—",
@@ -115,6 +118,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         recommendationEngine = EmptyRecommendationEngine,
         playbackCoordinator = playbackCoordinator
     )
+    private val unifiedTrackSession = UnifiedTrackSession()
     private val candidatesByTrackId = mutableMapOf<String, TrackCandidate>()
     private val playbackRecoveryAttempts = mutableMapOf<String, Int>()
     private var latestCandidates: List<TrackCandidate> = emptyList()
@@ -377,6 +381,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     }
                 }
                 is ProviderResult.Failure -> _state.update {
+                    unifiedTrackSession.clear()
                     it.copy(
                         isLoading = false,
                         searchPhase = SearchPhase.ERROR,
@@ -392,7 +397,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
-    private fun resolveAndPlay(candidate: TrackCandidate) {
+    private fun resolveAndPlay(
+        candidate: TrackCandidate,
+        resumeTrackId: String? = null,
+        resumePositionMs: Long = 0L
+    ) {
         _state.update {
             it.copy(
                 isLoading = true,
@@ -402,8 +411,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
         viewModelScope.launch {
             val resolveStartedAt = System.currentTimeMillis()
-            val ordered = listOf(candidate) + latestCandidates.filterNot {
-                it.providerId == candidate.providerId && it.id == candidate.id
+            val ordered = if (pluginCoreEnabled) {
+                unifiedTrackSession.fallbackOrder(candidate, latestCandidates, 4)
+            } else {
+                listOf(candidate) + latestCandidates.filterNot {
+                    it.providerId == candidate.providerId && it.id == candidate.id
+                }
             }
             var lastError = "Подходящий источник не найден"
             for ((index, option) in ordered.take(4).withIndex()) {
@@ -418,13 +431,18 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 }
                 when (val result = resolveCandidate(option)) {
                     is ProviderResult.Success -> {
-                        val resolved = result.value.track
+                        val resolved = if (pluginCoreEnabled) {
+                            unifiedTrackSession.canonicalize(option, result.value.track)
+                        } else {
+                            result.value.track
+                        }
                         _state.update {
                             it.copy(
                                 searchResults = it.searchResults.map { track -> if (track.id == resolved.id) resolved else track },
                                 isLoading = false,
                                 searchPhase = SearchPhase.BUFFERING,
                                 diagnostics = it.diagnostics.copy(
+                                    selectedProvider = result.value.providerId,
                                     selectedPage = result.value.sourcePageUrl,
                                     resolver = result.diagnostics["stage"] ?: "unknown",
                                     resolveTimeMs = System.currentTimeMillis() - resolveStartedAt,
@@ -436,7 +454,15 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                                 assistantText = "Источник готов. Запускаю ${resolved.title}…"
                             )
                         }
-                        startPlayback(resolved)
+                        val failedTrack = resumeTrackId?.let { id -> state.value.queue.find { it.id == id } }
+                        val canResume = resumeTrackId != null &&
+                            resolved.id == resumeTrackId &&
+                            durationCompatible(failedTrack?.durationMs, resolved.durationMs)
+                        if (canResume) {
+                            replacePlaybackSource(resolved, resumePositionMs)
+                        } else {
+                            startPlayback(resolved)
+                        }
                         prefetchFollowing(resolved.id)
                         return@launch
                     }
@@ -461,12 +487,19 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private fun prefetchFollowing(currentTrackId: String) {
         viewModelScope.launch {
             latestCandidates
-                .filterNot { "${it.providerId}:${it.id}" == currentTrackId }
+                .filterNot {
+                    if (pluginCoreEnabled) unifiedTrackSession.canonicalId(it) == currentTrackId
+                    else "${it.providerId}:${it.id}" == currentTrackId
+                }
                 .take(3)
                 .forEach { candidate ->
                     val result = resolveCandidate(candidate)
                     if (result is ProviderResult.Success) {
-                        val resolved = result.value.track
+                        val resolved = if (pluginCoreEnabled) {
+                            unifiedTrackSession.canonicalize(candidate, result.value.track)
+                        } else {
+                            result.value.track
+                        }
                         val alreadyPrepared = state.value.queue.any { it.id == resolved.id && !it.streamUrl.isNullOrBlank() }
                         if (!alreadyPrepared) {
                             _state.update { current ->
@@ -508,6 +541,23 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         playback.play(playbackQueue, track)
     }
 
+    private fun replacePlaybackSource(track: Track, positionMs: Long) {
+        _state.update { current ->
+            current.copy(
+                queue = current.queue.map { if (it.id == track.id) track else it },
+                searchResults = current.searchResults.map { if (it.id == track.id) track else it },
+                isLoading = false,
+                isBuffering = true,
+                searchPhase = SearchPhase.BUFFERING,
+                positionMs = positionMs,
+                playbackDurationMs = track.durationMs ?: current.playbackDurationMs,
+                assistantText = "Источник изменён. Продолжаю ${track.title}…"
+            )
+        }
+        hasPreparedMedia = true
+        playback.replaceCurrent(track, positionMs)
+    }
+
     private fun playCurrent() {
         val current = state.value
         when {
@@ -521,7 +571,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         if (!pluginCoreEnabled) return searchEngine.search(request)
         return when (val outcome = musicBrain.search(request)) {
             is SearchOutcome.Success -> ProviderResult.Success(
-                value = outcome.tracks.mapNotNull { it.alternatives.firstOrNull() }.take(request.limit),
+                value = unifiedTrackSession.replace(outcome.tracks).take(request.limit),
                 diagnostics = outcome.diagnostics + mapOf(
                     "engine" to "plugin-core",
                     "unifiedTracks" to outcome.tracks.size.toString()
@@ -548,7 +598,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     private fun TrackCandidate.toTrack() = Track(
-        id = "$providerId:$id",
+        id = if (pluginCoreEnabled) unifiedTrackSession.canonicalId(this) else "$providerId:$id",
         title = title,
         artist = artist,
         artworkUrl = artworkUrl,
@@ -606,7 +656,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         if (candidate != null && attempts < 1) {
             playbackRecoveryAttempts[trackId] = attempts + 1
             _state.update { it.copy(assistantText = message, searchPhase = SearchPhase.RESOLVING) }
-            resolveAndPlay(candidate)
+            resolveAndPlay(candidate, trackId, playback.currentPositionMs())
             return
         }
         val fallback = candidate?.let { failed ->
@@ -651,6 +701,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         ProviderFailureReason.NOT_PLAYABLE -> "Источник не воспроизводится. Ищу другой вариант."
         ProviderFailureReason.PARSE, ProviderFailureReason.UNKNOWN -> "Музыкальный источник временно недоступен."
     }
+
+    private fun durationCompatible(left: Long?, right: Long?): Boolean =
+        left == null || right == null || abs(left - right) <= 10_000L
 
     companion object {
         private const val AUTO_PLAY_CONFIDENCE = 0.72

@@ -388,6 +388,7 @@ private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Un
             Text("Только debug-сборка", color = SecondaryText, fontSize = 12.sp)
         }
         item { DiagnosticRow("Маршрут", diagnostics.engine) }
+        item { DiagnosticRow("Источник", diagnostics.selectedProvider) }
         item { DiagnosticRow("Запрос", diagnostics.query) }
         item { DiagnosticRow("Поиск", diagnostics.searchTimeMs?.let { "$it мс" } ?: "—") }
         item { DiagnosticRow("Resolve", diagnostics.resolveTimeMs?.let { "$it мс" } ?: "—") }
