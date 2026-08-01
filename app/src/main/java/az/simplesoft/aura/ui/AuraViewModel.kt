@@ -18,6 +18,7 @@ import az.simplesoft.aura.data.plugins.core.ProviderManager
 import az.simplesoft.aura.data.plugins.local.LocalMusicPlugin
 import az.simplesoft.aura.data.plugins.radio.RadioMusicPlugin
 import az.simplesoft.aura.data.plugins.zaycev.ZaycevMusicPlugin
+import az.simplesoft.aura.data.plugins.youtube.YouTubeMusicPlugin
 import az.simplesoft.aura.data.providers.MusicSearchRequest
 import az.simplesoft.aura.data.providers.PlayableSource
 import az.simplesoft.aura.data.providers.ProviderResult
@@ -101,10 +102,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val providerManager = ProviderManager(
         setOf(
             LocalMusicPlugin(localProvider),
+            YouTubeMusicPlugin(),
             ZaycevMusicPlugin(zaycevProvider),
             RadioMusicPlugin(radioProvider)
         )
-    )
+    ).also { it.setEnabled(YouTubeMusicPlugin.ID, false) }
     private val playbackCoordinator = PlaybackConnectionCoordinator(playback) { state.value.queue }
     private val musicBrain = MusicBrain(
         providerManager = providerManager,
@@ -151,12 +153,18 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun setListening(value: Boolean) = _state.update { it.copy(isListening = value) }
     fun setQuery(value: String) = _state.update { it.copy(query = value) }
 
-    fun setPluginCoreEnabled(enabled: Boolean) {
+    fun setPluginCoreEnabled(enabled: Boolean, youtubeEnabled: Boolean = false) {
         pluginCoreEnabled = enabled
+        val useYouTube = enabled && youtubeEnabled
+        providerManager.setEnabled(YouTubeMusicPlugin.ID, useYouTube)
         _state.update { current ->
             current.copy(
                 diagnostics = current.diagnostics.copy(
-                    engine = if (enabled) "Plugin Core · Local + Zaycev" else "Legacy · Zaycev"
+                    engine = when {
+                        useYouTube -> "Plugin Core · Local + YouTube + Zaycev"
+                        enabled -> "Plugin Core · Local + Zaycev"
+                        else -> "Legacy · Zaycev"
+                    }
                 )
             )
         }

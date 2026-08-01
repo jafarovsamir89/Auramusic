@@ -84,7 +84,10 @@ class TrackIdentityResolver(
 
     private fun normalizedBaseTitle(title: String): String {
         val normalized = TrackMatcher.normalize(title)
-        return VARIANT_MARKERS.fold(normalized) { value, marker ->
+        val withoutDecorations = BASE_DECORATIONS.fold(normalized) { value, marker ->
+            value.replace(Regex("\\b${Regex.escape(marker)}\\b"), " ")
+        }
+        return VARIANT_MARKERS.fold(withoutDecorations) { value, marker ->
             value.replace(Regex("\\b${Regex.escape(marker)}\\b"), " ")
         }.replace(Regex("\\s+"), " ").trim()
     }
@@ -95,6 +98,9 @@ class TrackIdentityResolver(
     }
 
     companion object {
+        private val BASE_DECORATIONS = listOf(
+            "official music video", "official video", "official audio", "music video", "audio"
+        )
         private val VARIANT_MARKERS = setOf(
             "live", "концерт", "cover", "кавер", "remix", "ремикс", "slowed",
             "reverb", "karaoke", "караоке", "instrumental", "инструментал",

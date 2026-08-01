@@ -1,0 +1,48 @@
+{
+  "playabilityStatus": {"status": "OK"},
+  "streamingData": {
+    "expiresInSeconds": "21600",
+    "adaptiveFormats": [
+      {
+        "itag": 140,
+        "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+        "bitrate": 130561,
+        "contentLength": "3900000",
+        "approxDurationMs": "187000",
+        "audioQuality": "AUDIO_QUALITY_MEDIUM",
+        "audioSampleRate": "44100",
+        "audioChannels": 2,
+        "url": "https://rr.example.googlevideo.com/videoplayback?expire=2000000000&id=fixture-mp4"
+      },
+      {
+        "itag": 251,
+        "mimeType": "audio/webm; codecs=\"opus\"",
+        "bitrate": 130587,
+        "contentLength": "3000000",
+        "approxDurationMs": "187000",
+        "audioQuality": "AUDIO_QUALITY_MEDIUM",
+        "audioSampleRate": "48000",
+        "audioChannels": 2,
+        "url": "https://rr.example.googlevideo.com/videoplayback?expire=2000000000&id=fixture-opus"
+      },
+      {
+        "itag": 22,
+        "mimeType": "video/mp4; codecs=\"avc1.64001F, mp4a.40.2\"",
+        "bitrate": 2000000,
+        "url": "https://rr.example.googlevideo.com/videoplayback?id=fixture-video"
+      }
+    ]
+  },
+  "videoDetails": {
+    "videoId": "kXYiU_JCYtU",
+    "title": "Numb",
+    "author": "Linkin Park",
+    "lengthSeconds": "187",
+    "viewCount": "2300000000",
+    "thumbnail": {"thumbnails": [
+      {"url":"https://i.ytimg.com/vi/kXYiU_JCYtU/default.jpg","width":120,"height":90},
+      {"url":"https://i.ytimg.com/vi/kXYiU_JCYtU/maxresdefault.jpg","width":1280,"height":720}
+    ]}
+  },
+  "microformat": {"playerMicroformatRenderer": {"publishDate": "2007-03-05"}}
+}

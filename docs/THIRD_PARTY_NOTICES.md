@@ -34,3 +34,6 @@ Transitive dependencies must be captured from the final release dependency graph
 4. Record any future copied/adapted source file with repository URL, commit hash, source path, modifications, and license.
 5. Do not claim that an open-source software license grants permission to redistribute or download music.
 
+## YouTube integration status
+
+The independently written YouTube plugin adds no new software dependency and contains no copied extractor code. The official YouTube Data API documentation and public YouTube responses were used as behavioral references only. Platform terms, branding, content rights, and distribution constraints still require a separate product/legal review before this feature can be enabled in a public release.

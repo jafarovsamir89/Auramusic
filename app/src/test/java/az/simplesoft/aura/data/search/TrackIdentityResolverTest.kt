@@ -41,6 +41,14 @@ class TrackIdentityResolverTest {
         assertFalse(resolver.areSame(short, extended))
     }
 
+    @Test
+    fun mergesOfficialMusicVideoWithSameStudioRecording() {
+        val studio = candidate("zaycev", "one", "Numb", 190_000)
+        val officialVideo = candidate("youtube", "two", "Numb (Official Music Video)", 187_000)
+
+        assertTrue(resolver.areSame(studio, officialVideo))
+    }
+
     private fun candidate(provider: String, id: String, title: String, duration: Long) = TrackCandidate(
         providerId = provider,
         id = id,

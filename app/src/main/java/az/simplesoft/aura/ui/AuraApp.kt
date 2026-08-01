@@ -132,6 +132,7 @@ private val AccentSilver = Color(0xFFD5D8DD)
 fun AuraApp(
     initialCommand: String? = null,
     pluginCoreEnabled: Boolean = false,
+    youtubePluginEnabled: Boolean = false,
     vm: AuraViewModel = viewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -148,8 +149,8 @@ fun AuraApp(
         )
     }
     DisposableEffect(Unit) { onDispose(recognizer::destroy) }
-    LaunchedEffect(initialCommand, pluginCoreEnabled) {
-        vm.setPluginCoreEnabled(pluginCoreEnabled)
+    LaunchedEffect(initialCommand, pluginCoreEnabled, youtubePluginEnabled) {
+        vm.setPluginCoreEnabled(pluginCoreEnabled, youtubePluginEnabled)
         initialCommand?.takeIf(String::isNotBlank)?.let(vm::submit)
     }
     DisposableEffect(lifecycleOwner) {
