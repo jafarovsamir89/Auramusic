@@ -44,7 +44,7 @@ class RadioMusicPlugin(
         val stream = candidate.playbackToken?.takeIf { it.startsWith("https://") }
             ?: return PluginResult.Failure(PluginFailureReason.NOT_PLAYABLE, "Radio stream unavailable")
         val track = Track(
-            id = candidate.id,
+            id = "$id:${candidate.id}",
             title = candidate.title,
             artist = candidate.artist,
             artworkUrl = candidate.artworkUrl,

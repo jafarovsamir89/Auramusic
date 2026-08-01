@@ -1,6 +1,7 @@
 package az.simplesoft.aura.domain.music
 
 import az.simplesoft.aura.data.Track
+import az.simplesoft.aura.data.plugins.core.PluginFailureReason
 import az.simplesoft.aura.data.search.UnifiedTrack
 
 sealed interface SearchOutcome {
@@ -9,7 +10,10 @@ sealed interface SearchOutcome {
         val diagnostics: Map<String, String> = emptyMap()
     ) : SearchOutcome
 
-    data class Failure(val message: String) : SearchOutcome
+    data class Failure(
+        val reason: PluginFailureReason,
+        val message: String
+    ) : SearchOutcome
 }
 
 sealed interface PlaybackOutcome {

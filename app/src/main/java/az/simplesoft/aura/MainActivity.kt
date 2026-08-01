@@ -37,7 +37,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             AuraTheme {
                 AuraApp(
-                    initialCommand = if (BuildConfig.DEBUG) intent.getStringExtra("aura_command") else null
+                    initialCommand = if (BuildConfig.DEBUG) intent.getStringExtra("aura_command") else null,
+                    pluginCoreEnabled = BuildConfig.DEBUG &&
+                        intent.getBooleanExtra("aura_plugin_core", false)
                 )
             }
         }

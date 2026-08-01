@@ -52,7 +52,7 @@ class LocalMusicPlugin(
             return PluginResult.Failure(PluginFailureReason.NOT_PLAYABLE, "Invalid local media URI")
         }
         val track = Track(
-            id = candidate.id,
+            id = "$id:${candidate.id}",
             title = candidate.title,
             artist = candidate.artist,
             artworkUrl = candidate.artworkUrl,

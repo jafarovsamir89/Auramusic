@@ -44,8 +44,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ClearAll
 import androidx.compose.material.icons.rounded.Close
@@ -64,8 +66,6 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.PlaylistPlay
-import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -129,7 +129,11 @@ private val SecondaryText = Color(0xFFA1A1A6)
 private val AccentSilver = Color(0xFFD5D8DD)
 
 @Composable
-fun AuraApp(initialCommand: String? = null, vm: AuraViewModel = viewModel()) {
+fun AuraApp(
+    initialCommand: String? = null,
+    pluginCoreEnabled: Boolean = false,
+    vm: AuraViewModel = viewModel()
+) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -144,7 +148,8 @@ fun AuraApp(initialCommand: String? = null, vm: AuraViewModel = viewModel()) {
         )
     }
     DisposableEffect(Unit) { onDispose(recognizer::destroy) }
-    LaunchedEffect(initialCommand) {
+    LaunchedEffect(initialCommand, pluginCoreEnabled) {
+        vm.setPluginCoreEnabled(pluginCoreEnabled)
         initialCommand?.takeIf(String::isNotBlank)?.let(vm::submit)
     }
     DisposableEffect(lifecycleOwner) {
@@ -376,11 +381,12 @@ private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Un
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Назад") }
-                Text("Диагностика Zaycev", style = MaterialTheme.typography.headlineLarge)
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
+                Text("Диагностика AURA", style = MaterialTheme.typography.headlineLarge)
             }
             Text("Только debug-сборка", color = SecondaryText, fontSize = 12.sp)
         }
+        item { DiagnosticRow("Маршрут", diagnostics.engine) }
         item { DiagnosticRow("Запрос", diagnostics.query) }
         item { DiagnosticRow("Поиск", diagnostics.searchTimeMs?.let { "$it мс" } ?: "—") }
         item { DiagnosticRow("Resolve", diagnostics.resolveTimeMs?.let { "$it мс" } ?: "—") }
@@ -495,14 +501,14 @@ private fun LibraryScreen(
             LibrarySection.PLAYLISTS -> emptyList()
         }
         if (state.librarySection == LibrarySection.PLAYLISTS) {
-            EmptyLibrary(Icons.Rounded.PlaylistPlay, "Сохранённых плейлистов пока нет", "Очередь можно будет сохранить здесь")
+            EmptyLibrary(Icons.AutoMirrored.Rounded.PlaylistPlay, "Сохранённых плейлистов пока нет", "Очередь можно будет сохранить здесь")
         } else if (tracks.isEmpty()) {
             EmptyLibrary(
                 when (state.librarySection) {
                     LibrarySection.FAVORITES -> Icons.Rounded.FavoriteBorder
                     LibrarySection.HISTORY -> Icons.Rounded.History
                     LibrarySection.LOCAL -> Icons.Rounded.Headphones
-                    LibrarySection.PLAYLISTS -> Icons.Rounded.PlaylistPlay
+                    LibrarySection.PLAYLISTS -> Icons.AutoMirrored.Rounded.PlaylistPlay
                 },
                 when (state.librarySection) {
                     LibrarySection.FAVORITES -> "Здесь появятся любимые треки"
@@ -682,7 +688,7 @@ private fun PlayerScreen(
                     .background(Color.White.copy(.07f)).padding(horizontal = 8.dp, vertical = 3.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                PlayerAction(Icons.Rounded.QueueMusic, "Очередь", onQueue)
+                PlayerAction(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь", onQueue)
                 PlayerAction(Icons.Rounded.Equalizer, "Zaycev", {})
                 PlayerAction(Icons.Rounded.DirectionsCar, "В машине", onCar)
             }
@@ -703,7 +709,7 @@ private fun QueueScreen(
         Modifier.fillMaxSize().background(AuraBlack).statusBarsPadding().navigationBarsPadding().padding(horizontal = 20.dp)
     ) {
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose) { Icon(Icons.Rounded.ArrowBack, "Назад") }
+            IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
             Text("Очередь", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f))
             IconButton(onClick = onShuffle) {
                 Icon(Icons.Rounded.Shuffle, "Перемешать", tint = if (state.isShuffleEnabled) PrimaryText else SecondaryText)

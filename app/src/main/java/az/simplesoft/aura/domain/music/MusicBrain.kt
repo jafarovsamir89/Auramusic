@@ -39,7 +39,7 @@ class MusicBrain(
                 val unified = identityResolver.unify(ranked)
                 SearchOutcome.Success(unified, result.diagnostics)
             }
-            is PluginResult.Failure -> SearchOutcome.Failure(result.message)
+            is PluginResult.Failure -> SearchOutcome.Failure(result.reason, result.message)
         }
 
     suspend fun searchAndPlay(request: MusicSearchRequest): PlaybackOutcome {

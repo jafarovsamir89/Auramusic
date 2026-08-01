@@ -65,13 +65,27 @@ class PlaybackConnection(
         )
     }
 
-    fun play(queue: List<Track>, selected: Track) = withController {
+    fun play(queue: List<Track>, selected: Track, startPositionMs: Long = 0L) = withController {
         val playable = queue.filter { !it.streamUrl.isNullOrBlank() }
         val index = playable.indexOfFirst { it.id == selected.id }.coerceAtLeast(0)
         playable.forEach { track -> PlaybackSourceRegistry.register(track.streamUrl.orEmpty(), track.requestHeaders) }
-        it.setMediaItems(playable.map(::toMediaItem), index, 0L)
+        it.setMediaItems(playable.map(::toMediaItem), index, startPositionMs.coerceAtLeast(0L))
         it.prepare()
         it.play()
+    }
+
+    fun replaceCurrent(track: Track, startPositionMs: Long) = withController { player ->
+        val uri = track.streamUrl ?: return@withController
+        PlaybackSourceRegistry.register(uri, track.requestHeaders)
+        val index = player.currentMediaItemIndex.takeIf { it in 0 until player.mediaItemCount }
+        if (index == null) {
+            player.setMediaItem(toMediaItem(track), startPositionMs.coerceAtLeast(0L))
+        } else {
+            player.replaceMediaItem(index, toMediaItem(track))
+            player.seekTo(index, startPositionMs.coerceAtLeast(0L))
+        }
+        player.prepare()
+        player.play()
     }
 
     fun append(track: Track) {

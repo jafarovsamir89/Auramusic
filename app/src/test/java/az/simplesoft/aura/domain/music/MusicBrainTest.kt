@@ -64,6 +64,7 @@ class MusicBrainTest {
 
         assertTrue(result is SearchOutcome.Failure)
         assertEquals("Source unavailable", (result as SearchOutcome.Failure).message)
+        assertEquals(PluginFailureReason.NETWORK, result.reason)
     }
 
     private fun candidate(provider: String, id: String, duration: Long, official: Boolean) = TrackCandidate(
