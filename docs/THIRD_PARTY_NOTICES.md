@@ -10,7 +10,6 @@ This file is an engineering inventory, not legal advice. Full license texts and 
 | Jetpack Compose / Material 3 / Material Icons | Native UI | Apache-2.0 | https://github.com/androidx/androidx |
 | AndroidX Media3 | ExoPlayer, MediaSession, service | Apache-2.0 | https://github.com/androidx/media |
 | OkHttp | HTTP client | Apache-2.0 | https://github.com/square/okhttp |
-| jsoup | HTML parsing | MIT | https://github.com/jhy/jsoup |
 | Coil 2 | Artwork loading | Apache-2.0 | https://github.com/coil-kt/coil |
 | JSON-java (`org.json`) | JSON parsing | JSON License | https://github.com/stleary/JSON-java |
 | JUnit 4 | Unit testing only | EPL-1.0 | https://github.com/junit-team/junit4 |
@@ -18,13 +17,14 @@ This file is an engineering inventory, not legal advice. Full license texts and 
 
 Transitive dependencies must be captured from the final release dependency graph before distribution.
 
-## Researched but not included
+## Architectural references
 
 | Project | License | Current AURA status |
 |---|---|---|
-| NewPipeExtractor | GPL-3.0-or-later | Architectural research only; no dependency or copied code |
-| SimpMusic | GPL-3.0 | Architectural research only; no dependency or copied code |
-| Spotube | BSD-4-Clause | Architectural research only; no dependency or copied code |
+| NewPipe / NewPipeExtractor | GPL-3.0-or-later | Source-level architecture reference only; no dependency or source copied |
+| InnerTune | GPL-3.0 | Source-level architecture reference; no source copied |
+| ViMusic | GPL-3.0 | Source-level architecture reference; no source copied |
+| Harmony Music | GPL-3.0 | Source-level architecture reference; no source copied |
 
 ## Required release work
 
@@ -36,4 +36,4 @@ Transitive dependencies must be captured from the final release dependency graph
 
 ## YouTube integration status
 
-The independently written YouTube plugin adds no new software dependency and contains no copied extractor code. The official YouTube Data API documentation and public YouTube responses were used as behavioral references only. Platform terms, branding, content rights, and distribution constraints still require a separate product/legal review before this feature can be enabled in a public release.
+AURA's YouTube request, parsing and playback implementation is independently written. The reviewed applications and NewPipeExtractor are not dependencies and no reviewed source was copied. Platform terms, branding, content rights, and distribution constraints still require a product/legal review before public release.

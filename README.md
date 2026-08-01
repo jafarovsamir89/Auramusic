@@ -1,82 +1,54 @@
 # AURA Music — Android prototype
 
-AURA ищет конкретную песню на поддерживаемом публичном музыкальном источнике и
-воспроизводит её собственным нативным плеером. Сайт-источник пользователю не показывается.
+AURA is a native Android music prototype. Online catalog search and playback use YouTube; local files and internet radio remain separate device features rather than fallback music providers.
 
-## Текущий основной поток
+## Playback flow
 
 ```text
-Текст или голос
-  → LocalIntentEngine
-  → MusicSearchRequest
-  → UnifiedSearchEngine
-  → ZaycevProvider.search()
-  → TrackMatcher
-  → ZaycevProvider.resolve()
-  → PlayableSource
-  → MediaSessionService + ExoPlayer
+text or voice request
+  -> MusicBrain / YouTubeMusicPlugin
+  -> canonical videoId + metadata
+  -> Media3 queue with aura-youtube:// identity
+  -> ResolvingDataSource at open()
+  -> AURA multi-client stream resolver
+  -> format-aware cache key (videoId + itag)
+  -> ExoPlayer / MediaSessionService
 ```
 
-`ZaycevProvider` повторяет только публичный сценарий кнопки «Слушать»:
+Signed `googlevideo` URLs are not stored in the queue or Room. They are resolved immediately before playback, retained only in a small expiring memory cache, invalidated on HTTP 403, and resolved again once. HTTP 429 and transient 5xx failures use a bounded three-attempt backoff. Media bytes are cached independently under `youtube:<videoId>:<itag>`.
 
-1. поиск через публичный `pages/search`;
-2. получение streaming-токена через `track/filezmeta`;
-3. получение временного URL через `track/play/{token}`;
-4. проверка ресурса коротким Range-запросом;
-5. передача URL, Referer, User-Agent и допустимых cookies в ExoPlayer.
+## Implemented
 
-Ветка скачивания, CAPTCHA, авторизация, подписка, DRM и любые обходы ограничений не используются.
+- Kotlin, Jetpack Compose and Android 8.0+.
+- YouTube search, related items and audio-only playback.
+- AURA-owned Innertube player client with isolated client profiles, typed failures, strict video-ID validation and direct audio-format selection.
+- Media3/ExoPlayer background playback, MediaSession queue and system controls.
+- 128 MiB LRU playback cache with URL-independent, format-aware keys.
+- Room persistence for metadata, favorites, history, queue state and preferences; transient stream URLs are excluded.
+- Local-device music, radio, voice intents and automotive UI.
 
-## Реализовано
+The source review and the architecture derived from NewPipe, InnerTune, ViMusic and Harmony Music are recorded in [`docs/YOUTUBE_ARCHITECTURE_RESEARCH.md`](docs/YOUTUBE_ARCHITECTURE_RESEARCH.md).
 
-- Kotlin + Jetpack Compose, Android 8.0+.
-- Поиск конкретного трека, ранжирование совпадений и автоматический запуск уверенного результата.
-- Нативный ExoPlayer в `MediaSessionService`, системное уведомление и фоновое воспроизведение.
-- Кэш результатов поиска и короткоживущих разрешённых источников.
-- HTTP-first резолвер и ограниченный скрытый WebView-fallback без видимого браузера.
-- Локальный голосовой intent-движок и системное офлайн-распознавание речи.
-- Локальная музыка с телефона, любимое, история, очередь и автомобильный режим.
-- Сетевые обложки в нативном интерфейсе и адаптивный фон плеера без тяжёлого полноэкранного blur.
-- Реальная позиция воспроизведения, оставшееся время и перемотка из собственного плеера.
-- Автоматическая подготовка следующих треков и переход к следующему кандидату при ошибке потока.
-- Парсерные фикстуры, matcher-тесты, проверка ресурса и живой интеграционный тест поиска.
+## Start on a clean computer
 
-## Разработка AURA 2.0
+Everything required from the repository is committed, including the Gradle Wrapper and Room schema. Generated build outputs, IDE state and the machine-specific Android SDK path are intentionally excluded.
 
-Новый Plugin Core добавляется рядом с проверенным маршрутом версии 0.2.0. Сейчас он
-включает возможности и состояние провайдеров, параллельный сбор с тайм-аутами,
-`CandidateRankerV2`, объединение одного трека из разных источников, границы Music Brain,
-а также адаптеры локальной музыки и радио. Основной поиск продолжает работать через
-исходный маршрут Zaycev до проверки полного паритета адаптера на физическом телефоне.
-В debug-сборке новый маршрут можно включить через Intent extra `aura_plugin_core=true`;
-обычный запуск по-прежнему использует стабильный маршрут 0.2.0.
+Install:
 
-Изолированный YouTube Music MVP реализован, но зарегистрирован выключенным. В debug-сборке
-он требует одновременно `aura_plugin_core=true` и `aura_youtube_plugin=true`. Ограниченный
-live-тест поиска, player metadata, audio-only форматов и Range-проверки проходит без аккаунта;
-физическое воспроизведение будет проверено позже на телефоне.
+1. Android Studio with Android SDK Platform 35 and Build Tools.
+2. JDK 17 (Android Studio's bundled JDK is suitable).
+3. Git.
 
-Debug-маршрут также хранит один канонический ID композиции при переключении
-`YouTube ↔ Zaycev`, проверяет совместимость длительности перед переносом позиции и
-ограничивает in-memory registry временных URL последними 64 источниками.
+Clone and build on Windows:
 
-Архитектурные документы и аудит находятся в `docs/`.
-
-## Сборка и тесты
-
-```bash
-.codex-tools/gradle-8.11.1/bin/gradle :app:testDebugUnitTest :app:assembleDebug
+```powershell
+git clone https://github.com/jafarovsamir89/Auramusic.git
+cd Auramusic
+.\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-daemon --console=plain
 ```
 
-APK: `app/build/outputs/apk/debug/app-debug.apk`.
+On macOS or Linux, use `./gradlew` instead. Android Studio creates `local.properties` automatically; for command-line builds, set `ANDROID_HOME` or create `local.properties` containing `sdk.dir=<absolute Android SDK path>`.
 
-## Примеры команд
+The debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
 
-- «Включи Мот Капкан»
-- «Найди Би-2 Полковнику никто не пишет»
-- «Пауза»
-- «Следующая»
-- «Добавь в любимые»
-
-Распознавание голоса запрашивает офлайн-режим, но фактическая автономность зависит
-от прошивки и установленного русского языкового пакета телефона.
+Before public distribution, review YouTube platform/content terms and the dependency inventory in [`docs/THIRD_PARTY_NOTICES.md`](docs/THIRD_PARTY_NOTICES.md).

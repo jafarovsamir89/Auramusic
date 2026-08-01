@@ -10,35 +10,35 @@ class UnifiedTrackSessionTest {
     @Test
     fun triesSameTrackAlternativeBeforeNextSongAndKeepsCanonicalId() {
         val youtube = candidate("youtube", "video-one", "Numb")
-        val zaycev = candidate("zaycev", "track-one", "Numb")
+        val youtubeAudio = candidate("youtube", "audio-one", "Numb")
         val next = candidate("youtube", "video-two", "Faint")
         val session = UnifiedTrackSession()
         val primary = session.replace(
             listOf(
-                unified("youtube:video-one", youtube, zaycev),
+                unified("youtube:video-one", youtube, youtubeAudio),
                 unified("youtube:video-two", next)
             )
         )
 
         val order = session.fallbackOrder(youtube, primary, 4)
-        val resolvedFromZaycev = session.canonicalize(zaycev, track("zaycev:track-one", "zaycev"))
+        val resolvedFromAudio = session.canonicalize(youtubeAudio, track("youtube:audio-one", "youtube"))
 
-        assertEquals(listOf("youtube", "zaycev", "youtube"), order.map(TrackCandidate::providerId))
-        assertEquals("youtube:video-one", resolvedFromZaycev.id)
-        assertEquals("zaycev", resolvedFromZaycev.sourceId)
+        assertEquals(listOf("youtube", "youtube", "youtube"), order.map(TrackCandidate::providerId))
+        assertEquals("youtube:video-one", resolvedFromAudio.id)
+        assertEquals("youtube", resolvedFromAudio.sourceId)
     }
 
     @Test
-    fun supportsReverseZaycevToYouTubeFallback() {
-        val zaycev = candidate("zaycev", "track-one", "Numb")
+    fun supportsStartingFromSecondYouTubeAlternative() {
+        val youtubeAudio = candidate("youtube", "audio-one", "Numb")
         val youtube = candidate("youtube", "video-one", "Numb")
         val session = UnifiedTrackSession()
-        val primary = session.replace(listOf(unified("zaycev:track-one", zaycev, youtube)))
+        val primary = session.replace(listOf(unified("youtube:audio-one", youtubeAudio, youtube)))
 
-        val order = session.fallbackOrder(zaycev, primary, 4)
+        val order = session.fallbackOrder(youtubeAudio, primary, 4)
 
-        assertEquals(listOf("zaycev", "youtube"), order.map(TrackCandidate::providerId))
-        assertEquals("zaycev:track-one", session.canonicalId(youtube))
+        assertEquals(listOf("youtube", "youtube"), order.map(TrackCandidate::providerId))
+        assertEquals("youtube:audio-one", session.canonicalId(youtube))
     }
 
     private fun unified(id: String, vararg candidates: TrackCandidate) = UnifiedTrack(

@@ -5,6 +5,7 @@ import android.content.Context
 import android.media.AudioManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.core.content.edit
 import az.simplesoft.aura.assistant.LocalIntentEngine
 import az.simplesoft.aura.assistant.MusicIntent
 import az.simplesoft.aura.data.DemoCatalog
@@ -12,22 +13,21 @@ import az.simplesoft.aura.data.LocalMusicProvider
 import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.RadioBrowserProvider
 import az.simplesoft.aura.data.Track
+import az.simplesoft.aura.data.database.AuraPlaybackSnapshot
+import az.simplesoft.aura.data.database.AuraStateRepository
 import az.simplesoft.aura.data.plugins.core.PluginFailureReason as CoreFailureReason
 import az.simplesoft.aura.data.plugins.core.PluginResult
 import az.simplesoft.aura.data.plugins.core.ProviderManager
 import az.simplesoft.aura.data.plugins.local.LocalMusicPlugin
 import az.simplesoft.aura.data.plugins.radio.RadioMusicPlugin
-import az.simplesoft.aura.data.plugins.zaycev.ZaycevMusicPlugin
 import az.simplesoft.aura.data.plugins.youtube.YouTubeMusicPlugin
 import az.simplesoft.aura.data.providers.MusicSearchRequest
 import az.simplesoft.aura.data.providers.PlayableSource
 import az.simplesoft.aura.data.providers.ProviderResult
 import az.simplesoft.aura.data.providers.ProviderFailureReason
 import az.simplesoft.aura.data.providers.TrackCandidate
-import az.simplesoft.aura.data.providers.zaycev.ZaycevProvider
 import az.simplesoft.aura.data.search.CandidateRankerV2
 import az.simplesoft.aura.data.search.TrackIdentityResolver
-import az.simplesoft.aura.data.search.UnifiedSearchEngine
 import az.simplesoft.aura.data.search.UnifiedTrackSession
 import az.simplesoft.aura.domain.music.EmptyRecommendationEngine
 import az.simplesoft.aura.domain.music.MusicBrain
@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
 import kotlin.math.abs
 
 enum class AuraDestination { HOME, SEARCH, LIBRARY, ASSISTANT, DIAGNOSTICS }
@@ -47,7 +48,7 @@ enum class LibrarySection { FAVORITES, HISTORY, LOCAL, PLAYLISTS }
 enum class SearchPhase { IDLE, SEARCHING, MATCHING, RESOLVING, BUFFERING, PLAYING, ERROR }
 
 data class ProviderDiagnostics(
-    val engine: String = "Legacy · Zaycev",
+    val engine: String = "Plugin Core · YouTube",
     val selectedProvider: String = "—",
     val query: String = "—",
     val candidates: List<String> = emptyList(),
@@ -95,21 +96,19 @@ data class AuraUiState(
 
 class AuraViewModel(application: Application) : AndroidViewModel(application), PlaybackConnection.Listener {
     private val intentEngine = LocalIntentEngine()
-    private val zaycevProvider = ZaycevProvider(application)
-    private val searchEngine = UnifiedSearchEngine(listOf(zaycevProvider))
     private val localProvider = LocalMusicProvider(application)
     private val radioProvider = RadioBrowserProvider()
     private val preferences = application.getSharedPreferences("aura_state", Context.MODE_PRIVATE)
+    private val stateRepository = AuraStateRepository(application)
     private val audio = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val playback = PlaybackConnection(application, this)
     private val providerManager = ProviderManager(
         setOf(
             LocalMusicPlugin(localProvider),
             YouTubeMusicPlugin(),
-            ZaycevMusicPlugin(zaycevProvider),
             RadioMusicPlugin(radioProvider)
         )
-    ).also { it.setEnabled(YouTubeMusicPlugin.ID, false) }
+    )
     private val playbackCoordinator = PlaybackConnectionCoordinator(playback) { state.value.queue }
     private val musicBrain = MusicBrain(
         providerManager = providerManager,
@@ -123,7 +122,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val playbackRecoveryAttempts = mutableMapOf<String, Int>()
     private var latestCandidates: List<TrackCandidate> = emptyList()
     private var hasPreparedMedia = false
-    private var pluginCoreEnabled = false
+    private val persistenceQueue = Channel<AuraPlaybackSnapshot>(Channel.CONFLATED)
+    private var positionPersistenceTick = 0
 
     private val initialLiked = preferences.getStringSet("liked", emptySet()).orEmpty().toSet()
     private val initialHistory = preferences.getString("history", "")
@@ -135,16 +135,61 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     val state = _state.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            runCatching {
+                stateRepository.importLegacy(
+                    initialLiked,
+                    initialHistory,
+                    preferences.getInt("current_index", 0)
+                )
+                val restored = stateRepository.load()
+                _state.update { current ->
+                    current.copy(
+                        queue = restored.queue.ifEmpty { current.queue },
+                        currentIndex = if (restored.queue.isEmpty()) current.currentIndex else restored.currentIndex,
+                        positionMs = restored.positionMs,
+                        playbackDurationMs = restored.queue.getOrNull(restored.currentIndex)?.durationMs ?: 0L,
+                        isShuffleEnabled = restored.shuffleEnabled,
+                        isRepeatEnabled = restored.repeatEnabled,
+                        likedIds = restored.likedIds,
+                        historyIds = restored.historyIds,
+                        recentSearches = restored.recentSearches
+                    )
+                }
+                playback.setShuffle(restored.shuffleEnabled)
+                playback.setRepeat(restored.repeatEnabled)
+                preferences.edit {
+                    remove("liked")
+                    remove("history")
+                    remove("current_index")
+                    putBoolean("room_migration_complete", true)
+                }
+            }.onFailure { error ->
+                _state.update { current ->
+                    current.copy(
+                        diagnostics = current.diagnostics.copy(
+                            fallbackReason = "Room: ${error.javaClass.simpleName}"
+                        )
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            for (snapshot in persistenceQueue) runCatching { stateRepository.save(snapshot) }
+        }
         refreshLocalMusic()
         viewModelScope.launch {
             while (isActive) {
                 delay(500L)
                 val position = playback.currentPositionMs()
                 val duration = playback.durationMs()
+                if (!hasPreparedMedia && position == 0L && duration == 0L) continue
                 _state.update { current ->
                     if (position == current.positionMs && duration == current.playbackDurationMs) current
                     else current.copy(positionMs = position, playbackDurationMs = duration)
                 }
+                positionPersistenceTick = (positionPersistenceTick + 1) % 10
+                if (positionPersistenceTick == 0) persist(_state.value)
             }
         }
     }
@@ -156,23 +201,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun setLibrarySection(section: LibrarySection) = _state.update { it.copy(librarySection = section) }
     fun setListening(value: Boolean) = _state.update { it.copy(isListening = value) }
     fun setQuery(value: String) = _state.update { it.copy(query = value) }
-
-    fun setPluginCoreEnabled(enabled: Boolean, youtubeEnabled: Boolean = false) {
-        pluginCoreEnabled = enabled
-        val useYouTube = enabled && youtubeEnabled
-        providerManager.setEnabled(YouTubeMusicPlugin.ID, useYouTube)
-        _state.update { current ->
-            current.copy(
-                diagnostics = current.diagnostics.copy(
-                    engine = when {
-                        useYouTube -> "Plugin Core · Local + YouTube + Zaycev"
-                        enabled -> "Plugin Core · Local + Zaycev"
-                        else -> "Legacy · Zaycev"
-                    }
-                )
-            )
-        }
-    }
 
     fun submit(text: String = state.value.query) {
         val input = text.trim()
@@ -192,6 +220,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     searchPhase = SearchPhase.SEARCHING
                 )
             }
+            persist(_state.value)
             searchTracks(MusicSearchRequest(rawQuery = query, artist = requestedSearch.artist))
             return
         }
@@ -250,11 +279,17 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 MusicIntent.Repeat -> current.copy(
                     isRepeatEnabled = !current.isRepeatEnabled,
                     assistantText = answer.text
-                ).also { playback.setRepeat(it.isRepeatEnabled) }
+                ).also {
+                    playback.setRepeat(it.isRepeatEnabled)
+                    persist(it)
+                }
                 MusicIntent.Shuffle -> current.copy(
                     isShuffleEnabled = !current.isShuffleEnabled,
                     assistantText = answer.text
-                ).also { playback.setShuffle(it.isShuffleEnabled) }
+                ).also {
+                    playback.setShuffle(it.isShuffleEnabled)
+                    persist(it)
+                }
                 MusicIntent.Louder -> current.copy(assistantText = answer.text).also {
                     audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 0)
                 }
@@ -284,6 +319,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         when {
             !track.streamUrl.isNullOrBlank() -> startPlayback(track)
             candidate != null -> resolveAndPlay(candidate)
+            track.id != DemoCatalog.tracks.first().id -> submit("${track.artist} ${track.title}")
             else -> _state.update { it.copy(assistantText = "Сначала найди конкретную песню.") }
         }
     }
@@ -308,11 +344,17 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     fun toggleShuffle() = _state.update {
-        it.copy(isShuffleEnabled = !it.isShuffleEnabled).also { next -> playback.setShuffle(next.isShuffleEnabled) }
+        it.copy(isShuffleEnabled = !it.isShuffleEnabled).also { next ->
+            playback.setShuffle(next.isShuffleEnabled)
+            persist(next)
+        }
     }
 
     fun toggleRepeat() = _state.update {
-        it.copy(isRepeatEnabled = !it.isRepeatEnabled).also { next -> playback.setRepeat(next.isRepeatEnabled) }
+        it.copy(isRepeatEnabled = !it.isRepeatEnabled).also { next ->
+            playback.setRepeat(next.isRepeatEnabled)
+            persist(next)
+        }
     }
 
     fun toggleCarMode() = _state.update { it.copy(isCarMode = !it.isCarMode) }
@@ -332,12 +374,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 oldIndex >= nextQueue.size -> nextQueue.lastIndex
                 else -> oldIndex
             }
-            current.copy(queue = nextQueue, currentIndex = nextIndex.coerceAtLeast(0))
+            current.copy(queue = nextQueue, currentIndex = nextIndex.coerceAtLeast(0)).also(::persist)
         }
     }
 
     fun clearQueue() = _state.update { current ->
-        current.copy(queue = listOf(current.nowTrack), currentIndex = 0)
+        current.copy(queue = listOf(current.nowTrack), currentIndex = 0).also(::persist)
     }
 
     fun refreshLocalMusic() {
@@ -411,13 +453,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
         viewModelScope.launch {
             val resolveStartedAt = System.currentTimeMillis()
-            val ordered = if (pluginCoreEnabled) {
-                unifiedTrackSession.fallbackOrder(candidate, latestCandidates, 4)
-            } else {
-                listOf(candidate) + latestCandidates.filterNot {
-                    it.providerId == candidate.providerId && it.id == candidate.id
-                }
-            }
+            val ordered = unifiedTrackSession.fallbackOrder(candidate, latestCandidates, 4)
             var lastError = "Подходящий источник не найден"
             for ((index, option) in ordered.take(4).withIndex()) {
                 if (index > 0) {
@@ -431,11 +467,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 }
                 when (val result = resolveCandidate(option)) {
                     is ProviderResult.Success -> {
-                        val resolved = if (pluginCoreEnabled) {
-                            unifiedTrackSession.canonicalize(option, result.value.track)
-                        } else {
-                            result.value.track
-                        }
+                        val resolved = unifiedTrackSession.canonicalize(option, result.value.track)
                         _state.update {
                             it.copy(
                                 searchResults = it.searchResults.map { track -> if (track.id == resolved.id) resolved else track },
@@ -487,19 +519,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private fun prefetchFollowing(currentTrackId: String) {
         viewModelScope.launch {
             latestCandidates
-                .filterNot {
-                    if (pluginCoreEnabled) unifiedTrackSession.canonicalId(it) == currentTrackId
-                    else "${it.providerId}:${it.id}" == currentTrackId
-                }
+                .filterNot { unifiedTrackSession.canonicalId(it) == currentTrackId }
                 .take(3)
                 .forEach { candidate ->
                     val result = resolveCandidate(candidate)
                     if (result is ProviderResult.Success) {
-                        val resolved = if (pluginCoreEnabled) {
-                            unifiedTrackSession.canonicalize(candidate, result.value.track)
-                        } else {
-                            result.value.track
-                        }
+                        val resolved = unifiedTrackSession.canonicalize(candidate, result.value.track)
                         val alreadyPrepared = state.value.queue.any { it.id == resolved.id && !it.streamUrl.isNullOrBlank() }
                         if (!alreadyPrepared) {
                             _state.update { current ->
@@ -508,6 +533,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                                     searchResults = current.searchResults.map { if (it.id == resolved.id) resolved else it }
                                 )
                             }
+                            persist(_state.value)
                             playback.append(resolved)
                         }
                     }
@@ -552,7 +578,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 positionMs = positionMs,
                 playbackDurationMs = track.durationMs ?: current.playbackDurationMs,
                 assistantText = "Источник изменён. Продолжаю ${track.title}…"
-            )
+            ).also(::persist)
         }
         hasPreparedMedia = true
         playback.replaceCurrent(track, positionMs)
@@ -568,7 +594,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     private suspend fun searchCandidates(request: MusicSearchRequest): ProviderResult<List<TrackCandidate>> {
-        if (!pluginCoreEnabled) return searchEngine.search(request)
         return when (val outcome = musicBrain.search(request)) {
             is SearchOutcome.Success -> ProviderResult.Success(
                 value = unifiedTrackSession.replace(outcome.tracks).take(request.limit),
@@ -585,7 +610,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     private suspend fun resolveCandidate(candidate: TrackCandidate): ProviderResult<PlayableSource> {
-        if (!pluginCoreEnabled) return searchEngine.resolve(candidate)
         return when (val result = providerManager.resolve(candidate)) {
             is PluginResult.Success -> ProviderResult.Success(result.value, result.diagnostics)
             is PluginResult.Failure -> ProviderResult.Failure(
@@ -598,7 +622,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     private fun TrackCandidate.toTrack() = Track(
-        id = if (pluginCoreEnabled) unifiedTrackSession.canonicalId(this) else "$providerId:$id",
+        id = unifiedTrackSession.canonicalId(this),
         title = title,
         artist = artist,
         artworkUrl = artworkUrl,
@@ -656,12 +680,16 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         if (candidate != null && attempts < 1) {
             playbackRecoveryAttempts[trackId] = attempts + 1
             _state.update { it.copy(assistantText = message, searchPhase = SearchPhase.RESOLVING) }
-            resolveAndPlay(candidate, trackId, playback.currentPositionMs())
+            resolveAndPlay(
+                candidate = candidate,
+                resumeTrackId = trackId,
+                resumePositionMs = playback.currentPositionMs()
+            )
             return
         }
         val fallback = candidate?.let { failed ->
             latestCandidates.firstOrNull { option ->
-                option.id != failed.id && playbackRecoveryAttempts["zaycev:${option.id}"] == null
+                option.id != failed.id && playbackRecoveryAttempts["${option.providerId}:${option.id}"] == null
             }
         }
         if (trackId != null && fallback != null) {
@@ -686,11 +714,18 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     private fun persist(state: AuraUiState) {
-        preferences.edit()
-            .putStringSet("liked", state.likedIds)
-            .putString("history", state.historyIds.joinToString("|"))
-            .putInt("current_index", state.currentIndex)
-            .apply()
+        persistenceQueue.trySend(
+            AuraPlaybackSnapshot(
+                queue = state.queue,
+                currentIndex = state.currentIndex,
+                positionMs = state.positionMs,
+                shuffleEnabled = state.isShuffleEnabled,
+                repeatEnabled = state.isRepeatEnabled,
+                likedIds = state.likedIds,
+                historyIds = state.historyIds,
+                recentSearches = state.recentSearches
+            )
+        )
     }
 
     private fun friendlyFailure(reason: ProviderFailureReason, searching: Boolean): String = when (reason) {

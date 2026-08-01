@@ -34,10 +34,10 @@ class TrackMatcherTest {
     }
 
     private fun candidate(id: String, title: String, artist: String) = TrackCandidate(
-        providerId = "zaycev",
+        providerId = "youtube",
         id = id,
         title = title,
         artist = artist,
-        detailUrl = "https://zaycev.net/pages/1/$id.shtml"
+        detailUrl = "https://www.youtube.com/watch?v=$id"
     )
 }

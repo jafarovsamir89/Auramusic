@@ -10,19 +10,19 @@ class TrackIdentityResolverTest {
     private val resolver = TrackIdentityResolver()
 
     @Test
-    fun mergesSameTrackFromDifferentProviders() {
+    fun mergesSameTrackFromYouTubeVariants() {
         val youtube = candidate("youtube", "yt", "Numb", 187_000)
-        val zaycev = candidate("zaycev", "z", "Numb", 190_000)
+        val youtubeAudio = candidate("youtube", "audio", "Numb", 190_000)
         val ranked = listOf(
             RankedCandidate(youtube, .95, emptyList(), emptyList()),
-            RankedCandidate(zaycev, .88, emptyList(), emptyList())
+            RankedCandidate(youtubeAudio, .88, emptyList(), emptyList())
         )
 
         val unified = resolver.unify(ranked)
 
         assertEquals(1, unified.size)
         assertEquals(2, unified.first().alternatives.size)
-        assertTrue(resolver.areSame(youtube, zaycev))
+        assertTrue(resolver.areSame(youtube, youtubeAudio))
     }
 
     @Test
@@ -36,14 +36,14 @@ class TrackIdentityResolverTest {
     @Test
     fun rejectsLargeDurationMismatch() {
         val short = candidate("youtube", "short", "Numb", 187_000)
-        val extended = candidate("zaycev", "long", "Numb", 230_000)
+        val extended = candidate("youtube", "long", "Numb", 230_000)
 
         assertFalse(resolver.areSame(short, extended))
     }
 
     @Test
     fun mergesOfficialMusicVideoWithSameStudioRecording() {
-        val studio = candidate("zaycev", "one", "Numb", 190_000)
+        val studio = candidate("youtube", "one", "Numb", 190_000)
         val officialVideo = candidate("youtube", "two", "Numb (Official Music Video)", 187_000)
 
         assertTrue(resolver.areSame(studio, officialVideo))

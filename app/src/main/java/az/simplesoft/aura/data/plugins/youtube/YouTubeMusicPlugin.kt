@@ -16,13 +16,8 @@ class YouTubeMusicPlugin(
     httpClient: OkHttpClient = OkHttpClient(),
     requestContext: YouTubeRequestContext = YouTubeRequestContext(),
     private val searchParser: YouTubeSearchParser = YouTubeSearchParser(),
-    private val playerParser: YouTubePlayerParser = YouTubePlayerParser(),
     private val searchClient: YouTubeSearchClient = YouTubeSearchClient(httpClient, requestContext, searchParser),
-    private val playerClient: YouTubePlayerClient = YouTubePlayerClient(httpClient, requestContext),
-    private val streamResolver: YouTubeStreamResolver = YouTubeStreamResolver(
-        validator = YouTubeHttpStreamValidator(httpClient),
-        requestContext = requestContext
-    )
+    private val playerClient: YouTubePlayerClient = YouTubePlayerClient(httpClient, requestContext)
 ) : MusicPlugin {
     private val healthCheck = YouTubeHealthCheck(searchClient)
 
@@ -49,8 +44,27 @@ class YouTubeMusicPlugin(
             return PluginResult.Failure(PluginFailureReason.PARSE, "Invalid YouTube video ID")
         }
         return resultOf {
-            val player = playerParser.parse(playerClient.player(videoId))
-            streamResolver.resolve(candidate, player)
+            val playbackUri = YouTubePlaybackIdentity.uri(videoId)
+            val track = Track(
+                id = "$ID:$videoId",
+                title = candidate.title,
+                artist = candidate.artist,
+                artworkUrl = candidate.artworkUrl,
+                durationMs = candidate.durationMs,
+                sourceId = ID,
+                sourcePageUrl = "${YouTubeSelectors.WATCH_URL}?v=$videoId",
+                playbackType = az.simplesoft.aura.data.PlaybackType.DIRECT_STREAM,
+                streamUrl = playbackUri.toString(),
+                isPlayable = true,
+                popularity = candidate.popularity?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt(),
+                year = candidate.year
+            )
+            PlayableSource(
+                providerId = ID,
+                track = track,
+                playbackUri = playbackUri,
+                sourcePageUrl = track.sourcePageUrl
+            )
         }
     }
 

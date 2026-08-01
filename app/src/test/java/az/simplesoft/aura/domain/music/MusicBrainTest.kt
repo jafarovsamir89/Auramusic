@@ -18,11 +18,17 @@ import kotlinx.coroutines.runBlocking
 
 class MusicBrainTest {
     @Test
-    fun searchRanksAndDeduplicatesAcrossPlugins() = runBlocking {
-        val youtube = SearchOnlyPlugin("youtube", 200, candidate("youtube", "yt", 187_000, true))
-        val zaycev = SearchOnlyPlugin("zaycev", 100, candidate("zaycev", "z", 190_000, false))
+    fun searchRanksAndDeduplicatesYouTubeResults() = runBlocking {
+        val youtube = SearchOnlyPlugin(
+            "youtube",
+            200,
+            listOf(
+                candidate("youtube", "yt", 187_000, true),
+                candidate("youtube", "yt-audio", 190_000, false)
+            )
+        )
         val brain = MusicBrain(
-            ProviderManager(setOf(youtube, zaycev)),
+            ProviderManager(setOf(youtube)),
             CandidateRankerV2(),
             TrackIdentityResolver(),
             EmptyRecommendationEngine,
@@ -81,11 +87,11 @@ class MusicBrainTest {
 private class SearchOnlyPlugin(
     override val id: String,
     override val priority: Int,
-    private val candidate: TrackCandidate
+    private val candidates: List<TrackCandidate>
 ) : MusicPlugin {
     override val displayName = id
     override val capabilities = setOf(PluginCapability.SEARCH, PluginCapability.STREAM)
-    override suspend fun search(request: MusicSearchRequest) = PluginResult.Success(listOf(candidate))
+    override suspend fun search(request: MusicSearchRequest) = PluginResult.Success(candidates)
     override suspend fun resolve(candidate: TrackCandidate): PluginResult<PlayableSource> =
         PluginResult.Failure(PluginFailureReason.NOT_PLAYABLE, "not used")
 }

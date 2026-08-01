@@ -14,17 +14,7 @@ class YouTubePlayerClient(
     private val httpClient: OkHttpClient = OkHttpClient(),
     private val requestContext: YouTubeRequestContext = YouTubeRequestContext()
 ) {
-    private val playerCache = YouTubeMemoryCache<String, String>(maxEntries = 16, ttlMs = 4 * 60_000L)
     private val relatedCache = YouTubeMemoryCache<String, String>(maxEntries = 16, ttlMs = 2 * 60_000L)
-
-    suspend fun player(videoId: String): String = playerCache.get(videoId) ?: post(
-        YouTubeSelectors.PLAYER_URL,
-        JSONObject()
-            .put("context", clientContext())
-            .put("videoId", videoId)
-            .put("contentCheckOk", false)
-            .put("racyCheckOk", false)
-    ).also { playerCache.put(videoId, it) }
 
     suspend fun related(videoId: String): String = relatedCache.get(videoId) ?: post(
         YouTubeSelectors.NEXT_URL,

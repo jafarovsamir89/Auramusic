@@ -20,7 +20,7 @@ object TrackMatcher {
                 normalize(request.query) == normalize("${candidate.title} ${candidate.artist}")
             ) 0.12 else 0.0
             val durationScore = 1.0
-            val providerReliability = if (candidate.providerId == "zaycev") 1.0 else 0.8
+            val providerReliability = if (candidate.providerId == "youtube") 1.0 else 0.8
             candidate.copy(
                 confidence = (
                     titleScore * 0.50 +

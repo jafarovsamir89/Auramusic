@@ -6,11 +6,14 @@ import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import az.simplesoft.aura.data.Track
+import az.simplesoft.aura.data.plugins.youtube.YouTubePlaybackIdentity
 import com.google.common.util.concurrent.ListenableFuture
 
+@androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackConnection(
     context: Context,
     private val listener: Listener
@@ -68,7 +71,8 @@ class PlaybackConnection(
     fun play(queue: List<Track>, selected: Track, startPositionMs: Long = 0L) = withController {
         val playable = queue.filter { !it.streamUrl.isNullOrBlank() }
         val index = playable.indexOfFirst { it.id == selected.id }.coerceAtLeast(0)
-        playable.forEach { track -> PlaybackSourceRegistry.register(track.streamUrl.orEmpty(), track.requestHeaders) }
+        playable.filterNot { it.sourceId == "youtube" }
+            .forEach { track -> PlaybackSourceRegistry.register(track.streamUrl.orEmpty(), track.requestHeaders) }
         it.setMediaItems(playable.map(::toMediaItem), index, startPositionMs.coerceAtLeast(0L))
         it.prepare()
         it.play()
@@ -76,7 +80,7 @@ class PlaybackConnection(
 
     fun replaceCurrent(track: Track, startPositionMs: Long) = withController { player ->
         val uri = track.streamUrl ?: return@withController
-        PlaybackSourceRegistry.register(uri, track.requestHeaders)
+        if (track.sourceId != "youtube") PlaybackSourceRegistry.register(uri, track.requestHeaders)
         val index = player.currentMediaItemIndex.takeIf { it in 0 until player.mediaItemCount }
         if (index == null) {
             player.setMediaItem(toMediaItem(track), startPositionMs.coerceAtLeast(0L))
@@ -90,7 +94,7 @@ class PlaybackConnection(
 
     fun append(track: Track) {
         val uri = track.streamUrl ?: return
-        PlaybackSourceRegistry.register(uri, track.requestHeaders)
+        if (track.sourceId != "youtube") PlaybackSourceRegistry.register(uri, track.requestHeaders)
         withController { it.addMediaItem(toMediaItem(track)) }
     }
 
@@ -126,6 +130,11 @@ class PlaybackConnection(
         return MediaItem.Builder()
             .setMediaId(track.id)
             .setUri(track.streamUrl)
+            .apply {
+                YouTubePlaybackIdentity.videoId(track.id)?.let { videoId ->
+                    setCustomCacheKey(YouTubePlaybackIdentity.cacheKey(videoId))
+                }
+            }
             .setMediaMetadata(metadata)
             .build()
     }

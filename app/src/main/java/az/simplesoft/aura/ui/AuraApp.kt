@@ -131,8 +131,6 @@ private val AccentSilver = Color(0xFFD5D8DD)
 @Composable
 fun AuraApp(
     initialCommand: String? = null,
-    pluginCoreEnabled: Boolean = false,
-    youtubePluginEnabled: Boolean = false,
     vm: AuraViewModel = viewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -149,8 +147,7 @@ fun AuraApp(
         )
     }
     DisposableEffect(Unit) { onDispose(recognizer::destroy) }
-    LaunchedEffect(initialCommand, pluginCoreEnabled, youtubePluginEnabled) {
-        vm.setPluginCoreEnabled(pluginCoreEnabled, youtubePluginEnabled)
+    LaunchedEffect(initialCommand) {
         initialCommand?.takeIf(String::isNotBlank)?.let(vm::submit)
     }
     DisposableEffect(lifecycleOwner) {
@@ -357,7 +354,7 @@ private fun HomeScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 NativeSourceCard(
                     icon = Icons.Rounded.Headphones,
-                    title = "Zaycev",
+                    title = "YouTube",
                     subtitle = "Конкретные песни",
                     modifier = Modifier.weight(1f)
                 ) {}
@@ -691,7 +688,7 @@ private fun PlayerScreen(
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 PlayerAction(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь", onQueue)
-                PlayerAction(Icons.Rounded.Equalizer, "Zaycev", {})
+                PlayerAction(Icons.Rounded.Equalizer, "YouTube", {})
                 PlayerAction(Icons.Rounded.DirectionsCar, "В машине", onCar)
             }
         }
@@ -933,7 +930,7 @@ private fun ProviderStatusPill() {
     ) {
         Box(Modifier.size(7.dp).background(Color(0xFF73D99A), CircleShape))
         Spacer(Modifier.width(7.dp))
-        Text("ZAYCEV", color = AccentSilver, fontSize = 10.sp, letterSpacing = 1.2.sp)
+        Text("YOUTUBE", color = AccentSilver, fontSize = 10.sp, letterSpacing = 1.2.sp)
     }
 }
 
@@ -1164,6 +1161,6 @@ private fun formatDuration(milliseconds: Long): String {
 private fun sourceLabel(track: Track): String = when (track.sourceId) {
     "local" -> "НА ТЕЛЕФОНЕ"
     "radio_browser" -> "РАДИО"
-    "zaycev" -> "ZAYCEV"
+    "youtube" -> "YOUTUBE"
     else -> "ИСТОЧНИК"
 }
