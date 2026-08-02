@@ -13,6 +13,7 @@ import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.LocalMusicProvider
 import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.RadioBrowserProvider
+import az.simplesoft.aura.data.RadioCountry
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.database.AuraPlaybackSnapshot
 import az.simplesoft.aura.data.database.AuraPlaylist
@@ -52,7 +53,7 @@ import kotlinx.coroutines.channels.Channel
 import java.util.Calendar
 import kotlin.math.abs
 
-enum class AuraDestination { HOME, SEARCH, LIBRARY, ASSISTANT, DIAGNOSTICS }
+enum class AuraDestination { HOME, SEARCH, RADIO, LIBRARY, ASSISTANT, DIAGNOSTICS }
 enum class LibrarySection { FAVORITES, HISTORY, LOCAL, PLAYLISTS }
 enum class SearchPhase { IDLE, SEARCHING, MATCHING, RESOLVING, BUFFERING, PLAYING, ERROR }
 
@@ -77,6 +78,11 @@ data class AuraUiState(
     val query: String = "",
     val recentSearches: List<String> = emptyList(),
     val searchResults: List<Track> = emptyList(),
+    val radioCountries: List<RadioCountry> = emptyList(),
+    val radioStations: List<Track> = emptyList(),
+    val selectedRadioCountry: RadioCountry? = null,
+    val isRadioLoading: Boolean = false,
+    val radioError: String? = null,
     val personalMix: List<Track> = emptyList(),
     val playlists: List<AuraPlaylist> = emptyList(),
     val queueHistory: List<AuraQueueSnapshot> = emptyList(),
@@ -239,7 +245,87 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     fun navigate(destination: AuraDestination) = _state.update {
-        it.copy(destination = destination, isPlayerExpanded = false, isQueueOpen = false)
+        it.copy(
+            destination = destination,
+            librarySection = if (destination == AuraDestination.LIBRARY) LibrarySection.PLAYLISTS else it.librarySection,
+            isPlayerExpanded = false,
+            isQueueOpen = false
+        )
+    }
+
+    fun openRadio() {
+        _state.update { it.copy(destination = AuraDestination.RADIO, isPlayerExpanded = false, isQueueOpen = false) }
+        if (state.value.radioCountries.isEmpty()) loadRadioCountries() else if (state.value.radioStations.isEmpty()) {
+            state.value.selectedRadioCountry?.let(::selectRadioCountry)
+        }
+    }
+
+    fun loadRadioCountries() {
+        if (state.value.isRadioLoading) return
+        _state.update { it.copy(isRadioLoading = true, radioError = null) }
+        viewModelScope.launch {
+            runCatching { radioProvider.countries() }
+                .onSuccess { countries ->
+                    val localeCode = java.util.Locale.getDefault().country
+                    val selected = countries.firstOrNull { it.code == "AZ" }
+                        ?: countries.firstOrNull { it.code == localeCode }
+                        ?: countries.firstOrNull()
+                    _state.update {
+                        it.copy(
+                            radioCountries = countries,
+                            selectedRadioCountry = selected,
+                            isRadioLoading = selected != null,
+                            radioError = if (countries.isEmpty()) "Страны пока недоступны" else null
+                        )
+                    }
+                    if (selected != null) loadRadioStations(selected)
+                }
+                .onFailure {
+                    android.util.Log.w("AuraRadio", "Country catalog request failed", it)
+                    _state.update { current ->
+                        current.copy(
+                            isRadioLoading = false,
+                            radioError = "Не удалось загрузить каталог радио. Проверь интернет и повтори."
+                        )
+                    }
+                }
+        }
+    }
+
+    fun selectRadioCountry(country: RadioCountry) {
+        _state.update { it.copy(selectedRadioCountry = country, isRadioLoading = true, radioError = null) }
+        loadRadioStations(country)
+    }
+
+    fun refreshRadio() {
+        val country = state.value.selectedRadioCountry
+        if (country == null) loadRadioCountries() else selectRadioCountry(country)
+    }
+
+    private fun loadRadioStations(country: RadioCountry) {
+        viewModelScope.launch {
+            runCatching { radioProvider.byCountry(country.code) }
+                .onSuccess { stations ->
+                    _state.update {
+                        it.copy(
+                            radioStations = stations,
+                            isRadioLoading = false,
+                            radioError = if (stations.isEmpty()) {
+                                "Для ${country.name} сейчас нет доступных HTTPS-станций."
+                            } else null
+                        )
+                    }
+                }
+                .onFailure {
+                    android.util.Log.w("AuraRadio", "Country station request failed for ${country.code}", it)
+                    _state.update { current ->
+                        current.copy(
+                            isRadioLoading = false,
+                            radioError = "Радиостанции не загрузились. Попробуй ещё раз."
+                        )
+                    }
+                }
+        }
     }
 
     fun setLibrarySection(section: LibrarySection) = _state.update { it.copy(librarySection = section) }
@@ -302,6 +388,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             MusicIntent.OpenQueue -> {
                 _state.update { it.copy(isQueueOpen = true, isPlayerExpanded = false, assistantText = answer.text) }
+                return
+            }
+            MusicIntent.OpenRadio -> {
+                openRadio()
+                _state.update { it.copy(assistantText = answer.text) }
                 return
             }
             MusicIntent.ClearQueue -> {
@@ -436,6 +527,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     assistantText = answer.text
                 )
                 MusicIntent.OpenPlaylists,
+                MusicIntent.OpenRadio,
                 is MusicIntent.CreatePlaylist,
                 is MusicIntent.PlayPlaylist,
                 MusicIntent.OpenQueue,
@@ -653,6 +745,17 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun createPlaylist(name: String, includeQueue: Boolean = false) {
         val tracks = if (includeQueue) state.value.queue else emptyList()
         updatePlaylists { stateRepository.createPlaylist(name, tracks) }
+    }
+
+    fun createPlaylistWithTrack(name: String, track: Track) = updatePlaylists {
+        stateRepository.createPlaylist(name, listOf(track))
+        _state.update { it.copy(assistantText = "Создан плейлист «${name.trim()}» с треком ${track.title}.") }
+    }
+
+    fun addTrackToPlaylist(playlistId: String, track: Track) = updatePlaylists {
+        stateRepository.addToPlaylist(playlistId, listOf(track))
+        val playlistName = state.value.playlists.firstOrNull { it.id == playlistId }?.name ?: "плейлист"
+        _state.update { it.copy(assistantText = "${track.title} добавлен в «$playlistName».") }
     }
 
     fun saveQueueAsPlaylist(name: String) = createPlaylist(name, includeQueue = true)
@@ -1090,6 +1193,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
         hasPreparedMedia = true
         playback.play(playbackQueue, track)
+        if (track.sourceId == "radio_browser") {
+            viewModelScope.launch { radioProvider.registerClick(track.id.removePrefix("radio_browser:")) }
+        }
     }
 
     private fun replacePlaybackSource(track: Track, positionMs: Long) {

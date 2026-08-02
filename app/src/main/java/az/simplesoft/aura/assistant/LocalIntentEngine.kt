@@ -18,8 +18,11 @@ class LocalIntentEngine {
             val query = match.groupValues.drop(1).first(String::isNotBlank).trim()
             return reply(MusicIntent.QueueTrack(query, playNext = false), "Добавляю в очередь: $query.")
         }
-        if (containsAny(text, "открой очередь", "покажи очередь")) {
+        if (containsAny(text, "открой очередь", "покажи очередь") || text == "очередь") {
             return reply(MusicIntent.OpenQueue, "Открываю очередь.")
+        }
+        if (containsAny(text, "открой радио", "покажи радио", "радиостанции", "радио по странам") || text == "радио") {
+            return reply(MusicIntent.OpenRadio, "Открываю радио по странам.")
         }
         if (containsAny(text, "очисти очередь", "очистить очередь")) {
             return reply(MusicIntent.ClearQueue, "Очищаю очередь.")
@@ -38,7 +41,7 @@ class LocalIntentEngine {
             val name = match.groupValues[1].trim().replaceFirstChar { it.titlecase() }
             return reply(MusicIntent.PlayPlaylist(name, shuffled = true), "Перемешиваю плейлист $name.")
         }
-        if (containsAny(text, "открой плейлисты", "покажи плейлисты", "мои плейлисты")) {
+        if (containsAny(text, "открой плейлисты", "покажи плейлисты", "мои плейлисты") || text == "плейлисты") {
             return reply(MusicIntent.OpenPlaylists, "Открываю твои плейлисты.")
         }
         if (containsAny(text, "сохрани очередь", "сохранить очередь")) {

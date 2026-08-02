@@ -48,6 +48,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDownward
@@ -68,14 +69,16 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
+import androidx.compose.material.icons.rounded.Radio
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -140,10 +143,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import az.simplesoft.aura.BuildConfig
 import az.simplesoft.aura.assistant.OfflineSpeechRecognizer
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.Track
+import az.simplesoft.aura.data.RadioCountry
 import az.simplesoft.aura.data.database.AuraPlaylist
 import az.simplesoft.aura.data.database.AuraQueueSnapshot
 import az.simplesoft.aura.domain.music.AuraRepeatMode
@@ -152,16 +155,19 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val AuraBlack = Color(0xFF080911)
-private val DeepSurface = Color(0xFF111321)
-private val ElevatedSurface = Color(0xFF171A2A)
-private val PrimaryText = Color(0xFFF7F5FF)
-private val SecondaryText = Color(0xFFAEB2C8)
-private val AccentSilver = Color(0xFFD5D0FF)
-private val AuraAccent = Color(0xFF8B7CFF)
-private val AuraAccentSoft = Color(0xFFB9AFFF)
-private val AuraMint = Color(0xFF58E1C1)
+private val AuraBlack = Color(0xFF050A11)
+private val DeepSurface = Color(0xFF0D131B)
+private val ElevatedSurface = Color(0xFF171D27)
+private val PrimaryText = Color(0xFFF7F6FC)
+private val SecondaryText = Color(0xFFA9AFBB)
+private val AccentSilver = Color(0xFFDCCBFF)
+private val AuraAccent = Color(0xFF7C3CFF)
+private val AuraAccentSoft = Color(0xFFC076FF)
+private val AuraMint = Color(0xFF6FE3D1)
 private val AuraBorder = Color.White.copy(.09f)
+private val ReferencePurple = Color(0xFF7C3CFF)
+private val ReferenceMagenta = Color(0xFFC13DFF)
+private val ReferenceBlue = Color(0xFF2467FF)
 
 @Composable
 fun AuraApp(
@@ -181,6 +187,7 @@ fun AuraApp(
             onState = vm::setListening
         )
     }
+    var playlistTarget by remember { mutableStateOf<Track?>(null) }
     DisposableEffect(Unit) { onDispose(recognizer::destroy) }
     LaunchedEffect(initialCommand) {
         initialCommand?.takeIf(String::isNotBlank)?.let(vm::submit)
@@ -202,6 +209,9 @@ fun AuraApp(
         !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.DIAGNOSTICS
     ) { vm.navigate(AuraDestination.HOME) }
     BackHandler(
+        !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.RADIO
+    ) { vm.navigate(AuraDestination.HOME) }
+    BackHandler(
         !state.isCarMode && !state.isQueueOpen && state.isPlayerExpanded
     ) { vm.closePlayer() }
 
@@ -211,6 +221,21 @@ fun AuraApp(
         contentColor = PrimaryText
     ) {
         Box(Modifier.fillMaxSize().background(AuraBlack)) {
+            playlistTarget?.let { track ->
+                PlaylistPickerDialog(
+                    track = track,
+                    playlists = state.playlists,
+                    onDismiss = { playlistTarget = null },
+                    onAdd = { playlistId ->
+                        vm.addTrackToPlaylist(playlistId, track)
+                        playlistTarget = null
+                    },
+                    onCreate = { name ->
+                        vm.createPlaylistWithTrack(name, track)
+                        playlistTarget = null
+                    }
+                )
+            }
             when {
             state.isCarMode -> CarModeScreen(
                 state = state,
@@ -233,7 +258,8 @@ fun AuraApp(
                 onAutoContinue = vm::toggleAutoContinue,
                 onSave = vm::saveQueueAsPlaylist,
                 onRestore = vm::restoreQueue,
-                onDeleteHistory = vm::deleteQueueSnapshot
+                onDeleteHistory = vm::deleteQueueSnapshot,
+                onAddToPlaylist = { playlistTarget = it }
             )
             state.isPlayerExpanded -> PlayerScreen(
                 state = state,
@@ -246,16 +272,22 @@ fun AuraApp(
                 onRepeat = vm::toggleRepeat,
                 onQueue = vm::openQueue,
                 onSeek = vm::seekTo,
-                onCar = vm::toggleCarMode
+                onCar = vm::toggleCarMode,
+                onAddToPlaylist = { playlistTarget = state.nowTrack }
             )
-                else -> MainShell(state, vm, recognizer::start)
+                else -> MainShell(state, vm, recognizer::start) { playlistTarget = it }
             }
         }
     }
 }
 
 @Composable
-private fun MainShell(state: AuraUiState, vm: AuraViewModel, onVoice: () -> Unit) {
+private fun MainShell(
+    state: AuraUiState,
+    vm: AuraViewModel,
+    onVoice: () -> Unit,
+    onAddToPlaylist: (Track) -> Unit
+) {
     Box(Modifier.fillMaxSize()) {
         AuraBackground()
         AnimatedContent(
@@ -266,16 +298,16 @@ private fun MainShell(state: AuraUiState, vm: AuraViewModel, onVoice: () -> Unit
             when (destination) {
                 AuraDestination.HOME -> HomeScreen(
                     state = state,
-                    onQuery = vm::setQuery,
-                    onSubmit = vm::submit,
                     onVoice = onVoice,
-                    onMood = { vm.submit(it) },
                     onMyMix = vm::playMyMix,
-                    onContinue = vm::continueListening,
-                    onSimilar = vm::playSimilarMix,
                     onTrack = vm::play,
-                    onLibrary = { vm.navigate(AuraDestination.LIBRARY) },
-                    onCar = vm::toggleCarMode,
+                    onPlaylists = {
+                        vm.setLibrarySection(LibrarySection.PLAYLISTS)
+                        vm.navigate(AuraDestination.LIBRARY)
+                    },
+                    onQueue = vm::openQueue,
+                    onRadio = vm::openRadio,
+                    onAddToPlaylist = onAddToPlaylist,
                     onDiagnostics = { vm.navigate(AuraDestination.DIAGNOSTICS) }
                 )
                 AuraDestination.SEARCH -> SearchScreen(
@@ -286,7 +318,18 @@ private fun MainShell(state: AuraUiState, vm: AuraViewModel, onVoice: () -> Unit
                     onTrack = vm::play,
                     onPlayNext = vm::playNext,
                     onAddQueue = vm::addToQueue,
+                    onAddPlaylist = onAddToPlaylist,
                     onRecent = vm::submit
+                )
+                AuraDestination.RADIO -> RadioScreen(
+                    state = state,
+                    onBack = { vm.navigate(AuraDestination.HOME) },
+                    onCountry = vm::selectRadioCountry,
+                    onRefresh = vm::refreshRadio,
+                    onStation = vm::play,
+                    onPlayNext = vm::playNext,
+                    onAddQueue = vm::addToQueue,
+                    onAddPlaylist = onAddToPlaylist
                 )
                 AuraDestination.LIBRARY -> LibraryScreen(
                     state = state,
@@ -294,6 +337,7 @@ private fun MainShell(state: AuraUiState, vm: AuraViewModel, onVoice: () -> Unit
                     onTrack = vm::play,
                     onPlayNext = vm::playNext,
                     onAddTrackToQueue = vm::addToQueue,
+                    onAddTrackToPlaylist = onAddToPlaylist,
                     onOpenPlaylist = vm::openPlaylist,
                     onClosePlaylist = vm::closePlaylist,
                     onCreatePlaylist = vm::createPlaylist,
@@ -336,7 +380,7 @@ private fun MainShell(state: AuraUiState, vm: AuraViewModel, onVoice: () -> Unit
                 )
                 Spacer(Modifier.height(8.dp))
             }
-            BottomNavigation(state.destination, vm::navigate)
+            BottomNavigation(state.destination, vm::navigate, vm::openQueue)
         }
     }
 }
@@ -344,99 +388,161 @@ private fun MainShell(state: AuraUiState, vm: AuraViewModel, onVoice: () -> Unit
 @Composable
 private fun HomeScreen(
     state: AuraUiState,
-    onQuery: (String) -> Unit,
-    onSubmit: () -> Unit,
     onVoice: () -> Unit,
-    onMood: (String) -> Unit,
     onMyMix: () -> Unit,
-    onContinue: () -> Unit,
-    onSimilar: () -> Unit,
     onTrack: (Track) -> Unit,
-    onLibrary: () -> Unit,
-    onCar: () -> Unit,
+    onPlaylists: () -> Unit,
+    onQueue: () -> Unit,
+    onRadio: () -> Unit,
+    onAddToPlaylist: (Track) -> Unit,
     onDiagnostics: () -> Unit
 ) {
-    val recommendations = state.personalMix.ifEmpty { state.queue }
+    val recent = state.history.ifEmpty { state.queue }
         .filterNot { it.id == DemoCatalog.tracks.first().id }
         .take(4)
     LazyColumn(
         modifier = Modifier.fillMaxSize().statusBarsPadding(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 20.dp, end = 20.dp, top = 22.dp, bottom = 178.dp
+            start = 16.dp, end = 16.dp, top = 10.dp, bottom = 174.dp
         ),
-        verticalArrangement = Arrangement.spacedBy(0.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("AURA", color = AuraAccentSoft, letterSpacing = 4.5.sp, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(5.dp))
-                    Text(greeting(), style = MaterialTheme.typography.headlineMedium)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onDiagnostics, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Rounded.Menu, "Меню", tint = PrimaryText)
                 }
-                if (BuildConfig.DEBUG) CircleIconButton(Icons.Rounded.Settings, 48.dp, onClick = onDiagnostics)
-                Spacer(Modifier.width(8.dp))
-                CircleIconButton(Icons.Rounded.DirectionsCar, 48.dp, onClick = onCar)
-            }
-            Spacer(Modifier.height(22.dp))
-            AuraHero(
-                state = state,
-                onQuery = onQuery,
-                onSubmit = onSubmit,
-                onVoice = onVoice,
-                onMyMix = onMyMix,
-                onContinue = onContinue,
-                onSimilar = onSimilar
-            )
-            Spacer(Modifier.height(30.dp))
-            SectionHeader(
-                if (recommendations.isEmpty()) "Начни с песни" else "Для тебя",
-                if (recommendations.isEmpty()) "Попробуй готовый запрос" else "Подобрано Music Brain"
-            )
-            Spacer(Modifier.height(16.dp))
-        }
-        item {
-            if (recommendations.isEmpty()) {
-                StarterCard { onMood("Включи Мот Капкан") }
-            } else {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(recommendations, key = Track::id) { track ->
-                        RecommendationCard(track) { onTrack(track) }
-                    }
-                }
-            }
-            Spacer(Modifier.height(32.dp))
-            SectionHeader("Настроение", "Выбери одним касанием")
-            Spacer(Modifier.height(14.dp))
-        }
-        item {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                listOf(
-                    "Ночная поездка" to "музыка для ночной поездки",
-                    "Спокойствие" to "спокойная музыка",
-                    "Энергия" to "энергичная музыка",
-                    "Концентрация" to "музыка для концентрации",
-                    "90-е" to "хиты 1990"
-                ).forEach { (title, command) -> MoodChip(title) { onMood(command) } }
-            }
-            Spacer(Modifier.height(32.dp))
-            SectionHeader("Музыка без браузера", "Поиск и нативное воспроизведение")
-            Spacer(Modifier.height(14.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                NativeSourceCard(
-                    icon = Icons.Rounded.Headphones,
-                    title = "YouTube",
-                    subtitle = "Конкретные песни",
-                    modifier = Modifier.weight(1f)
-                ) {}
-                NativeSourceCard(
-                    icon = Icons.Rounded.LibraryMusic,
-                    title = "На телефоне",
-                    subtitle = "${state.localTracks.size} файлов",
+                Text(
+                    "A U R A",
                     modifier = Modifier.weight(1f),
-                    onClick = onLibrary
+                    textAlign = TextAlign.Center,
+                    color = PrimaryText,
+                    letterSpacing = 3.sp,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
                 )
+                IconButton(onClick = onVoice, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Rounded.GraphicEq, "Голос AURA", tint = ReferenceMagenta)
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text("${greeting()}, Эмиль!", fontSize = 22.sp, lineHeight = 27.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Готова подобрать музыку\nпод твоё настроение",
+                color = SecondaryText,
+            fontSize = 14.sp,
+            lineHeight = 19.sp
+            )
+            Spacer(Modifier.height(10.dp))
+            AuraReferenceOrb(
+                listening = state.isListening,
+                onClick = onVoice,
+                modifier = Modifier.fillMaxWidth().height(224.dp)
+            )
+        }
+        item {
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+                    .background(Color(0xB51A202B))
+                    .border(1.dp, Color.White.copy(.06f), RoundedCornerShape(18.dp))
+                    .padding(12.dp)
+            ) {
+                Text("Быстрые действия", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HomeQuickAction(Icons.Rounded.AutoAwesome, "Мой микс", Modifier.weight(1f), onMyMix)
+                    HomeQuickAction(Icons.AutoMirrored.Rounded.PlaylistPlay, "Плейлисты", Modifier.weight(1f), onPlaylists)
+                    HomeQuickAction(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь", Modifier.weight(1f), onQueue)
+                    HomeQuickAction(Icons.Rounded.Radio, "Радио", Modifier.weight(1f), onRadio)
+                }
             }
         }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Недавно слушал", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                Text("Ещё", color = ReferenceMagenta, fontSize = 13.sp)
+            }
+            Spacer(Modifier.height(8.dp))
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+                    .background(Color(0xB5121720)).padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                if (recent.isEmpty()) {
+                    Text("Здесь появятся последние треки", color = SecondaryText, modifier = Modifier.padding(16.dp))
+                } else recent.forEach { track ->
+                    TrackRow(
+                        track = track,
+                        liked = track.id in state.likedIds,
+                        onClick = { onTrack(track) },
+                        onAddPlaylist = { onAddToPlaylist(track) },
+                        compact = true
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeQuickAction(
+    icon: ImageVector,
+    label: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier.height(72.dp).clip(RoundedCornerShape(14.dp)).background(Color.White.copy(.045f))
+            .clickable(onClick = onClick).padding(horizontal = 4.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Icon(icon, label, Modifier.size(22.dp), tint = PrimaryText)
+        Text(label, fontSize = 9.sp, color = PrimaryText, maxLines = 1)
+    }
+}
+
+@Composable
+private fun AuraReferenceOrb(listening: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "auraOrb")
+    val pulse by transition.animateFloat(.94f, 1.04f, infiniteRepeatable(tween(1000), RepeatMode.Reverse), label = "orbPulse")
+    Canvas(modifier.clickable(onClick = onClick)) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val base = size.minDimension * .30f * if (listening) pulse else 1f
+        drawCircle(
+            brush = Brush.radialGradient(listOf(ReferenceMagenta.copy(.26f), Color.Transparent), center, base * 1.8f),
+            radius = base * 1.8f,
+            center = center
+        )
+        repeat(6) { ring ->
+            drawCircle(
+                color = if (ring % 2 == 0) ReferenceMagenta.copy(.40f - ring * .045f)
+                    else ReferenceBlue.copy(.34f - ring * .04f),
+                radius = base * (.72f + ring * .16f),
+                center = center,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = if (ring < 2) 2.5f else 1.2f)
+            )
+        }
+        drawCircle(
+            brush = Brush.radialGradient(
+                listOf(Color(0xFFBD75FF), ReferencePurple, Color(0xFF19102E)),
+                center = Offset(center.x - base * .25f, center.y - base * .25f),
+                radius = base
+            ),
+            radius = base * .52f,
+            center = center
+        )
+        drawCircle(Color.White, radius = base * .055f, center = Offset(center.x - base * .16f, center.y - base * .04f))
+        drawCircle(Color.White, radius = base * .055f, center = Offset(center.x + base * .16f, center.y - base * .04f))
+        drawArc(
+            color = Color.White,
+            startAngle = 18f,
+            sweepAngle = 144f,
+            useCenter = false,
+            topLeft = Offset(center.x - base * .16f, center.y - base * .02f),
+            size = androidx.compose.ui.geometry.Size(base * .32f, base * .24f),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = base * .035f)
+        )
     }
 }
 
@@ -557,6 +663,7 @@ private fun SearchScreen(
     onTrack: (Track) -> Unit,
     onPlayNext: (Track) -> Unit,
     onAddQueue: (Track) -> Unit,
+    onAddPlaylist: (Track) -> Unit,
     onRecent: (String) -> Unit
 ) {
     Column(
@@ -601,10 +708,114 @@ private fun SearchScreen(
                     onClick = { onTrack(track) },
                     onPlayNext = { onPlayNext(track) },
                     onAddQueue = { onAddQueue(track) },
+                    onAddPlaylist = { onAddPlaylist(track) },
                     card = true,
                     badge = if (index == 0) "ЛУЧШЕЕ" else null
                 )
                 Spacer(Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun RadioScreen(
+    state: AuraUiState,
+    onBack: () -> Unit,
+    onCountry: (RadioCountry) -> Unit,
+    onRefresh: () -> Unit,
+    onStation: (Track) -> Unit,
+    onPlayNext: (Track) -> Unit,
+    onAddQueue: (Track) -> Unit,
+    onAddPlaylist: (Track) -> Unit
+) {
+    Column(
+        Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp).padding(top = 8.dp)
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("AURA RADIO", letterSpacing = 2.5.sp, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text("Бесплатные станции мира", color = SecondaryText, fontSize = 11.sp)
+            }
+            IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Обновить") }
+        }
+        Spacer(Modifier.height(16.dp))
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp))
+                .background(
+                    Brush.linearGradient(
+                        listOf(Color(0xFF351360), Color(0xFF151A33), Color(0xFF071725)),
+                        start = Offset.Zero,
+                        end = Offset(900f, 400f)
+                    )
+                )
+                .border(1.dp, ReferencePurple.copy(.5f), RoundedCornerShape(22.dp))
+                .padding(18.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(48.dp).background(ReferencePurple.copy(.22f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) { Icon(Icons.Rounded.Radio, null, tint = ReferenceMagenta) }
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(state.selectedRadioCountry?.name ?: "Выбери страну", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        state.selectedRadioCountry?.let { "${it.stationCount} станций в открытом каталоге" }
+                            ?: "Каталог Radio Browser",
+                        color = SecondaryText,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Text("Страны", fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(state.radioCountries, key = RadioCountry::code) { country ->
+                SelectableChip(country.name, country.code == state.selectedRadioCountry?.code) { onCountry(country) }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Станции", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            Text("${state.radioStations.size}", color = SecondaryText, fontSize = 12.sp)
+        }
+        Spacer(Modifier.height(8.dp))
+        when {
+            state.isRadioLoading -> {
+                Column(Modifier.fillMaxWidth().padding(top = 60.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = ReferenceMagenta, strokeWidth = 2.dp)
+                    Spacer(Modifier.height(12.dp))
+                    Text("Настраиваю эфир…", color = SecondaryText)
+                }
+            }
+            state.radioError != null -> {
+                Column(Modifier.fillMaxWidth().padding(top = 46.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(state.radioError, textAlign = TextAlign.Center, color = SecondaryText)
+                    Spacer(Modifier.height(14.dp))
+                    Button(onClick = onRefresh, shape = RoundedCornerShape(16.dp)) { Text("Повторить") }
+                }
+            }
+            else -> LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 180.dp)
+            ) {
+                items(state.radioStations, key = Track::id) { station ->
+                    TrackRow(
+                        track = station,
+                        liked = station.id in state.likedIds,
+                        onClick = { onStation(station) },
+                        onPlayNext = { onPlayNext(station) },
+                        onAddQueue = { onAddQueue(station) },
+                        onAddPlaylist = { onAddPlaylist(station) },
+                        highlighted = station.id == state.nowTrack.id,
+                        compact = true
+                    )
+                    HorizontalDivider(color = Color.White.copy(.05f))
+                }
             }
         }
     }
@@ -617,6 +828,7 @@ private fun LibraryScreen(
     onTrack: (Track) -> Unit,
     onPlayNext: (Track) -> Unit,
     onAddTrackToQueue: (Track) -> Unit,
+    onAddTrackToPlaylist: (Track) -> Unit,
     onOpenPlaylist: (String) -> Unit,
     onClosePlaylist: () -> Unit,
     onCreatePlaylist: (String, Boolean) -> Unit,
@@ -687,7 +899,7 @@ private fun LibraryScreen(
                 IconButton(onClick = onClosePlaylist) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
             }
             Text(
-                selected?.name ?: "Моя музыка",
+                selected?.name ?: if (state.librarySection == LibrarySection.PLAYLISTS) "Плейлисты" else "Библиотека",
                 style = MaterialTheme.typography.headlineLarge,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
@@ -706,6 +918,7 @@ private fun LibraryScreen(
                 onTrack = { index -> onPlayPlaylistFrom(selected, index) },
                 onPlayNext = { track -> onPlayNext(track) },
                 onAddToQueue = { track -> onAddTrackToQueue(track) },
+                onAddToPlaylist = onAddTrackToPlaylist,
                 onPlay = { onPlayPlaylist(selected, false) },
                 onShuffle = { onPlayPlaylist(selected, true) },
                 onAddCurrent = { onAddCurrent(selected.id) },
@@ -782,7 +995,8 @@ private fun LibraryScreen(
                         liked = track.id in state.likedIds,
                         onClick = { onTrack(track) },
                         onPlayNext = { onPlayNext(track) },
-                        onAddQueue = { onAddTrackToQueue(track) }
+                        onAddQueue = { onAddTrackToQueue(track) },
+                        onAddPlaylist = { onAddTrackToPlaylist(track) }
                     )
                 }
             }
@@ -828,6 +1042,74 @@ private fun PlaylistNameDialog(
 }
 
 @Composable
+private fun PlaylistPickerDialog(
+    track: Track,
+    playlists: List<AuraPlaylist>,
+    onDismiss: () -> Unit,
+    onAdd: (String) -> Unit,
+    onCreate: (String) -> Unit
+) {
+    var creating by rememberSaveable(track.id) { mutableStateOf(false) }
+    if (creating) {
+        PlaylistNameDialog(
+            title = "Новый плейлист",
+            initialName = "",
+            confirmLabel = "Создать и добавить",
+            onDismiss = { creating = false },
+            onConfirm = onCreate
+        )
+        return
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Добавить в плейлист") },
+        text = {
+            Column {
+                Text(track.title, color = SecondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(12.dp))
+                Surface(
+                    onClick = { creating = true },
+                    shape = RoundedCornerShape(16.dp),
+                    color = ReferencePurple,
+                    contentColor = Color.White,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Add, null)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Создать новый плейлист", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                if (playlists.isEmpty()) {
+                    Text("Плейлистов пока нет", color = SecondaryText, modifier = Modifier.padding(top = 18.dp))
+                } else {
+                    Spacer(Modifier.height(10.dp))
+                    LazyColumn(Modifier.height(if (playlists.size > 4) 260.dp else (playlists.size * 60).dp)) {
+                        items(playlists, key = AuraPlaylist::id) { playlist ->
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                                    .clickable { onAdd(playlist.id) }.padding(horizontal = 10.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.AutoMirrored.Rounded.PlaylistPlay, null, tint = AuraAccentSoft)
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(playlist.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("${playlist.tracks.size} треков", color = SecondaryText, fontSize = 11.sp)
+                                }
+                                Icon(Icons.Rounded.Add, "Добавить")
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
+}
+
+@Composable
 private fun PlaylistCard(playlist: AuraPlaylist, onOpen: () -> Unit, onPlay: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(ElevatedSurface)
@@ -856,6 +1138,7 @@ private fun PlaylistDetail(
     onTrack: (Int) -> Unit,
     onPlayNext: (Track) -> Unit,
     onAddToQueue: (Track) -> Unit,
+    onAddToPlaylist: (Track) -> Unit,
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
     onAddCurrent: () -> Unit,
@@ -870,7 +1153,7 @@ private fun PlaylistDetail(
         PlayerAction(Icons.Rounded.PlayArrow, "Играть", onPlay)
         PlayerAction(Icons.Rounded.Shuffle, "Вперемешку", onShuffle)
         PlayerAction(Icons.Rounded.Add, "Текущий", onAddCurrent)
-        PlayerAction(Icons.Rounded.PlaylistAdd, "Очередь", onAddQueue)
+        PlayerAction(Icons.AutoMirrored.Rounded.PlaylistAdd, "Очередь", onAddQueue)
         PlayerAction(Icons.Rounded.DragHandle, "Смешать", onShuffleOrder)
         PlayerAction(Icons.Rounded.Edit, "Название", onRename)
         PlayerAction(Icons.Rounded.Delete, "Удалить", onDelete)
@@ -897,7 +1180,8 @@ private fun PlaylistDetail(
                         liked = track.id in likedIds,
                         onClick = { onTrack(index) },
                         onPlayNext = { onPlayNext(track) },
-                        onAddQueue = { onAddToQueue(track) }
+                        onAddQueue = { onAddToQueue(track) },
+                        onAddPlaylist = { onAddToPlaylist(track) }
                     )
                 }
                 IconButton(onClick = { onRemove(track.id) }) {
@@ -915,50 +1199,120 @@ private fun AssistantScreen(
     onVoice: () -> Unit,
     onCommand: (String) -> Unit
 ) {
+    val suggestions = state.personalMix.ifEmpty { state.searchResults }.ifEmpty { state.queue }
+        .filterNot { it.id == DemoCatalog.tracks.first().id }
+        .take(4)
     Column(
-        Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 24.dp).padding(top = 24.dp, bottom = 180.dp),
+        Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 170.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Помощник", style = MaterialTheme.typography.headlineLarge)
-                Text("Работает локально", color = SecondaryText, fontSize = 13.sp)
+            Spacer(Modifier.size(48.dp))
+            Text("A U R A", Modifier.weight(1f), textAlign = TextAlign.Center, letterSpacing = 3.sp, fontSize = 14.sp)
+            IconButton(onClick = onVoice, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Rounded.GraphicEq, "Голос", tint = ReferenceMagenta)
             }
-            Box(Modifier.size(9.dp).background(Color(0xFF73D99A), CircleShape))
         }
-        Spacer(Modifier.weight(.7f))
-        VoiceOrb(state.isListening, onVoice)
-        Spacer(Modifier.height(26.dp))
-        Text(
-            if (state.isListening) "Слушаю…" else state.assistantText,
-            style = MaterialTheme.typography.titleLarge,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(9.dp))
-        Text(
-            "Голосовые команды не отправляются в AURA или платный AI",
-            color = SecondaryText,
-            textAlign = TextAlign.Center,
-            fontSize = 13.sp
-        )
-        Spacer(Modifier.weight(.5f))
-        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            listOf(
-                "Включи музыку для ночной поездки",
-                "Что сейчас играет?",
-                "Добавь в любимые"
-            ).forEach { command ->
-                Surface(
-                    onClick = { onCommand(command) },
-                    shape = RoundedCornerShape(22.dp),
-                    color = Color.White.copy(.055f),
-                    border = BorderStroke(1.dp, Color.White.copy(.08f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("«$command»", Modifier.padding(horizontal = 18.dp, vertical = 15.dp), color = AccentSilver)
+        Spacer(Modifier.height(18.dp))
+        LazyColumn(
+            Modifier.fillMaxWidth().weight(1f),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Surface(
+                        onClick = { onCommand("Включи что-нибудь похожее на ${state.nowTrack.title}") },
+                        shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
+                        color = ReferencePurple
+                    ) {
+                        Text(
+                            if (state.nowTrack.id == DemoCatalog.tracks.first().id) "Включи что-нибудь для меня"
+                            else "Включи что-нибудь похожее на ${state.nowTrack.title}",
+                            Modifier.padding(horizontal = 15.dp, vertical = 12.dp),
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+            item {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                    MiniAuraFace(34.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp),
+                        color = Color(0xFF202631),
+                        modifier = Modifier.weight(1f, fill = false)
+                    ) {
+                        Text(
+                            if (suggestions.isEmpty()) state.assistantText
+                            else "Конечно. Я подобрала несколько треков, которые тебе понравятся.",
+                            Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                            color = PrimaryText,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+            if (suggestions.isNotEmpty()) {
+                item {
+                    Column(
+                        Modifier.padding(start = 44.dp).fillMaxWidth().clip(RoundedCornerShape(18.dp))
+                            .background(Color(0xFF171D27)).padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        suggestions.forEach { track ->
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                    .clickable { onCommand("Включи ${track.artist} ${track.title}") }
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Artwork(track, Modifier.size(42.dp), 9.dp)
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(track.title, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(track.artist, color = SecondaryText, fontSize = 11.sp, maxLines = 1)
+                                }
+                                Box(Modifier.size(32.dp).background(Color.White.copy(.12f), CircleShape), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Rounded.PlayArrow, "Включить", Modifier.size(20.dp))
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
+        Spacer(Modifier.height(12.dp))
+        Box(
+            Modifier.fillMaxWidth().height(112.dp).clip(RoundedCornerShape(28.dp))
+                .background(
+                    Brush.radialGradient(
+                        listOf(ReferencePurple.copy(.22f), Color(0xFF0B1020)),
+                        center = Offset(500f, 0f),
+                        radius = 650f
+                    )
+                ).border(1.dp, ReferencePurple.copy(.25f), RoundedCornerShape(28.dp))
+                .clickable(onClick = onVoice),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                MiniAuraFace(48.dp)
+                Spacer(Modifier.height(6.dp))
+                Text(if (state.isListening) "Слушаю тебя…" else "Нажми и говори", color = SecondaryText, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MiniAuraFace(size: Dp) {
+    Box(
+        Modifier.size(size).background(
+            Brush.radialGradient(listOf(Color(0xFFD088FF), ReferencePurple, Color(0xFF251345))),
+            CircleShape
+        ).border(1.dp, Color.White.copy(.20f), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Text("••", color = Color.White, fontSize = (size.value * .34f).sp, letterSpacing = 1.sp)
     }
 }
 
@@ -974,7 +1328,8 @@ private fun PlayerScreen(
     onRepeat: () -> Unit,
     onQueue: () -> Unit,
     onSeek: (Long) -> Unit,
-    onCar: () -> Unit
+    onCar: () -> Unit,
+    onAddToPlaylist: () -> Unit
 ) {
     val track = state.nowTrack
     val duration = maxOf(state.playbackDurationMs, track.durationMs ?: 0L)
@@ -1004,20 +1359,23 @@ private fun PlayerScreen(
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onClose) { Icon(Icons.Rounded.KeyboardArrowDown, "Закрыть") }
-                Text("Сейчас играет", Modifier.weight(1f), textAlign = TextAlign.Center, color = SecondaryText, fontSize = 13.sp)
+                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Играет из плейлиста", color = SecondaryText, fontSize = 10.sp)
+                    Text("Мой микс", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                }
                 IconButton(onClick = {}) { Icon(Icons.Rounded.MoreHoriz, "Ещё") }
             }
             Spacer(Modifier.height(10.dp))
-            Artwork(track, Modifier.fillMaxWidth().aspectRatio(1f), 34.dp)
+            Artwork(track, Modifier.fillMaxWidth().aspectRatio(1.16f), 22.dp)
             Spacer(Modifier.height(20.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(track.title, style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(3.dp))
-                    Text(track.artist, color = SecondaryText, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(track.artist, color = ReferenceMagenta, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 IconButton(onClick = onLike) {
-                    Icon(if (state.liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, "Любимое")
+                    Icon(if (state.liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, "Любимое", tint = ReferenceMagenta)
                 }
             }
             Spacer(Modifier.height(14.dp))
@@ -1039,7 +1397,7 @@ private fun PlayerScreen(
                     onValueChange = { onSeek((it * duration).toLong()) },
                     colors = SliderDefaults.colors(
                         thumbColor = AuraAccentSoft,
-                        activeTrackColor = AuraAccent,
+                        activeTrackColor = ReferenceMagenta,
                         inactiveTrackColor = Color.White.copy(.18f)
                     )
                 )
@@ -1055,8 +1413,8 @@ private fun PlayerScreen(
                 IconButton(onClick = onPrevious, modifier = Modifier.size(62.dp)) {
                     Icon(Icons.Rounded.SkipPrevious, "Предыдущий", Modifier.size(38.dp))
                 }
-                IconButton(onClick = onPlay, modifier = Modifier.size(78.dp).background(AuraAccent, CircleShape)) {
-                    Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Воспроизведение", Modifier.size(42.dp), tint = Color(0xFF12111B))
+                IconButton(onClick = onPlay, modifier = Modifier.size(72.dp).background(ReferencePurple, CircleShape)) {
+                    Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Воспроизведение", Modifier.size(38.dp), tint = Color.White)
                 }
                 IconButton(onClick = onNext, modifier = Modifier.size(62.dp)) {
                     Icon(Icons.Rounded.SkipNext, "Следующий", Modifier.size(38.dp))
@@ -1069,13 +1427,29 @@ private fun PlayerScreen(
             }
             Spacer(Modifier.height(14.dp))
             Row(
-                Modifier.fillMaxWidth().height(66.dp).clip(RoundedCornerShape(22.dp))
+                Modifier.fillMaxWidth().height(58.dp).clip(RoundedCornerShape(18.dp))
                     .background(Color.White.copy(.07f)).padding(horizontal = 8.dp, vertical = 3.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 PlayerAction(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь", onQueue)
-                PlayerAction(Icons.Rounded.Equalizer, "YouTube", {})
+                PlayerAction(Icons.AutoMirrored.Rounded.PlaylistAdd, "В плейлист", onAddToPlaylist)
                 PlayerAction(Icons.Rounded.DirectionsCar, "В машине", onCar)
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
+                    .background(Brush.horizontalGradient(listOf(Color(0xFF241B35), Color(0xFF171A27))))
+                    .border(1.dp, ReferencePurple.copy(.20f), RoundedCornerShape(20.dp))
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MiniAuraFace(42.dp)
+                Spacer(Modifier.width(11.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("AURA", color = AuraAccentSoft, fontSize = 9.sp, letterSpacing = 1.5.sp)
+                    Text("Добавить трек в плейлист?", fontSize = 12.sp)
+                }
+                TextButton(onClick = onAddToPlaylist) { Text("Добавить", color = ReferenceMagenta) }
             }
         }
     }
@@ -1094,7 +1468,8 @@ private fun QueueScreen(
     onAutoContinue: () -> Unit,
     onSave: (String) -> Unit,
     onRestore: (AuraQueueSnapshot) -> Unit,
-    onDeleteHistory: (String) -> Unit
+    onDeleteHistory: (String) -> Unit,
+    onAddToPlaylist: (Track) -> Unit
 ) {
     var historyVisible by rememberSaveable { mutableStateOf(false) }
     var confirmClear by rememberSaveable { mutableStateOf(false) }
@@ -1128,7 +1503,7 @@ private fun QueueScreen(
         ) {
             IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
             Column(Modifier.weight(1f)) {
-                Text("Музыка дальше", style = MaterialTheme.typography.headlineMedium)
+                Text("Очередь", style = MaterialTheme.typography.headlineMedium)
                 Text("${state.queue.size} треков в сессии", color = SecondaryText, fontSize = 12.sp)
             }
         }
@@ -1167,7 +1542,6 @@ private fun QueueScreen(
                     active = state.repeatMode != AuraRepeatMode.OFF,
                     onClick = onRepeat
                 )
-                QueueControlChip(Icons.Rounded.PlaylistAdd, "Сохранить", onClick = { saveDialog = true })
                 QueueControlChip(Icons.Rounded.ClearAll, "Очистить", onClick = { confirmClear = true })
             }
             Spacer(Modifier.height(12.dp))
@@ -1193,11 +1567,30 @@ private fun QueueScreen(
                 )
             }
             Spacer(Modifier.height(12.dp))
+            Surface(
+                onClick = { saveDialog = true },
+                shape = RoundedCornerShape(16.dp),
+                color = ReferencePurple,
+                contentColor = Color.White,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, null, Modifier.size(19.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Сохранить очередь как плейлист", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
             ReorderableQueue(
                 state = state,
                 onPlay = onPlay,
                 onRemove = onRemove,
-                onMove = onMove
+                onMove = onMove,
+                onAddToPlaylist = onAddToPlaylist
             )
         }
     }
@@ -1229,7 +1622,8 @@ private fun ReorderableQueue(
     state: AuraUiState,
     onPlay: (Track) -> Unit,
     onRemove: (Track) -> Unit,
-    onMove: (Int, Int) -> Unit
+    onMove: (Int, Int) -> Unit,
+    onAddToPlaylist: (Track) -> Unit
 ) {
     val listState = rememberLazyListState()
     val haptics = LocalHapticFeedback.current
@@ -1294,7 +1688,14 @@ private fun ReorderableQueue(
                     }
                 )
                 Box(Modifier.weight(1f)) {
-                    TrackRow(track, track.id in state.likedIds, { onPlay(track) }, highlighted = current)
+                    TrackRow(
+                        track,
+                        track.id in state.likedIds,
+                        { onPlay(track) },
+                        onAddPlaylist = { onAddToPlaylist(track) },
+                        highlighted = current,
+                        compact = true
+                    )
                 }
                 if (!current) {
                     IconButton(onClick = { onRemove(track) }) {
@@ -1411,28 +1812,45 @@ private fun CarModeScreen(
 }
 
 @Composable
-private fun BottomNavigation(selected: AuraDestination, onSelect: (AuraDestination) -> Unit) {
+private fun BottomNavigation(
+    selected: AuraDestination,
+    onSelect: (AuraDestination) -> Unit,
+    onQueue: () -> Unit
+) {
     Row(
-        Modifier.fillMaxWidth().height(68.dp).clip(RoundedCornerShape(26.dp)).background(DeepSurface.copy(.97f))
-            .border(1.dp, AuraBorder, RoundedCornerShape(26.dp)).padding(horizontal = 5.dp, vertical = 5.dp),
+        Modifier.fillMaxWidth().height(62.dp).clip(RoundedCornerShape(20.dp)).background(Color(0xF20A1017))
+            .border(1.dp, Color.White.copy(.07f), RoundedCornerShape(20.dp)).padding(horizontal = 3.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceAround,
         verticalAlignment = Alignment.CenterVertically
     ) {
         listOf(
             Triple(AuraDestination.HOME, Icons.Rounded.Home, "Главная"),
             Triple(AuraDestination.SEARCH, Icons.Rounded.Search, "Поиск"),
-            Triple(AuraDestination.LIBRARY, Icons.Rounded.LibraryMusic, "Моя музыка"),
-            Triple(AuraDestination.ASSISTANT, Icons.Rounded.AutoAwesome, "Aura")
+            Triple(AuraDestination.ASSISTANT, Icons.Rounded.Mic, "AURA"),
+            Triple(null, Icons.AutoMirrored.Rounded.QueueMusic, "Очередь"),
+            Triple(AuraDestination.LIBRARY, Icons.Rounded.LibraryMusic, "Библиотека")
         ).forEach { (destination, icon, title) ->
             val active = destination == selected
             Column(
-                Modifier.weight(1f).clip(RoundedCornerShape(19.dp))
-                    .background(if (active) AuraAccent.copy(.14f) else Color.Transparent)
-                    .clickable { onSelect(destination) }.padding(vertical = 7.dp),
+                Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
+                    .background(if (active && destination != AuraDestination.ASSISTANT) ReferencePurple.copy(.14f) else Color.Transparent)
+                    .clickable { if (destination == null) onQueue() else onSelect(destination) }.padding(vertical = 5.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Icon(icon, title, Modifier.size(22.dp), tint = if (active) AuraAccentSoft else SecondaryText.copy(.68f))
-                Text(title, color = if (active) PrimaryText else SecondaryText.copy(.68f), fontSize = 10.sp, maxLines = 1)
+                if (destination == AuraDestination.ASSISTANT) {
+                    Box(
+                        Modifier.size(34.dp).background(
+                            Brush.radialGradient(listOf(ReferenceMagenta, ReferencePurple, Color(0xFF24134A))),
+                            CircleShape
+                        ).border(1.dp, Color.White.copy(.22f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) { Icon(icon, title, Modifier.size(18.dp), tint = Color.White) }
+                } else {
+                    Icon(icon, title, Modifier.size(20.dp), tint = if (active) ReferencePurple else SecondaryText.copy(.72f))
+                }
+                if (destination != AuraDestination.ASSISTANT) {
+                    Text(title, color = if (active) ReferencePurple else SecondaryText.copy(.72f), fontSize = 8.sp, maxLines = 1)
+                }
             }
         }
     }
@@ -1441,25 +1859,25 @@ private fun BottomNavigation(selected: AuraDestination, onSelect: (AuraDestinati
 @Composable
 private fun MiniPlayer(state: AuraUiState, onOpen: () -> Unit, onPlay: () -> Unit, onLike: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().height(76.dp).clip(RoundedCornerShape(25.dp))
-            .background(Brush.horizontalGradient(listOf(Color(0xFF20203A), ElevatedSurface)))
-            .border(1.dp, AuraAccent.copy(.20f), RoundedCornerShape(25.dp)).clickable(onClick = onOpen).padding(8.dp),
+        Modifier.fillMaxWidth().height(64.dp).clip(RoundedCornerShape(18.dp))
+            .background(Brush.horizontalGradient(listOf(Color(0xFF151B23), Color(0xFF0D1219))))
+            .border(1.dp, Color.White.copy(.07f), RoundedCornerShape(18.dp)).clickable(onClick = onOpen).padding(7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Artwork(state.nowTrack, Modifier.size(58.dp), 18.dp)
-        Spacer(Modifier.width(12.dp))
+        Artwork(state.nowTrack, Modifier.size(50.dp), 11.dp)
+        Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(state.nowTrack.title, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(state.nowTrack.artist, color = SecondaryText, fontSize = 12.sp, maxLines = 1)
         }
-        IconButton(onClick = onLike) {
-            Icon(if (state.liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, "Любимое", tint = AccentSilver)
+        IconButton(onClick = onLike, modifier = Modifier.size(42.dp)) {
+            Icon(if (state.liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, "Любимое", tint = ReferenceMagenta)
         }
-        IconButton(onClick = onPlay, modifier = Modifier.background(AuraAccent, CircleShape)) {
+        IconButton(onClick = onPlay, modifier = Modifier.size(42.dp)) {
             if (state.isBuffering) {
-                CircularProgressIndicator(Modifier.size(22.dp), color = Color(0xFF12111B), strokeWidth = 2.dp)
+                CircularProgressIndicator(Modifier.size(20.dp), color = ReferenceMagenta, strokeWidth = 2.dp)
             } else {
-                Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Воспроизведение", tint = Color(0xFF12111B))
+                Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Воспроизведение", tint = PrimaryText)
             }
         }
     }
@@ -1573,9 +1991,11 @@ private fun TrackRow(
     onClick: () -> Unit,
     onPlayNext: (() -> Unit)? = null,
     onAddQueue: (() -> Unit)? = null,
+    onAddPlaylist: (() -> Unit)? = null,
     highlighted: Boolean = false,
     card: Boolean = false,
-    badge: String? = null
+    badge: String? = null,
+    compact: Boolean = false
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(
@@ -1590,11 +2010,18 @@ private fun TrackRow(
             .padding(vertical = 8.dp, horizontal = if (highlighted || card) 8.dp else 0.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Artwork(track, Modifier.size(56.dp), 17.dp)
-        Spacer(Modifier.width(12.dp))
+        Artwork(track, Modifier.size(if (compact) 44.dp else 56.dp), if (compact) 10.dp else 17.dp)
+        Spacer(Modifier.width(if (compact) 10.dp else 12.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(track.title, Modifier.weight(1f, fill = false), fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    track.title,
+                    Modifier.weight(1f, fill = false),
+                    fontWeight = FontWeight.Medium,
+                    fontSize = if (compact) 13.sp else 16.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
                 badge?.let {
                     Spacer(Modifier.width(7.dp))
                     Text(
@@ -1608,13 +2035,22 @@ private fun TrackRow(
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(track.artist, color = SecondaryText, fontSize = 13.sp, maxLines = 1)
-                Text("  ·  ${sourceLabel(track)}", color = SecondaryText.copy(.55f), fontSize = 9.sp)
+                Text(
+                    track.artist,
+                    modifier = Modifier.weight(1f),
+                    color = SecondaryText,
+                    fontSize = if (compact) 11.sp else 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (!compact) {
+                    Text("  ·  ${sourceLabel(track)}", color = SecondaryText.copy(.55f), fontSize = 9.sp, maxLines = 1)
+                }
             }
         }
         if (liked) Icon(Icons.Rounded.Favorite, null, tint = AccentSilver, modifier = Modifier.size(17.dp))
         Spacer(Modifier.width(5.dp))
-        if (onPlayNext != null || onAddQueue != null) {
+        if (onPlayNext != null || onAddQueue != null || onAddPlaylist != null) {
             Box {
                 IconButton(onClick = { menuOpen = true }) {
                     Icon(Icons.Rounded.MoreVert, "Действия с треком", tint = SecondaryText)
@@ -1631,6 +2067,13 @@ private fun TrackRow(
                         DropdownMenuItem(
                             text = { Text("Добавить в конец") },
                             leadingIcon = { Icon(Icons.AutoMirrored.Rounded.QueueMusic, null) },
+                            onClick = { menuOpen = false; action() }
+                        )
+                    }
+                    onAddPlaylist?.let { action ->
+                        DropdownMenuItem(
+                            text = { Text("Добавить в плейлист") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, null) },
                             onClick = { menuOpen = false; action() }
                         )
                     }
@@ -1701,9 +2144,9 @@ private fun SelectableChip(text: String, selected: Boolean, onClick: () -> Unit)
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(100.dp),
-        color = if (selected) PrimaryText else Color.White.copy(.055f),
-        contentColor = if (selected) Color.Black else AccentSilver,
-        border = BorderStroke(1.dp, if (selected) PrimaryText else Color.White.copy(.09f))
+        color = if (selected) ReferencePurple else Color.White.copy(.055f),
+        contentColor = if (selected) Color.White else AccentSilver,
+        border = BorderStroke(1.dp, if (selected) ReferenceMagenta.copy(.55f) else Color.White.copy(.09f))
     ) { Text(text, Modifier.padding(horizontal = 17.dp, vertical = 10.dp)) }
 }
 
@@ -1788,19 +2231,19 @@ private fun CircleIconButton(
 
 @Composable
 private fun AuraBackground() {
-    Canvas(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF0D0E19), AuraBlack)))) {
+    Canvas(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF07101A), AuraBlack)))) {
         drawCircle(
-            Brush.radialGradient(listOf(AuraAccent.copy(.18f), Color.Transparent)),
+            Brush.radialGradient(listOf(ReferenceBlue.copy(.14f), Color.Transparent)),
             radius = size.minDimension * .72f,
             center = Offset(size.width * .92f, size.height * .08f)
         )
         drawCircle(
-            Brush.radialGradient(listOf(AuraMint.copy(.09f), Color.Transparent)),
+            Brush.radialGradient(listOf(ReferencePurple.copy(.12f), Color.Transparent)),
             radius = size.minDimension * .82f,
             center = Offset(size.width * .05f, size.height * .52f)
         )
         drawCircle(
-            Brush.radialGradient(listOf(Color(0xFFFF7DB5).copy(.07f), Color.Transparent)),
+            Brush.radialGradient(listOf(ReferenceMagenta.copy(.08f), Color.Transparent)),
             radius = size.minDimension * .68f,
             center = Offset(size.width, size.height * .82f)
         )

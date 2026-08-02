@@ -124,6 +124,25 @@ class AuraStateRepositoryTest {
     }
 
     @Test
+    fun radioStreamSurvivesPlaylistRoundTrip() = runBlocking {
+        val dao = FakeAuraStateDao()
+        val repository = AuraStateRepository(dao) { 7_000L }
+        val station = track(
+            id = "radio-station",
+            sourceId = "radio_browser",
+            page = "https://radio.example/live.mp3",
+            type = PlaybackType.DIRECT_STREAM,
+            stream = "https://radio.example/live.mp3"
+        )
+
+        repository.createPlaylist("Радио", listOf(station))
+        val restored = repository.loadPlaylists().single().tracks.single()
+
+        assertEquals(station.streamUrl, restored.streamUrl)
+        assertEquals("radio_browser", restored.sourceId)
+    }
+
+    @Test
     fun queueHistoryCanBeArchivedRestoredAndDeleted() = runBlocking {
         val dao = FakeAuraStateDao()
         var clock = 9_000L

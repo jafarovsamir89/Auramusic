@@ -308,6 +308,7 @@ internal fun TrackEntity.toTrack(): Track {
             type == PlaybackType.LOCAL && sourcePageUrl.startsWith("content://") -> sourcePageUrl
             sourceId == "youtube" -> id.removePrefix("youtube:").takeIf(AuraStateRepository.YOUTUBE_VIDEO_ID::matches)
                 ?.let { "aura-youtube://play/$it" }
+            sourceId == "radio_browser" && sourcePageUrl.startsWith("https://") -> sourcePageUrl
             else -> null
         },
         requestHeaders = emptyMap(),

@@ -7,6 +7,11 @@ class LocalIntentEngineTest {
     private val engine = LocalIntentEngine()
 
     @Test
+    fun `opens country radio catalog`() {
+        assertEquals(MusicIntent.OpenRadio, engine.understand("радио").intent)
+    }
+
+    @Test
     fun recognizesPersonalMixBeforeGenericSearch() {
         assertEquals(MusicIntent.MyMix, engine.understand("Включи мой микс").intent)
     }

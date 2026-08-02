@@ -21,6 +21,7 @@ sealed interface MusicIntent {
     data object NowPlaying : MusicIntent
     data object OpenHistory : MusicIntent
     data object OpenPlaylists : MusicIntent
+    data object OpenRadio : MusicIntent
     data object OpenQueue : MusicIntent
     data object ClearQueue : MusicIntent
     data class QueueTrack(val query: String, val playNext: Boolean) : MusicIntent

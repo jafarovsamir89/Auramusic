@@ -10,22 +10,22 @@ val AuraTypography = Typography(
     displayLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 40.sp,
-        lineHeight = 44.sp,
-        letterSpacing = (-1.1).sp
+        fontSize = 34.sp,
+        lineHeight = 39.sp,
+        letterSpacing = (-0.8).sp
     ),
     headlineLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 29.sp,
-        lineHeight = 34.sp,
-        letterSpacing = (-0.6).sp
+        fontSize = 24.sp,
+        lineHeight = 29.sp,
+        letterSpacing = (-0.35).sp
     ),
     titleLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 20.sp,
-        lineHeight = 25.sp
+        fontSize = 18.sp,
+        lineHeight = 23.sp
     ),
     bodyLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
