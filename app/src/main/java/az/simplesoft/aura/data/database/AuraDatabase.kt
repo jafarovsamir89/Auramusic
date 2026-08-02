@@ -29,9 +29,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BlockedArtistEntity::class,
         CachedSearchResultEntity::class,
         CachedPlayableSourceEntity::class,
-        UserPreferenceEntity::class
+        UserPreferenceEntity::class,
+        AssistantDialogueNodeEntity::class,
+        AssistantDialogueVariantEntity::class,
+        AssistantIntentPatternEntity::class,
+        AssistantConversationStateEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class AuraDatabase : RoomDatabase() {
@@ -45,7 +49,7 @@ abstract class AuraDatabase : RoomDatabase() {
                 context.applicationContext,
                 AuraDatabase::class.java,
                 "aura_music.db"
-            ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
         }
 
         internal val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -72,6 +76,21 @@ abstract class AuraDatabase : RoomDatabase() {
                     )""".trimIndent()
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_queue_snapshot_items_trackId ON queue_snapshot_items(trackId)")
+            }
+        }
+
+        internal val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_dialogue_nodes (id TEXT NOT NULL PRIMARY KEY, topic TEXT NOT NULL, language TEXT NOT NULL, nextNodeId TEXT, priority INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_dialogue_nodes_topic ON assistant_dialogue_nodes(topic)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_dialogue_nodes_language ON assistant_dialogue_nodes(language)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_dialogue_variants (id TEXT NOT NULL PRIMARY KEY, nodeId TEXT NOT NULL, language TEXT NOT NULL, tone TEXT NOT NULL, text TEXT NOT NULL, weight INTEGER NOT NULL, cooldownKey TEXT)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_dialogue_variants_nodeId ON assistant_dialogue_variants(nodeId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_dialogue_variants_language ON assistant_dialogue_variants(language)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_intent_patterns (id TEXT NOT NULL PRIMARY KEY, intent TEXT NOT NULL, language TEXT NOT NULL, pattern TEXT NOT NULL, emotion TEXT, priority INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_intent_patterns_intent ON assistant_intent_patterns(intent)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_intent_patterns_language ON assistant_intent_patterns(language)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_conversation_state (id TEXT NOT NULL PRIMARY KEY, nodeId TEXT, topic TEXT, emotion TEXT, updatedAt INTEGER NOT NULL)")
             }
         }
     }

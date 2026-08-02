@@ -143,8 +143,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import az.simplesoft.aura.assistant.OfflineSpeechRecognizer
+import az.simplesoft.aura.assistant.WhisperSpeechRecognizer
 import az.simplesoft.aura.assistant.AssistantRole
+import az.simplesoft.aura.assistant.AuraWakeWordBus
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.RadioCountry
@@ -175,20 +176,21 @@ fun AuraApp(
     initialCommand: String? = null,
     speakInitialCommand: Boolean = false,
     initialVoicePreview: String? = null,
+    initialVoicePreviewLanguage: String? = null,
     vm: AuraViewModel = viewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val recognizer = remember {
-        OfflineSpeechRecognizer(
+        WhisperSpeechRecognizer(
             context = context,
-            onText = {
-                vm.setQuery(it)
-                vm.submitVoice(it)
-            },
+            onCommand = vm::submitVoice,
             onState = vm::setListening
         )
+    }
+    val voiceInput = {
+        if (!state.wakeWordEnabled) recognizer.start()
     }
     var playlistTarget by remember { mutableStateOf<Track?>(null) }
     DisposableEffect(Unit) { onDispose(recognizer::destroy) }
@@ -197,8 +199,14 @@ fun AuraApp(
             if (speakInitialCommand) vm.submitVoice(it) else vm.submit(it)
         }
     }
-    LaunchedEffect(initialVoicePreview) {
-        initialVoicePreview?.takeIf(String::isNotBlank)?.let(vm::previewAzerbaijaniVoice)
+    LaunchedEffect(initialVoicePreview, initialVoicePreviewLanguage) {
+        initialVoicePreview?.takeIf(String::isNotBlank)?.let {
+            vm.previewVoice(it, if (initialVoicePreviewLanguage == "ru") az.simplesoft.aura.assistant.AssistantLanguage.RUSSIAN else az.simplesoft.aura.assistant.AssistantLanguage.AZERBAIJANI)
+        }
+    }
+    LaunchedEffect(Unit) {
+        vm.resumeWakeWordServiceIfNeeded()
+        AuraWakeWordBus.commands.collect { command -> vm.submitVoice(command) }
     }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -252,7 +260,7 @@ fun AuraApp(
                 onNext = vm::next,
                 onLike = vm::toggleLike,
                 onExit = vm::toggleCarMode,
-                onVoice = recognizer::start
+                onVoice = voiceInput
             )
             state.isQueueOpen -> QueueScreen(
                 state = state,
@@ -283,7 +291,7 @@ fun AuraApp(
                 onCar = vm::toggleCarMode,
                 onAddToPlaylist = { playlistTarget = state.nowTrack }
             )
-                else -> MainShell(state, vm, recognizer::start) { playlistTarget = it }
+                else -> MainShell(state, vm, voiceInput) { playlistTarget = it }
             }
         }
     }
@@ -362,7 +370,8 @@ private fun MainShell(
                 AuraDestination.ASSISTANT -> AssistantScreen(
                     state = state,
                     onVoice = onVoice,
-                    onCommand = vm::submit
+                    onCommand = vm::submit,
+                    onWakeWord = vm::setWakeWordEnabled
                 )
                 AuraDestination.DIAGNOSTICS -> DiagnosticsScreen(
                     diagnostics = state.diagnostics,
@@ -1205,7 +1214,8 @@ private fun PlaylistDetail(
 private fun AssistantScreen(
     state: AuraUiState,
     onVoice: () -> Unit,
-    onCommand: (String) -> Unit
+    onCommand: (String) -> Unit,
+    onWakeWord: (Boolean) -> Unit
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -1223,13 +1233,40 @@ private fun AssistantScreen(
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("A U R A", textAlign = TextAlign.Center, letterSpacing = 3.sp, fontSize = 14.sp)
                 Text(
-                    if (state.isCloudAiConfigured) "DeepSeek · память включена" else "Локальный режим · ожидается AI-ключ",
-                    color = if (state.isCloudAiConfigured) AuraMint else SecondaryText,
+                    if (state.isOfflineOnly) "Офлайн-режим · голос не отправляется в сеть" else "Локальный режим",
+                    color = AuraMint,
                     fontSize = 9.sp
                 )
             }
             IconButton(onClick = onVoice, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Rounded.GraphicEq, "Голос", tint = ReferenceMagenta)
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = ElevatedSurface,
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Rounded.Mic, contentDescription = null, tint = if (state.wakeWordEnabled) AuraMint else SecondaryText)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Слушать «АУРА»", fontSize = 13.sp)
+                    Text(
+                        if (state.wakeWordEnabled) "Активно в фоне и при выключенном экране" else "Включается с постоянным уведомлением",
+                        color = SecondaryText,
+                        fontSize = 10.sp
+                    )
+                }
+                Switch(
+                    checked = state.wakeWordEnabled,
+                    onCheckedChange = onWakeWord,
+                    colors = SwitchDefaults.colors(checkedThumbColor = PrimaryText, checkedTrackColor = AuraAccent)
+                )
             }
         }
         Spacer(Modifier.height(12.dp))

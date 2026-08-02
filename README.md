@@ -4,28 +4,18 @@ AURA is a native Android personal music assistant. Online catalog search and pla
 
 ## AURA AI
 
-AURA AI uses one online decision-maker with a deterministic offline fallback:
+AURA AI is fully local and deterministic:
 
 ```text
 voice or text
-  -> OpenRouter / DeepSeek agent (when configured)
-  -> validated structured action
+  -> local intent and dialogue library
   -> Music Brain / PlaybackService / Android API
   -> concise reply + Silero AZ or Android system TTS
 
-network/agent failure -> local allow-listed player commands only
+  -> local reply + Silero AZ or Android system TTS
 ```
 
-When a key is configured, every utterance is planned by DeepSeek; local phrase matching cannot pre-empt the agent. Greetings, courtesy words, questions and ordinary conversation never fall back to music search. Russian, Azerbaijani and English are supported by the agent context and speech layer. Durable user facts and only ten recent messages are kept in a bounded Room-backed JSON record (maximum 16,000 characters); complete transcripts are not retained.
-
-DeepSeek is optional only as an offline safety mode. Without a key or network, allow-listed local player commands continue to work, but free conversation requires the agent. For a private development build, add these untracked lines to `local.properties`:
-
-```properties
-OPENROUTER_API_KEY=your_key_here
-OPENROUTER_MODEL=~deepseek/deepseek-v4-flash-latest
-```
-
-Never commit a real key. A key embedded in a client APK can be extracted, so public distribution will require a small authenticated token broker rather than a permanent provider key in the app.
+Commands, dialogue branches, memory, and reply variants work without a network, server, account, or API key. Russian, Azerbaijani and English are supported by the local speech and dialogue layers. Durable user facts and recent messages are stored in a bounded Room record; complete transcripts are not retained.
 
 ## Playback flow
 
@@ -55,16 +45,12 @@ Signed `googlevideo` URLs are not stored in the queue or Room. They are resolved
 - AURA Visual System 2.1: reference-led compact cinematic UI, violet/magenta energy accents, central AURA character and 48 dp interaction targets.
 - Free Radio Browser catalog by country with secure station streams, retry states, playback and playlist persistence.
 - Local-device music, voice intents and automotive UI.
-- AURA AI Core 0.4: DeepSeek-first action planning through OpenRouter, validated allow-listed actions, compact bounded memory, multilingual dialogue history and spoken replies.
+- AURA AI Core: local intent recognition, dialogue branches, compact memory and spoken replies without LLMs.
 - Local Azerbaijani Silero voice pack (`aze_gamat`) with pinned checksum, one-time download and Android TTS fallback. The current arm64 debug APK includes the legacy full TorchScript runtime and is therefore roughly 100 MB; the voice model adds about 87.4 MiB in private app storage after first AZ reply.
 
 The source review and the architecture derived from NewPipe, InnerTune, ViMusic and Harmony Music are recorded in [`docs/YOUTUBE_ARCHITECTURE_RESEARCH.md`](docs/YOUTUBE_ARCHITECTURE_RESEARCH.md).
 
-The product direction, priorities and explicit non-goals for AURA 2.0 are recorded in [`docs/AURA_V2_DIRECTION.md`](docs/AURA_V2_DIRECTION.md).
-
 The visual tokens and interaction principles are recorded in [`docs/AURA_DESIGN_SYSTEM.md`](docs/AURA_DESIGN_SYSTEM.md).
-
-The assistant seam, memory limits and action-safety rules are recorded in [`docs/AURA_AI_ARCHITECTURE.md`](docs/AURA_AI_ARCHITECTURE.md).
 
 ## Start on a clean computer
 

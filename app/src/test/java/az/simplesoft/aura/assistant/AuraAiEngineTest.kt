@@ -8,59 +8,40 @@ import org.junit.Test
 class AuraAiEngineTest {
 
     @Test
-    fun `configured AI agent decides every utterance before local rules`() = runBlocking {
-        val remote = RecordingRemoteAdapter(
-            reply = AssistantReply(
-                intent = MusicIntent.Unknown,
-                text = "Что именно поставить?",
-                source = AssistantSource.DEEPSEEK
-            )
-        )
-        val engine = engine(remote)
+    fun `local conversation is answered without a network adapter`() = runBlocking {
+        val engine = engine()
 
-        val result = engine.respond("Поставь пожалуйста", AuraAiContext(hourOfDay = 12))
+        val result = engine.respond("Какой сегодня день?", AuraAiContext(hourOfDay = 12))
 
-        assertTrue(remote.called)
         assertEquals(MusicIntent.Unknown, result.intent)
-        assertEquals(AssistantSource.DEEPSEEK, result.source)
+        assertEquals(AssistantSource.LOCAL, result.source)
+        assertTrue(result.text.isNotBlank())
     }
 
     @Test
-    fun `local commands are only a fallback when remote agent fails`() = runBlocking {
-        val remote = RecordingRemoteAdapter(failure = IllegalStateException("offline"))
-        val engine = engine(remote)
+    fun `exact player command does not wait for the agent`() = runBlocking {
+        val engine = engine()
 
         val result = engine.respond("пауза", AuraAiContext(hourOfDay = 12))
 
-        assertTrue(remote.called)
         assertEquals(MusicIntent.Pause, result.intent)
-        assertEquals(AssistantSource.FALLBACK, result.source)
+        assertEquals(AssistantSource.LOCAL, result.source)
     }
 
-    private fun engine(remote: RemoteAssistantAdapter) = AuraAiEngine(
+    @Test
+    fun `companion remembers a name locally`() = runBlocking {
+        val engine = engine()
+
+        engine.respond("Меня зовут Лейла", AuraAiContext(hourOfDay = 12))
+        val result = engine.respond("Что ты помнишь?", AuraAiContext(hourOfDay = 12))
+
+        assertTrue(result.text.contains("Лейла"))
+    }
+
+    private fun engine() = AuraAiEngine(
         local = LocalIntentEngine(),
-        remote = remote,
         memory = CompactAssistantMemory(TestMemoryPersistence())
     )
-}
-
-private class RecordingRemoteAdapter(
-    private val reply: AssistantReply? = null,
-    private val failure: Throwable? = null
-) : RemoteAssistantAdapter {
-    var called = false
-    override val isAvailable = true
-
-    override suspend fun reason(
-        input: String,
-        context: AuraAiContext,
-        memory: AssistantMemorySnapshot,
-        language: AssistantLanguage
-    ): AssistantReply {
-        called = true
-        failure?.let { throw it }
-        return requireNotNull(reply)
-    }
 }
 
 private class TestMemoryPersistence : AssistantMemoryPersistence {

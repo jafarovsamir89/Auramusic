@@ -137,3 +137,43 @@ data class CachedPlayableSourceEntity(
 
 @Entity(tableName = "user_preferences", primaryKeys = ["key"])
 data class UserPreferenceEntity(val key: String, val value: String, val updatedAt: Long)
+
+/** A dialogue branch, stored as data so the local companion can grow without code changes. */
+@Entity(tableName = "assistant_dialogue_nodes", indices = [Index("topic"), Index("language")])
+data class AssistantDialogueNodeEntity(
+    @PrimaryKey val id: String,
+    val topic: String,
+    val language: String,
+    val nextNodeId: String?,
+    val priority: Int
+)
+
+@Entity(tableName = "assistant_dialogue_variants", indices = [Index("nodeId"), Index("language")])
+data class AssistantDialogueVariantEntity(
+    @PrimaryKey val id: String,
+    val nodeId: String,
+    val language: String,
+    val tone: String,
+    val text: String,
+    val weight: Int,
+    val cooldownKey: String?
+)
+
+@Entity(tableName = "assistant_intent_patterns", indices = [Index("intent"), Index("language")])
+data class AssistantIntentPatternEntity(
+    @PrimaryKey val id: String,
+    val intent: String,
+    val language: String,
+    val pattern: String,
+    val emotion: String?,
+    val priority: Int
+)
+
+@Entity(tableName = "assistant_conversation_state")
+data class AssistantConversationStateEntity(
+    @PrimaryKey val id: String = "active",
+    val nodeId: String?,
+    val topic: String?,
+    val emotion: String?,
+    val updatedAt: Long
+)

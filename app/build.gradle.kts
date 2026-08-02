@@ -1,5 +1,3 @@
-import java.util.Properties
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -7,18 +5,6 @@ plugins {
     id("com.google.devtools.ksp")
     id("androidx.room")
 }
-
-val auraLocalProperties = Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.exists()) file.inputStream().use { load(it) }
-}
-
-fun auraConfig(name: String, fallback: String = ""): String =
-    providers.environmentVariable(name).orNull?.takeIf(String::isNotBlank)
-        ?: auraLocalProperties.getProperty(name)?.takeIf(String::isNotBlank)
-        ?: fallback
-
-fun String.asBuildConfigString(): String = "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 room {
     schemaDirectory("$projectDir/schemas")
@@ -40,17 +26,25 @@ android {
         versionCode = 3
         versionName = "0.3.0"
         ndk.abiFilters += "arm64-v8a"
-        buildConfigField("String", "OPENROUTER_API_KEY", auraConfig("OPENROUTER_API_KEY").asBuildConfigString())
-        buildConfigField(
-            "String",
-            "OPENROUTER_MODEL",
-            auraConfig("OPENROUTER_MODEL", "~deepseek/deepseek-v4-flash-latest").asBuildConfigString()
-        )
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-std=c++17")
+            }
+        }
     }
 
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    ndkVersion = "27.3.13750724"
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     packaging {

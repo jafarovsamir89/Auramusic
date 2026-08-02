@@ -18,9 +18,12 @@ import java.util.Locale
  */
 class OfflineSpeechRecognizer(
     context: Context,
-    private val onText: (String) -> Unit,
-    private val onState: (Boolean) -> Unit
+    private val onPartialText: (String) -> Unit = {},
+    private val onCommand: (String) -> Unit,
+    private val onState: (Boolean) -> Unit,
+    private val onTerminal: () -> Unit = {}
 ) {
+    private val commandGate = VoiceCommandGate()
     private val recognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
         setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) = onState(true)
@@ -28,22 +31,27 @@ class OfflineSpeechRecognizer(
             override fun onRmsChanged(rmsdB: Float) = Unit
             override fun onBufferReceived(buffer: ByteArray?) = Unit
             override fun onEndOfSpeech() = onState(false)
-            override fun onError(error: Int) = onState(false)
+            override fun onError(error: Int) {
+                onState(false)
+                onTerminal()
+            }
             override fun onPartialResults(partialResults: Bundle?) {
                 partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()?.let(onText)
+                    ?.firstOrNull()?.let(onPartialText)
             }
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
             override fun onResults(results: Bundle?) {
                 onState(false)
                 results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()?.let(onText)
+                    ?.firstOrNull()?.let(commandGate::onFinal)?.let(onCommand)
+                onTerminal()
             }
             override fun onLanguageDetection(results: Bundle) = Unit
         })
     }
 
     fun start() {
+        commandGate.reset()
         recognizer.startListening(
             Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(

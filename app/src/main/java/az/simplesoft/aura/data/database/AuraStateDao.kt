@@ -33,6 +33,18 @@ interface AuraStateDao {
     suspend fun insertRecommendationEvent(value: RecommendationEventEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertDialogueNodes(values: List<AssistantDialogueNodeEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertDialogueVariants(values: List<AssistantDialogueVariantEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertIntentPatterns(values: List<AssistantIntentPatternEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertConversationState(value: AssistantConversationStateEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertPlaylist(value: PlaylistEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -67,6 +79,12 @@ interface AuraStateDao {
 
     @Query("SELECT * FROM queues WHERE id = :queueId LIMIT 1")
     suspend fun loadQueue(queueId: String): QueueEntity?
+
+    @Query("SELECT * FROM assistant_dialogue_variants WHERE nodeId = :nodeId AND language = :language ORDER BY weight DESC")
+    suspend fun dialogueVariants(nodeId: String, language: String): List<AssistantDialogueVariantEntity>
+
+    @Query("SELECT * FROM assistant_conversation_state WHERE id = 'active' LIMIT 1")
+    suspend fun conversationState(): AssistantConversationStateEntity?
 
     @Query("SELECT * FROM queue_items WHERE queueId = :queueId ORDER BY position")
     suspend fun loadQueueItems(queueId: String): List<QueueItemEntity>

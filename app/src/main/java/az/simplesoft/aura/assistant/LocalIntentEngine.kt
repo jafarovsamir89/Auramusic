@@ -2,7 +2,7 @@ package az.simplesoft.aura.assistant
 
 /**
  * Fast, private first-pass understanding. Only explicit music and device commands become actions.
- * Ambiguous phrases are deliberately returned as NEEDS_REASONING and never become a search.
+ * Ambiguous phrases are deliberately returned as local conversation and never become a search.
  */
 class LocalIntentEngine {
 
@@ -27,7 +27,7 @@ class LocalIntentEngine {
                 "One moment, let me think…"
             ),
             language = language,
-            route = AssistantRoute.NEEDS_REASONING,
+            route = AssistantRoute.LOCAL_CONVERSATION,
             memoryInsights = extractMemoryInsights(original, language)
         )
     }
@@ -152,6 +152,7 @@ class LocalIntentEngine {
         val decade = Regex("(19|20)\\d0").find(text)?.value?.toIntOrNull()
         val cleaned = text
             .replace(Regex("\\b(включи|поставь|найди|сыграй|музыку|песни|песню|трек|треки|play|put|on|find|song|music|track|çal|qoş|tap|mahnı|musiqi)\\b"), " ")
+            .replace(Regex("\\b(пожалуйста|пожалста|please|zəhmət\\s+olmasa)\\b"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
         val query = cleaned.ifBlank { mood?.title ?: phrase(language, "музыка", "musiqi", "music") }

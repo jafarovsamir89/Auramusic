@@ -3,7 +3,6 @@ package az.simplesoft.aura.ui
 import android.app.Application
 import android.content.Context
 import android.media.AudioManager
-import az.simplesoft.aura.BuildConfig
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.content.edit
@@ -14,11 +13,11 @@ import az.simplesoft.aura.assistant.AssistantSource
 import az.simplesoft.aura.assistant.AuraAiContext
 import az.simplesoft.aura.assistant.AuraAiEngine
 import az.simplesoft.aura.assistant.AuraSpeechSynthesizer
+import az.simplesoft.aura.assistant.AuraWakeWordService
 import az.simplesoft.aura.assistant.CompactAssistantMemory
 import az.simplesoft.aura.assistant.LocalIntentEngine
 import az.simplesoft.aura.assistant.MusicIntent
 import az.simplesoft.aura.assistant.Mood
-import az.simplesoft.aura.assistant.OpenRouterAssistantAdapter
 import az.simplesoft.aura.assistant.RoomAssistantMemoryPersistence
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.LocalMusicProvider
@@ -102,8 +101,9 @@ data class AuraUiState(
     val assistantMessages: List<AssistantMessage> = emptyList(),
     val isAssistantThinking: Boolean = false,
     val assistantSource: AssistantSource = AssistantSource.LOCAL,
-    val isCloudAiConfigured: Boolean = BuildConfig.OPENROUTER_API_KEY.isNotBlank(),
+    val isOfflineOnly: Boolean = true,
     val isListening: Boolean = false,
+    val wakeWordEnabled: Boolean = false,
     val isLoading: Boolean = false,
     val isBuffering: Boolean = false,
     val isPlaying: Boolean = false,
@@ -144,10 +144,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val assistantMemory = CompactAssistantMemory(RoomAssistantMemoryPersistence(stateRepository))
     private val auraAi = AuraAiEngine(
         local = intentEngine,
-        remote = OpenRouterAssistantAdapter(
-            apiKey = BuildConfig.OPENROUTER_API_KEY,
-            model = BuildConfig.OPENROUTER_MODEL
-        ),
         memory = assistantMemory
     )
     private val speech = AuraSpeechSynthesizer(application)
@@ -190,9 +186,14 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val initialLiked = preferences.getStringSet("liked", emptySet()).orEmpty().toSet()
     private val initialHistory = preferences.getString("history", "")
         .orEmpty().split('|').filter(String::isNotBlank)
+    private val initialWakeWordEnabled = preferences.getBoolean("wake_word_enabled", false)
 
     private val _state = MutableStateFlow(
-        AuraUiState(likedIds = initialLiked, historyIds = initialHistory)
+        AuraUiState(
+            likedIds = initialLiked,
+            historyIds = initialHistory,
+            wakeWordEnabled = initialWakeWordEnabled
+        )
     )
     val state = _state.asStateFlow()
 
@@ -360,6 +361,36 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun setListening(value: Boolean) = _state.update { it.copy(isListening = value) }
     fun setQuery(value: String) = _state.update { it.copy(query = value) }
 
+    /** Must be invoked while the activity is visible: Android blocks background microphone starts. */
+    fun setWakeWordEnabled(enabled: Boolean) {
+        runCatching {
+            if (enabled) AuraWakeWordService.start(getApplication())
+            else AuraWakeWordService.stop(getApplication())
+        }.onSuccess {
+            preferences.edit { putBoolean("wake_word_enabled", enabled) }
+            _state.update { it.copy(wakeWordEnabled = enabled) }
+        }.onFailure {
+            _state.update { current ->
+                current.copy(
+                    assistantText = "Не удалось включить голосовую активацию. Проверь разрешение на микрофон."
+                )
+            }
+        }
+    }
+
+    fun resumeWakeWordServiceIfNeeded() {
+        if (!state.value.wakeWordEnabled) return
+        runCatching { AuraWakeWordService.start(getApplication()) }
+            .onFailure {
+                _state.update { current ->
+                    current.copy(
+                        wakeWordEnabled = false,
+                        assistantText = "Голосовая активация выключена: разреши доступ к микрофону."
+                    )
+                }
+            }
+    }
+
     fun submit(text: String = state.value.query) = submitAssistant(text, speakResponse = false)
 
     fun submitVoice(text: String) = submitAssistant(text, speakResponse = true)
@@ -369,6 +400,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         text,
         az.simplesoft.aura.assistant.AssistantLanguage.AZERBAIJANI
     )
+
+    fun previewVoice(text: String, language: az.simplesoft.aura.assistant.AssistantLanguage) = speech.speak(text, language)
 
     fun search(text: String = state.value.query) {
         val query = text.trim()
