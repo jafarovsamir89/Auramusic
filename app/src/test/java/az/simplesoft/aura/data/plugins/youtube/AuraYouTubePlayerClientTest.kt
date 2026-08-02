@@ -1,13 +1,49 @@
 package az.simplesoft.aura.data.plugins.youtube
 
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
 import org.junit.Test
+import org.json.JSONObject
 
 class AuraYouTubePlayerClientTest {
+    @Test
+    fun visionOsUsesVisitorSessionAndBindsCpnToRequestAndStream() {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"responseContext":{"visitorData":"visitor-session"}}"""
+                )
+            )
+            server.enqueue(MockResponse().setBody(playerResponse(VIDEO_ID)))
+            val client = AuraYouTubePlayerClient(
+                httpClient = okhttp3.OkHttpClient(),
+                endpoint = server.url("/player").toString(),
+                visitorEndpoint = server.url("/visitor_id").toString(),
+                profiles = listOf(AuraYouTubePlayerClient.VISIONOS),
+                nonceFactory = { "0123456789ABCDEF" }
+            )
+
+            val result = client.player(VIDEO_ID)
+
+            val visitorRequest = server.takeRequest()
+            val playerRequest = server.takeRequest()
+            val playerJson = JSONObject(playerRequest.body.readUtf8())
+            assertEquals("/visitor_id", visitorRequest.path)
+            assertEquals(
+                "visitor-session",
+                playerJson.getJSONObject("context")
+                    .getJSONObject("client")
+                    .getString("visitorData")
+            )
+            assertEquals("0123456789ABCDEF", playerJson.getString("cpn"))
+            assertEquals("0123456789ABCDEF", result.formats.first().url.toHttpUrl().queryParameter("cpn"))
+        }
+    }
+
     @Test
     fun parsesDirectAudioFormatsAndPreservesClientUserAgent() {
         MockWebServer().use { server ->

@@ -2,6 +2,7 @@ package az.simplesoft.aura.data.plugins.youtube
 
 import android.net.Uri
 import java.io.IOException
+import java.security.SecureRandom
 import java.util.LinkedHashMap
 import kotlin.math.min
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -9,6 +10,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 
 internal data class YouTubePlaybackStream(
@@ -25,13 +27,16 @@ internal data class YouTubeClientProfile(
     val name: String,
     val version: String,
     val userAgent: String,
-    val context: Map<String, Any>
+    val context: Map<String, Any>,
+    val requiresVisitorData: Boolean = false
 ) {
-    fun clientJson(language: String, country: String): JSONObject = JSONObject()
+    fun clientJson(language: String, country: String, visitorData: String? = null): JSONObject = JSONObject()
         .put("clientName", name)
         .put("clientVersion", version)
         .put("hl", language)
         .put("gl", country)
+        .put("utcOffsetMinutes", 0)
+        .also { json -> if (!visitorData.isNullOrBlank()) json.put("visitorData", visitorData) }
         .also { json -> context.forEach(json::put) }
 }
 
@@ -98,19 +103,25 @@ internal data class YouTubeRetryPolicy(
 internal class AuraYouTubePlayerClient(
     private val httpClient: OkHttpClient,
     private val endpoint: String = YouTubeSelectors.PLAYER_URL,
+    private val visitorEndpoint: String = YouTubeSelectors.VISITOR_ID_URL,
     private val profiles: List<YouTubeClientProfile> = DEFAULT_PROFILES,
     private val language: String = "en",
     private val country: String = "US",
     private val retryPolicy: YouTubeRetryPolicy = YouTubeRetryPolicy(),
-    private val sleeper: (Long) -> Unit = Thread::sleep
+    private val sleeper: (Long) -> Unit = Thread::sleep,
+    private val nonceFactory: () -> String = ::generateContentPlaybackNonce,
+    private val now: () -> Long = System::currentTimeMillis
 ) {
+    @Volatile
+    private var visitorSession: VisitorSession? = null
+
     @Throws(IOException::class)
     fun player(videoId: String): YouTubePlayerResult {
         val failures = mutableListOf<String>()
         var lastTypedFailure: YouTubePlaybackException? = null
         for (profile in profiles) {
             try {
-                val result = request(videoId, profile)
+                val result = requestWithFreshVisitor(videoId, profile)
                 if (result.formats.isNotEmpty()) return result
                 failures += "${profile.name}: no direct audio formats"
             } catch (error: IOException) {
@@ -121,10 +132,24 @@ internal class AuraYouTubePlayerClient(
         throw lastTypedFailure ?: IOException("YouTube clients failed: ${failures.joinToString()}")
     }
 
+    private fun requestWithFreshVisitor(
+        videoId: String,
+        profile: YouTubeClientProfile
+    ): YouTubePlayerResult = try {
+        request(videoId, profile)
+    } catch (error: YouTubePlaybackException.LoginRequired) {
+        if (!profile.requiresVisitorData) throw error
+        visitorSession = null
+        request(videoId, profile)
+    }
+
     private fun request(videoId: String, profile: YouTubeClientProfile): YouTubePlayerResult {
+        val cpn = nonceFactory()
+        val visitorData = if (profile.requiresVisitorData) visitorData(profile) else null
         val payload = JSONObject()
-            .put("context", JSONObject().put("client", profile.clientJson(language, country)))
+            .put("context", requestContext(profile, visitorData))
             .put("videoId", videoId)
+            .put("cpn", cpn)
             .put("contentCheckOk", true)
             .put("racyCheckOk", true)
             .put(
@@ -137,6 +162,7 @@ internal class AuraYouTubePlayerClient(
         val request = Request.Builder()
             .url(endpoint)
             .header("User-Agent", profile.userAgent)
+            .header("X-Goog-Api-Format-Version", "2")
             .header("Content-Type", "application/json")
             .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
             .build()
@@ -170,7 +196,7 @@ internal class AuraYouTubePlayerClient(
                         itag = item.optInt("itag", -1),
                         mimeType = mimeType,
                         bitrate = item.optInt("bitrate", 0),
-                        url = parsed.toString()
+                        url = parsed.newBuilder().addQueryParameter("cpn", cpn).build().toString()
                     )
                 )
             }
@@ -181,6 +207,46 @@ internal class AuraYouTubePlayerClient(
             expiresInSeconds = streamingData.optLong("expiresInSeconds", 3600L),
             formats = formats
         )
+    }
+
+    private fun requestContext(profile: YouTubeClientProfile, visitorData: String?): JSONObject =
+        JSONObject()
+            .put("client", profile.clientJson(language, country, visitorData))
+            .put(
+                "request",
+                JSONObject()
+                    .put("internalExperimentFlags", JSONArray())
+                    .put("useSsl", true)
+            )
+            .put("user", JSONObject().put("lockedSafetyMode", false))
+
+    private fun visitorData(profile: YouTubeClientProfile): String {
+        visitorSession?.takeIf { it.expiresAtEpochMs > now() }?.let { return it.value }
+        synchronized(this) {
+            visitorSession?.takeIf { it.expiresAtEpochMs > now() }?.let { return it.value }
+            val request = Request.Builder()
+                .url(visitorEndpoint)
+                .header("User-Agent", profile.userAgent)
+                .header("X-Goog-Api-Format-Version", "2")
+                .header("Content-Type", "application/json")
+                .post(
+                    JSONObject()
+                        .put("context", requestContext(profile, null))
+                        .toString()
+                        .toRequestBody(JSON_MEDIA_TYPE)
+                )
+                .build()
+            val value = executeWithRetry(request)
+                .optJSONObject("responseContext")
+                ?.optString("visitorData")
+                .orEmpty()
+            if (value.isBlank()) {
+                throw YouTubePlaybackException.InvalidResponse("YouTube returned no visitorData")
+            }
+            return value.also {
+                visitorSession = VisitorSession(it, now() + VISITOR_SESSION_TTL_MS)
+            }
+        }
     }
 
     private fun executeWithRetry(request: Request): JSONObject {
@@ -286,8 +352,34 @@ internal class AuraYouTubePlayerClient(
                 "osVersion" to "13"
             )
         )
-        private val DEFAULT_PROFILES = listOf(ANDROID_VR, ANDROID)
+        val VISIONOS = YouTubeClientProfile(
+            name = "VISIONOS",
+            version = "1.02",
+            userAgent = "com.google.visionos.youtube/1.02" +
+                "(RealityDevice14,1; U; CPU visionOS 25_6_0 like Mac OS X; US)",
+            context = mapOf(
+                "clientScreen" to "WATCH",
+                "platform" to "MOBILE",
+                "deviceMake" to "Apple",
+                "deviceModel" to "RealityDevice14,1",
+                "osName" to "visionOS",
+                "osVersion" to "25.6.0.23O471"
+            ),
+            requiresVisitorData = true
+        )
+        private val DEFAULT_PROFILES = listOf(VISIONOS, ANDROID_VR, ANDROID)
+        private const val VISITOR_SESSION_TTL_MS = 6 * 60 * 60_000L
+
+        private val NONCE_ALPHABET =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".toCharArray()
+        private val SECURE_RANDOM = SecureRandom()
+
+        private fun generateContentPlaybackNonce(): String = CharArray(16) {
+            NONCE_ALPHABET[SECURE_RANDOM.nextInt(NONCE_ALPHABET.size)]
+        }.concatToString()
     }
+
+    private data class VisitorSession(val value: String, val expiresAtEpochMs: Long)
 }
 
 internal class AuraYouTubePlaybackResolver(
