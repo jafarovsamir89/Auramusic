@@ -29,6 +29,9 @@ interface AuraStateDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertPreference(value: UserPreferenceEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRecommendationEvent(value: RecommendationEventEntity)
+
     @Query("DELETE FROM queue_items WHERE queueId = :queueId")
     suspend fun deleteQueueItems(queueId: String)
 
@@ -58,6 +61,9 @@ interface AuraStateDao {
 
     @Query("SELECT value FROM user_preferences WHERE `key` = :key LIMIT 1")
     suspend fun preference(key: String): String?
+
+    @Query("SELECT * FROM recommendation_events ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun loadRecommendationEvents(limit: Int = 500): List<RecommendationEventEntity>
 
     @Transaction
     suspend fun importLegacy(

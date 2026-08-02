@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.core.content.edit
 import az.simplesoft.aura.assistant.LocalIntentEngine
 import az.simplesoft.aura.assistant.MusicIntent
+import az.simplesoft.aura.assistant.Mood
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.LocalMusicProvider
 import az.simplesoft.aura.data.PlaybackType
@@ -15,6 +16,7 @@ import az.simplesoft.aura.data.RadioBrowserProvider
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.database.AuraPlaybackSnapshot
 import az.simplesoft.aura.data.database.AuraStateRepository
+import az.simplesoft.aura.data.database.RecommendationEventType
 import az.simplesoft.aura.data.plugins.core.PluginFailureReason as CoreFailureReason
 import az.simplesoft.aura.data.plugins.core.PluginResult
 import az.simplesoft.aura.data.plugins.core.ProviderManager
@@ -29,8 +31,9 @@ import az.simplesoft.aura.data.providers.TrackCandidate
 import az.simplesoft.aura.data.search.CandidateRankerV2
 import az.simplesoft.aura.data.search.TrackIdentityResolver
 import az.simplesoft.aura.data.search.UnifiedTrackSession
-import az.simplesoft.aura.domain.music.EmptyRecommendationEngine
 import az.simplesoft.aura.domain.music.MusicBrain
+import az.simplesoft.aura.domain.music.PersonalRecommendationEngine
+import az.simplesoft.aura.domain.music.RecommendationContext
 import az.simplesoft.aura.domain.music.SearchOutcome
 import az.simplesoft.aura.playback.PlaybackConnection
 import az.simplesoft.aura.playback.PlaybackConnectionCoordinator
@@ -41,6 +44,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
+import java.util.Calendar
 import kotlin.math.abs
 
 enum class AuraDestination { HOME, SEARCH, LIBRARY, ASSISTANT, DIAGNOSTICS }
@@ -68,6 +72,7 @@ data class AuraUiState(
     val query: String = "",
     val recentSearches: List<String> = emptyList(),
     val searchResults: List<Track> = emptyList(),
+    val personalMix: List<Track> = emptyList(),
     val assistantText: String = "Назови песню, которую хочешь услышать",
     val isListening: Boolean = false,
     val isLoading: Boolean = false,
@@ -80,18 +85,23 @@ data class AuraUiState(
     val isQueueOpen: Boolean = false,
     val isShuffleEnabled: Boolean = false,
     val isRepeatEnabled: Boolean = false,
+    val isRecommendationLoading: Boolean = false,
+    val autoContinueEnabled: Boolean = true,
     val searchPhase: SearchPhase = SearchPhase.IDLE,
     val diagnostics: ProviderDiagnostics = ProviderDiagnostics(),
     val queue: List<Track> = DemoCatalog.tracks,
+    val memoryTracks: List<Track> = emptyList(),
     val localTracks: List<Track> = emptyList(),
     val currentIndex: Int = 0,
     val likedIds: Set<String> = emptySet(),
-    val historyIds: List<String> = emptyList()
+    val historyIds: List<String> = emptyList(),
+    val skippedTrackIds: Set<String> = emptySet()
 ) {
     val nowTrack: Track get() = queue.getOrElse(currentIndex) { DemoCatalog.tracks.first() }
     val liked: Boolean get() = nowTrack.id in likedIds
-    val favorites: List<Track> get() = queue.filter { it.id in likedIds }
-    val history: List<Track> get() = historyIds.mapNotNull { id -> queue.find { it.id == id } }
+    private val knownTracks: Map<String, Track> get() = (memoryTracks + queue).associateBy(Track::id)
+    val favorites: List<Track> get() = likedIds.mapNotNull(knownTracks::get)
+    val history: List<Track> get() = historyIds.mapNotNull(knownTracks::get)
 }
 
 class AuraViewModel(application: Application) : AndroidViewModel(application), PlaybackConnection.Listener {
@@ -109,12 +119,19 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             RadioMusicPlugin(radioProvider)
         )
     )
+    private val candidateRanker = CandidateRankerV2()
+    private val identityResolver = TrackIdentityResolver()
+    private val recommendationEngine = PersonalRecommendationEngine(
+        providerManager = providerManager,
+        candidateRanker = candidateRanker,
+        identityResolver = identityResolver
+    )
     private val playbackCoordinator = PlaybackConnectionCoordinator(playback) { state.value.queue }
     private val musicBrain = MusicBrain(
         providerManager = providerManager,
-        candidateRanker = CandidateRankerV2(),
-        identityResolver = TrackIdentityResolver(),
-        recommendationEngine = EmptyRecommendationEngine,
+        candidateRanker = candidateRanker,
+        identityResolver = identityResolver,
+        recommendationEngine = recommendationEngine,
         playbackCoordinator = playbackCoordinator
     )
     private val unifiedTrackSession = UnifiedTrackSession()
@@ -124,6 +141,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private var hasPreparedMedia = false
     private val persistenceQueue = Channel<AuraPlaybackSnapshot>(Channel.CONFLATED)
     private var positionPersistenceTick = 0
+    private var isExtendingQueue = false
+    private var stateRestored = false
+    private var pendingCommand: String? = null
 
     private val initialLiked = preferences.getStringSet("liked", emptySet()).orEmpty().toSet()
     private val initialHistory = preferences.getString("history", "")
@@ -143,9 +163,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     preferences.getInt("current_index", 0)
                 )
                 val restored = stateRepository.load()
+                val skippedTrackIds = stateRepository.skippedTrackIds()
                 _state.update { current ->
                     current.copy(
                         queue = restored.queue.ifEmpty { current.queue },
+                        memoryTracks = restored.memoryTracks,
                         currentIndex = if (restored.queue.isEmpty()) current.currentIndex else restored.currentIndex,
                         positionMs = restored.positionMs,
                         playbackDurationMs = restored.queue.getOrNull(restored.currentIndex)?.durationMs ?: 0L,
@@ -153,7 +175,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         isRepeatEnabled = restored.repeatEnabled,
                         likedIds = restored.likedIds,
                         historyIds = restored.historyIds,
-                        recentSearches = restored.recentSearches
+                        recentSearches = restored.recentSearches,
+                        skippedTrackIds = skippedTrackIds
                     )
                 }
                 playback.setShuffle(restored.shuffleEnabled)
@@ -173,6 +196,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     )
                 }
             }
+            stateRestored = true
+            pendingCommand?.also { pendingCommand = null }?.let(::submit)
         }
         viewModelScope.launch {
             for (snapshot in persistenceQueue) runCatching { stateRepository.save(snapshot) }
@@ -205,9 +230,18 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun submit(text: String = state.value.query) {
         val input = text.trim()
         if (input.isBlank()) return
+        if (!stateRestored) {
+            pendingCommand = input
+            _state.update { it.copy(assistantText = "Восстанавливаю твою музыку…") }
+            return
+        }
         val answer = intentEngine.understand(input)
         val requestedSearch = answer.intent as? MusicIntent.Search
         if (requestedSearch != null) {
+            requestedSearch.mood?.let {
+                playMoodMix(it)
+                return
+            }
             val query = requestedSearch.query
             _state.update { current ->
                 val recent = listOf(query) + current.recentSearches.filterNot { it.equals(query, true) }
@@ -226,18 +260,17 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
 
         if (answer.intent == MusicIntent.Similar) {
-            val current = state.value.nowTrack
-            val query = current.artist.takeUnless { current.id == DemoCatalog.tracks.first().id } ?: "популярная музыка"
-            _state.update {
-                it.copy(
-                    destination = AuraDestination.SEARCH,
-                    query = query,
-                    assistantText = "Ищу похожие треки…",
-                    isLoading = true,
-                    searchPhase = SearchPhase.SEARCHING
-                )
-            }
-            searchTracks(MusicSearchRequest(rawQuery = query, autoPlay = false))
+            playSimilarMix()
+            return
+        }
+
+        if (answer.intent == MusicIntent.MyMix) {
+            playMyMix()
+            return
+        }
+
+        if (answer.intent == MusicIntent.ContinueListening) {
+            continueListening()
             return
         }
 
@@ -260,6 +293,16 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             MusicIntent.Previous -> {
                 _state.update { it.copy(assistantText = answer.text) }
                 previous()
+                return
+            }
+            MusicIntent.Like -> {
+                if (!state.value.liked) toggleLike()
+                _state.update { it.copy(assistantText = answer.text) }
+                return
+            }
+            MusicIntent.Unlike -> {
+                if (state.value.liked) toggleLike()
+                _state.update { it.copy(assistantText = answer.text) }
                 return
             }
             else -> Unit
@@ -308,7 +351,10 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     librarySection = LibrarySection.HISTORY,
                     assistantText = answer.text
                 )
-                MusicIntent.Similar, is MusicIntent.Search -> current
+                MusicIntent.Similar,
+                MusicIntent.MyMix,
+                MusicIntent.ContinueListening,
+                is MusicIntent.Search -> current
                 MusicIntent.Unknown -> current.copy(assistantText = answer.text)
             }
         }
@@ -331,16 +377,29 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun seekTo(positionMs: Long) = playback.seekTo(positionMs)
 
     fun next() {
-        if (hasPreparedMedia) playback.next()
+        if (!hasPreparedMedia) return
+        val current = state.value
+        val earlySkip = current.positionMs in 1 until EARLY_SKIP_THRESHOLD_MS &&
+            (current.playbackDurationMs == 0L || current.positionMs * 4 < current.playbackDurationMs)
+        if (earlySkip) recordRecommendationEvent(current.nowTrack, RecommendationEventType.SKIP)
+        playback.next()
     }
 
     fun previous() {
         if (hasPreparedMedia) playback.previous()
     }
 
-    fun toggleLike() = _state.update { current ->
-        val liked = if (current.liked) current.likedIds - current.nowTrack.id else current.likedIds + current.nowTrack.id
-        current.copy(likedIds = liked).also(::persist)
+    fun toggleLike() {
+        val current = state.value
+        val event = if (current.liked) RecommendationEventType.UNLIKE else RecommendationEventType.LIKE
+        _state.update { value ->
+            val liked = if (value.liked) value.likedIds - value.nowTrack.id else value.likedIds + value.nowTrack.id
+            value.copy(
+                likedIds = liked,
+                memoryTracks = (listOf(value.nowTrack) + value.memoryTracks).distinctBy(Track::id)
+            ).also(::persist)
+        }
+        recordRecommendationEvent(current.nowTrack, event)
     }
 
     fun toggleShuffle() = _state.update {
@@ -380,6 +439,76 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     fun clearQueue() = _state.update { current ->
         current.copy(queue = listOf(current.nowTrack), currentIndex = 0).also(::persist)
+    }
+
+    fun playMyMix() = startRecommendation("Собираю твой микс…") { context ->
+        musicBrain.buildMyMix(context)
+    }
+
+    fun continueListening() = startRecommendation("Продолжаю твою музыку…") { context ->
+        musicBrain.buildContinueQueue(context)
+    }
+
+    fun playSimilarMix() {
+        val track = state.value.nowTrack
+        if (track.id == DemoCatalog.tracks.first().id) {
+            playMyMix()
+            return
+        }
+        startRecommendation("Подбираю похожее на ${track.title}…") { context ->
+            musicBrain.buildSimilarQueue(track, context)
+        }
+    }
+
+    fun playMoodMix(mood: Mood) = startRecommendation("Подбираю настроение…") { context ->
+        musicBrain.buildMoodQueue(mood, context)
+    }
+
+    private fun startRecommendation(
+        message: String,
+        loader: suspend (RecommendationContext) -> List<Track>
+    ) {
+        if (state.value.isRecommendationLoading) return
+        _state.update {
+            it.copy(
+                isRecommendationLoading = true,
+                isLoading = true,
+                assistantText = message,
+                searchPhase = SearchPhase.SEARCHING
+            )
+        }
+        viewModelScope.launch {
+            val queue = runCatching { loader(recommendationContext()) }.getOrElse { emptyList() }
+            if (queue.isEmpty()) {
+                _state.update {
+                    it.copy(
+                        isRecommendationLoading = false,
+                        isLoading = false,
+                        searchPhase = SearchPhase.ERROR,
+                        assistantText = "Пока мало истории для персонального микса. Включи несколько любимых песен."
+                    )
+                }
+                return@launch
+            }
+            val first = queue.first()
+            _state.update {
+                it.copy(
+                    queue = queue,
+                    personalMix = queue,
+                    currentIndex = 0,
+                    positionMs = 0L,
+                    playbackDurationMs = first.durationMs ?: 0L,
+                    isRecommendationLoading = false,
+                    isLoading = false,
+                    isBuffering = true,
+                    isPlayerExpanded = true,
+                    searchPhase = SearchPhase.BUFFERING,
+                    assistantText = "Готово. Начинаю с ${first.title}."
+                ).also(::persist)
+            }
+            hasPreparedMedia = true
+            playback.play(queue, first)
+        }
     }
 
     fun refreshLocalMusic() {
@@ -555,6 +684,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 queue = playbackQueue,
                 currentIndex = index,
                 historyIds = history.take(30),
+                memoryTracks = (listOf(track) + current.memoryTracks).distinctBy(Track::id).take(100),
                 isPlayerExpanded = true,
                 isBuffering = true,
                 searchPhase = SearchPhase.BUFFERING,
@@ -633,6 +763,65 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         isPlayable = true
     )
 
+    private fun recommendationContext(): RecommendationContext {
+        val current = state.value
+        val knownTracks = (current.memoryTracks + current.queue + current.personalMix + current.searchResults + current.localTracks)
+            .associateBy(Track::id)
+        val recent = current.historyIds.mapNotNull(knownTracks::get)
+            .ifEmpty { current.queue.asReversed() }
+        return RecommendationContext(
+            queue = current.queue,
+            currentIndex = current.currentIndex,
+            recentTracks = recent,
+            likedTrackIds = current.likedIds,
+            skippedTrackIds = current.skippedTrackIds,
+            hourOfDay = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
+            carMode = current.isCarMode
+        )
+    }
+
+    private fun recordRecommendationEvent(track: Track, type: RecommendationEventType) {
+        if (track.id == DemoCatalog.tracks.first().id) return
+        if (type == RecommendationEventType.SKIP) {
+            _state.update { it.copy(skippedTrackIds = it.skippedTrackIds + track.id) }
+        }
+        val context = recommendationContext()
+        viewModelScope.launch {
+            runCatching {
+                stateRepository.recordRecommendationEvent(
+                    track = track,
+                    type = type,
+                    context = "hour=${context.hourOfDay};car=${context.carMode}"
+                )
+            }
+        }
+    }
+
+    private fun maybeExtendQueue() {
+        val current = state.value
+        if (!current.autoContinueEnabled || isExtendingQueue || current.queue.size < 2) return
+        if (current.currentIndex < current.queue.lastIndex - AUTO_CONTINUE_THRESHOLD) return
+        isExtendingQueue = true
+        viewModelScope.launch {
+            try {
+                val existingIds = state.value.queue.mapTo(mutableSetOf(), Track::id)
+                val additions = musicBrain.extendQueue(recommendationContext())
+                    .filterNot { it.id in existingIds }
+                    .take(AUTO_CONTINUE_BATCH)
+                if (additions.isEmpty()) return@launch
+                _state.update { value ->
+                    value.copy(
+                        queue = value.queue + additions,
+                        assistantText = "Добавила похожие треки в продолжение очереди."
+                    ).also(::persist)
+                }
+                additions.forEach(playback::append)
+            } finally {
+                isExtendingQueue = false
+            }
+        }
+    }
+
     private fun CoreFailureReason.toProviderFailureReason(): ProviderFailureReason = when (this) {
         CoreFailureReason.NETWORK -> ProviderFailureReason.NETWORK
         CoreFailureReason.TIMEOUT -> ProviderFailureReason.TIMEOUT
@@ -668,10 +857,17 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 positionMs = 0L,
                 playbackDurationMs = current.queue[index].durationMs ?: 0L,
                 historyIds = (listOf(trackId) + current.historyIds.filterNot { it == trackId }).take(30),
+                memoryTracks = (listOf(current.queue[index]) + current.memoryTracks)
+                    .distinctBy(Track::id)
+                    .take(100),
                 searchPhase = SearchPhase.PLAYING,
                 assistantText = "Играет ${current.queue[index].title}."
             ).also(::persist)
         }
+        state.value.queue.find { it.id == trackId }?.let {
+            recordRecommendationEvent(it, RecommendationEventType.PLAY)
+        }
+        maybeExtendQueue()
     }
 
     override fun onPlaybackError(trackId: String?, message: String) {
@@ -742,5 +938,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     companion object {
         private const val AUTO_PLAY_CONFIDENCE = 0.72
+        private const val EARLY_SKIP_THRESHOLD_MS = 30_000L
+        private const val AUTO_CONTINUE_THRESHOLD = 2
+        private const val AUTO_CONTINUE_BATCH = 6
     }
 }

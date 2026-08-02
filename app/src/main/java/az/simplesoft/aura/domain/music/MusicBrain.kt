@@ -63,14 +63,46 @@ class MusicBrain(
             ?: PlaybackOutcome.Failure("No related tracks")
     }
 
-    suspend fun continueListening(): PlaybackOutcome {
-        val queue = recommendationEngine.continueListening()
-        val first = queue.firstOrNull() ?: return PlaybackOutcome.Failure("No listening history")
+    suspend fun myMix(context: RecommendationContext): PlaybackOutcome {
+        val queue = recommendationEngine.myMix(context)
+        return playRecommendation(queue, "No recommendations yet")
+    }
+
+    suspend fun buildMyMix(context: RecommendationContext): List<Track> =
+        recommendationEngine.myMix(context)
+
+    suspend fun buildContinueQueue(context: RecommendationContext): List<Track> =
+        recommendationEngine.continueListening(context)
+
+    suspend fun buildSimilarQueue(track: Track, context: RecommendationContext): List<Track> =
+        recommendationEngine.similarTo(track, context)
+
+    suspend fun continueListening(context: RecommendationContext): PlaybackOutcome {
+        val queue = recommendationEngine.continueListening(context)
+        return playRecommendation(queue, "No listening history")
+    }
+
+    suspend fun similarQueue(track: Track, context: RecommendationContext): PlaybackOutcome {
+        val queue = recommendationEngine.similarTo(track, context)
+        return playRecommendation(queue, "No related tracks")
+    }
+
+    suspend fun moodQueue(mood: Mood, context: RecommendationContext): PlaybackOutcome {
+        val queue = recommendationEngine.buildMoodQueue(mood, context)
+        return playRecommendation(queue, "No mood recommendations")
+    }
+
+    suspend fun extendQueue(context: RecommendationContext): List<Track> =
+        recommendationEngine.extendQueue(context)
+
+    private suspend fun playRecommendation(queue: List<Track>, emptyMessage: String): PlaybackOutcome {
+        val first = queue.firstOrNull() ?: return PlaybackOutcome.Failure(emptyMessage)
         playbackCoordinator.play(queue, first)
         return PlaybackOutcome.Started(first)
     }
 
-    suspend fun buildMoodQueue(mood: Mood): List<Track> = recommendationEngine.buildMoodQueue(mood)
+    suspend fun buildMoodQueue(mood: Mood, context: RecommendationContext): List<Track> =
+        recommendationEngine.buildMoodQueue(mood, context)
 
     suspend fun recoverPlayback(failedTrack: Track): PlaybackOutcome {
         val position = playbackCoordinator.currentPositionMs()

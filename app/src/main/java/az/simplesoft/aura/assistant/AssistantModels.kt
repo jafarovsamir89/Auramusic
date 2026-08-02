@@ -21,6 +21,8 @@ sealed interface MusicIntent {
     data object NowPlaying : MusicIntent
     data object OpenHistory : MusicIntent
     data object Similar : MusicIntent
+    data object MyMix : MusicIntent
+    data object ContinueListening : MusicIntent
     data object CarMode : MusicIntent
     data object Unknown : MusicIntent
 }

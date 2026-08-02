@@ -71,6 +71,26 @@ class AuraStateRepositoryTest {
         })
     }
 
+    @Test
+    fun latestRecommendationSignalControlsSkippedTracks() = runBlocking {
+        val dao = FakeAuraStateDao()
+        var clock = 3_000L
+        val repository = AuraStateRepository(dao) { clock++ }
+        val track = track(
+            id = "youtube:one",
+            sourceId = "youtube",
+            page = "https://www.youtube.com/watch?v=abcdefghijk",
+            type = PlaybackType.DIRECT_STREAM,
+            stream = "aura-youtube://video/abcdefghijk"
+        )
+
+        repository.recordRecommendationEvent(track, RecommendationEventType.SKIP)
+        assertEquals(setOf(track.id), repository.skippedTrackIds())
+
+        repository.recordRecommendationEvent(track, RecommendationEventType.LIKE)
+        assertTrue(repository.skippedTrackIds().isEmpty())
+    }
+
     private fun track(
         id: String,
         sourceId: String,
@@ -99,6 +119,7 @@ private class FakeAuraStateDao : AuraStateDao {
     val history = linkedMapOf<String, PlayHistoryEntity>()
     val searches = linkedMapOf<String, SearchHistoryEntity>()
     val preferences = linkedMapOf<String, UserPreferenceEntity>()
+    val recommendationEvents = linkedMapOf<String, RecommendationEventEntity>()
 
     override suspend fun upsertTracks(values: List<TrackEntity>) = values.forEach { tracks[it.id] = it }
     override suspend fun upsertQueue(value: QueueEntity) { queue = value }
@@ -107,6 +128,9 @@ private class FakeAuraStateDao : AuraStateDao {
     override suspend fun insertHistory(values: List<PlayHistoryEntity>) = values.forEach { history[it.id] = it }
     override suspend fun insertSearchHistory(values: List<SearchHistoryEntity>) = values.forEach { searches[it.normalizedQuery] = it }
     override suspend fun upsertPreference(value: UserPreferenceEntity) { preferences[value.key] = value }
+    override suspend fun insertRecommendationEvent(value: RecommendationEventEntity) {
+        recommendationEvents[value.id] = value
+    }
     override suspend fun deleteQueueItems(queueId: String) { queueItems.removeAll { it.queueId == queueId } }
     override suspend fun deleteFavorites() = favorites.clear()
     override suspend fun deleteHistory() = history.clear()
@@ -120,4 +144,6 @@ private class FakeAuraStateDao : AuraStateDao {
     override suspend fun loadSearchHistory(limit: Int): List<SearchHistoryEntity> =
         searches.values.sortedByDescending(SearchHistoryEntity::searchedAt).take(limit)
     override suspend fun preference(key: String): String? = preferences[key]?.value
+    override suspend fun loadRecommendationEvents(limit: Int): List<RecommendationEventEntity> =
+        recommendationEvents.values.sortedByDescending(RecommendationEventEntity::createdAt).take(limit)
 }

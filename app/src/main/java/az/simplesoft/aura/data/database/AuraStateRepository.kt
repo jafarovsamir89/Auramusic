@@ -3,6 +3,9 @@ package az.simplesoft.aura.data.database
 import android.content.Context
 import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.Track
+import java.util.UUID
+
+enum class RecommendationEventType { PLAY, SKIP, LIKE, UNLIKE }
 
 data class AuraPlaybackSnapshot(
     val queue: List<Track>,
@@ -12,7 +15,8 @@ data class AuraPlaybackSnapshot(
     val repeatEnabled: Boolean,
     val likedIds: Set<String>,
     val historyIds: List<String>,
-    val recentSearches: List<String>
+    val recentSearches: List<String>,
+    val memoryTracks: List<Track> = emptyList()
 )
 
 class AuraStateRepository(
@@ -36,8 +40,14 @@ class AuraStateRepository(
     suspend fun load(): AuraPlaybackSnapshot {
         val queue = dao.loadQueue(LAST_QUEUE_ID)
         val items = dao.loadQueueItems(LAST_QUEUE_ID)
+        val favoriteIds = dao.loadFavoriteIds()
+        val historyIds = dao.loadHistoryIds().distinct()
         val tracks = if (items.isEmpty()) emptyMap() else {
             dao.loadTracks(items.map(QueueItemEntity::trackId)).associateBy(TrackEntity::id)
+        }
+        val memoryIds = (favoriteIds + historyIds).distinct()
+        val memoryTracks = if (memoryIds.isEmpty()) emptyList() else {
+            dao.loadTracks(memoryIds).map(TrackEntity::toTrack)
         }
         val restoredQueue = items.mapNotNull { tracks[it.trackId]?.toTrack() }
         return AuraPlaybackSnapshot(
@@ -46,9 +56,10 @@ class AuraStateRepository(
             positionMs = queue?.currentPositionMs?.coerceAtLeast(0L) ?: 0L,
             shuffleEnabled = queue?.shuffleEnabled ?: false,
             repeatEnabled = queue?.repeatEnabled ?: false,
-            likedIds = dao.loadFavoriteIds().toSet(),
-            historyIds = dao.loadHistoryIds().distinct(),
-            recentSearches = dao.loadSearchHistory().map(SearchHistoryEntity::query)
+            likedIds = favoriteIds.toSet(),
+            historyIds = historyIds,
+            recentSearches = dao.loadSearchHistory().map(SearchHistoryEntity::query),
+            memoryTracks = memoryTracks
         )
     }
 
@@ -83,6 +94,35 @@ class AuraStateRepository(
                 SearchHistoryEntity(query.normalizedQuery(), query, timestamp - index)
             }
         )
+    }
+
+    suspend fun recordRecommendationEvent(
+        track: Track,
+        type: RecommendationEventType,
+        context: String? = null
+    ) {
+        if (track.id == "aura-placeholder") return
+        val timestamp = now()
+        dao.upsertTracks(listOf(track.toEntity(timestamp)))
+        dao.insertRecommendationEvent(
+            RecommendationEventEntity(
+                id = "${timestamp}:${UUID.randomUUID()}",
+                trackId = track.id,
+                eventType = type.name,
+                context = context,
+                createdAt = timestamp
+            )
+        )
+    }
+
+    suspend fun skippedTrackIds(): Set<String> {
+        val latestByTrack = dao.loadRecommendationEvents()
+            .filter { !it.trackId.isNullOrBlank() }
+            .distinctBy(RecommendationEventEntity::trackId)
+        return latestByTrack
+            .filter { it.eventType == RecommendationEventType.SKIP.name }
+            .mapNotNull(RecommendationEventEntity::trackId)
+            .toSet()
     }
 
     private fun String.normalizedQuery(): String = lowercase().trim().replace(Regex("\\s+"), " ")

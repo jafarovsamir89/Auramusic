@@ -11,6 +11,10 @@ class LocalIntentEngine {
         if (text.isBlank()) return reply(MusicIntent.Unknown, "Я тебя не расслышала.")
 
         when {
+            containsAny(text, "мой микс", "включи мой микс", "музыка для меня") ->
+                return reply(MusicIntent.MyMix, "Собираю твой микс.")
+            containsAny(text, "продолжить прослушивание", "продолжи слушать", "продолжи мою музыку") ->
+                return reply(MusicIntent.ContinueListening, "Продолжаю с того, что тебе нравится.")
             containsAny(text, "пауза", "останови", "стоп") ->
                 return reply(MusicIntent.Pause, "Ставлю на паузу.")
             containsAny(text, "продолжи", "играй дальше", "воспроизведи") ->

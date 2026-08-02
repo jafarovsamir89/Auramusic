@@ -226,6 +226,9 @@ private fun MainShell(state: AuraUiState, vm: AuraViewModel, onVoice: () -> Unit
                     onSubmit = vm::submit,
                     onVoice = onVoice,
                     onMood = { vm.submit(it) },
+                    onMyMix = vm::playMyMix,
+                    onContinue = vm::continueListening,
+                    onSimilar = vm::playSimilarMix,
                     onTrack = vm::play,
                     onLibrary = { vm.navigate(AuraDestination.LIBRARY) },
                     onCar = vm::toggleCarMode,
@@ -285,12 +288,15 @@ private fun HomeScreen(
     onSubmit: () -> Unit,
     onVoice: () -> Unit,
     onMood: (String) -> Unit,
+    onMyMix: () -> Unit,
+    onContinue: () -> Unit,
+    onSimilar: () -> Unit,
     onTrack: (Track) -> Unit,
     onLibrary: () -> Unit,
     onCar: () -> Unit,
     onDiagnostics: () -> Unit
 ) {
-    val recommendations = state.queue
+    val recommendations = state.personalMix.ifEmpty { state.queue }
         .filterNot { it.id == DemoCatalog.tracks.first().id }
         .take(4)
     LazyColumn(
@@ -317,10 +323,21 @@ private fun HomeScreen(
             SearchField(state.query, onQuery, onSubmit, onVoice, state.isListening)
             Spacer(Modifier.height(10.dp))
             Text(state.assistantText, color = SecondaryText, fontSize = 14.sp)
+            Spacer(Modifier.height(14.dp))
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                MoodChip("Мой микс", onMyMix)
+                MoodChip("Продолжить", onContinue)
+                if (state.nowTrack.id != DemoCatalog.tracks.first().id) {
+                    MoodChip("Похожее", onSimilar)
+                }
+            }
             Spacer(Modifier.height(34.dp))
             SectionHeader(
                 if (recommendations.isEmpty()) "Начни с песни" else "Для тебя",
-                if (recommendations.isEmpty()) "Попробуй готовый запрос" else "Из недавнего"
+                if (recommendations.isEmpty()) "Попробуй готовый запрос" else "Подобрано Music Brain"
             )
             Spacer(Modifier.height(16.dp))
         }
