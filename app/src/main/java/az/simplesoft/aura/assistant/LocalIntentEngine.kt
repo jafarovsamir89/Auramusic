@@ -10,6 +10,29 @@ class LocalIntentEngine {
         val text = raw.lowercase().trim()
         if (text.isBlank()) return reply(MusicIntent.Unknown, "Я тебя не расслышала.")
 
+        Regex("""(?:включи|запусти|воспроизведи)\s+плейлист\s+(.+)""").find(text)?.let { match ->
+            val name = match.groupValues[1].trim().replaceFirstChar { it.titlecase() }
+            return reply(MusicIntent.PlayPlaylist(name), "Включаю плейлист $name.")
+        }
+        Regex("""(?:перемешай|перемешать)\s+плейлист\s+(.+)""").find(text)?.let { match ->
+            val name = match.groupValues[1].trim().replaceFirstChar { it.titlecase() }
+            return reply(MusicIntent.PlayPlaylist(name, shuffled = true), "Перемешиваю плейлист $name.")
+        }
+        if (containsAny(text, "открой плейлисты", "покажи плейлисты", "мои плейлисты")) {
+            return reply(MusicIntent.OpenPlaylists, "Открываю твои плейлисты.")
+        }
+        if (containsAny(text, "сохрани очередь", "сохранить очередь")) {
+            val name = text.substringAfter("плейлист", "Сохранённая очередь").trim()
+                .ifBlank { "Сохранённая очередь" }
+                .replaceFirstChar { it.titlecase() }
+            return reply(MusicIntent.CreatePlaylist(name, includeQueue = true), "Сохраняю очередь в плейлист.")
+        }
+        Regex("""(?:создай|создать)\s+плейлист\s*(.*)""").find(text)?.let { match ->
+            val name = match.groupValues[1].trim().ifBlank { "Новый плейлист" }
+                .replaceFirstChar { it.titlecase() }
+            return reply(MusicIntent.CreatePlaylist(name, includeQueue = false), "Создаю плейлист $name.")
+        }
+
         when {
             containsAny(text, "мой микс", "включи мой микс", "музыка для меня") ->
                 return reply(MusicIntent.MyMix, "Собираю твой микс.")

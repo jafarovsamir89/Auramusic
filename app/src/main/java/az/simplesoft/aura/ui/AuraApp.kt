@@ -48,12 +48,16 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ClearAll
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DirectionsCar
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.Equalizer
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -66,6 +70,7 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -74,21 +79,27 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -116,6 +127,7 @@ import az.simplesoft.aura.BuildConfig
 import az.simplesoft.aura.assistant.OfflineSpeechRecognizer
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.Track
+import az.simplesoft.aura.data.database.AuraPlaylist
 import coil.compose.AsyncImage
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -160,6 +172,9 @@ fun AuraApp(
 
     BackHandler(state.isCarMode) { vm.toggleCarMode() }
     BackHandler(!state.isCarMode && state.isQueueOpen) { vm.closeQueue() }
+    BackHandler(
+        !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.selectedPlaylistId != null
+    ) { vm.closePlaylist() }
     BackHandler(
         !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.DIAGNOSTICS
     ) { vm.navigate(AuraDestination.HOME) }
@@ -245,7 +260,19 @@ private fun MainShell(state: AuraUiState, vm: AuraViewModel, onVoice: () -> Unit
                 AuraDestination.LIBRARY -> LibraryScreen(
                     state = state,
                     onSection = vm::setLibrarySection,
-                    onTrack = vm::play
+                    onTrack = vm::play,
+                    onOpenPlaylist = vm::openPlaylist,
+                    onClosePlaylist = vm::closePlaylist,
+                    onCreatePlaylist = vm::createPlaylist,
+                    onRenamePlaylist = vm::renamePlaylist,
+                    onDeletePlaylist = vm::deletePlaylist,
+                    onAddCurrent = vm::addCurrentToPlaylist,
+                    onAddQueue = vm::addQueueToPlaylist,
+                    onRemoveTrack = vm::removeFromPlaylist,
+                    onMoveTrack = vm::movePlaylistTrack,
+                    onShufflePlaylist = vm::shufflePlaylist,
+                    onPlayPlaylist = vm::playPlaylist,
+                    onPlayPlaylistFrom = vm::playPlaylistFrom
                 )
                 AuraDestination.ASSISTANT -> AssistantScreen(
                     state = state,
@@ -493,11 +520,107 @@ private fun SearchScreen(
 private fun LibraryScreen(
     state: AuraUiState,
     onSection: (LibrarySection) -> Unit,
-    onTrack: (Track) -> Unit
+    onTrack: (Track) -> Unit,
+    onOpenPlaylist: (String) -> Unit,
+    onClosePlaylist: () -> Unit,
+    onCreatePlaylist: (String, Boolean) -> Unit,
+    onRenamePlaylist: (String, String) -> Unit,
+    onDeletePlaylist: (String) -> Unit,
+    onAddCurrent: (String) -> Unit,
+    onAddQueue: (String) -> Unit,
+    onRemoveTrack: (String, String) -> Unit,
+    onMoveTrack: (String, Int, Int) -> Unit,
+    onShufflePlaylist: (String) -> Unit,
+    onPlayPlaylist: (AuraPlaylist, Boolean) -> Unit,
+    onPlayPlaylistFrom: (AuraPlaylist, Int) -> Unit
 ) {
+    var createDialog by rememberSaveable { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<AuraPlaylist?>(null) }
+    var deleteTarget by remember { mutableStateOf<AuraPlaylist?>(null) }
+    val selected = state.selectedPlaylist
+
+    if (createDialog) {
+        PlaylistNameDialog(
+            title = "Новый плейлист",
+            initialName = "",
+            confirmLabel = "Создать",
+            extraLabel = "Из очереди",
+            onDismiss = { createDialog = false },
+            onConfirm = { name ->
+                onCreatePlaylist(name, false)
+                createDialog = false
+            },
+            onExtra = { name ->
+                onCreatePlaylist(name, true)
+                createDialog = false
+            }
+        )
+    }
+    renameTarget?.let { playlist ->
+        PlaylistNameDialog(
+            title = "Переименовать",
+            initialName = playlist.name,
+            confirmLabel = "Сохранить",
+            onDismiss = { renameTarget = null },
+            onConfirm = { name ->
+                onRenamePlaylist(playlist.id, name)
+                renameTarget = null
+            }
+        )
+    }
+    deleteTarget?.let { playlist ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Удалить ${playlist.name}?") },
+            text = { Text("Треки останутся в истории и других плейлистах.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeletePlaylist(playlist.id)
+                    deleteTarget = null
+                }) { Text("Удалить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) { Text("Отмена") }
+            }
+        )
+    }
+
     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 20.dp).padding(top = 20.dp)) {
-        Text("Моя музыка", style = MaterialTheme.typography.headlineLarge)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (selected != null) {
+                IconButton(onClick = onClosePlaylist) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
+            }
+            Text(
+                selected?.name ?: "Моя музыка",
+                style = MaterialTheme.typography.headlineLarge,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (selected == null && state.librarySection == LibrarySection.PLAYLISTS) {
+                CircleIconButton(Icons.Rounded.Add, 44.dp) { createDialog = true }
+            }
+        }
         Spacer(Modifier.height(20.dp))
+
+        if (selected != null) {
+            PlaylistDetail(
+                playlist = selected,
+                likedIds = state.likedIds,
+                onTrack = { index -> onPlayPlaylistFrom(selected, index) },
+                onPlay = { onPlayPlaylist(selected, false) },
+                onShuffle = { onPlayPlaylist(selected, true) },
+                onAddCurrent = { onAddCurrent(selected.id) },
+                onAddQueue = { onAddQueue(selected.id) },
+                onRename = { renameTarget = selected },
+                onDelete = { deleteTarget = selected },
+                onRemove = { trackId -> onRemoveTrack(selected.id, trackId) },
+                onMove = { from, to -> onMoveTrack(selected.id, from, to) },
+                onShuffleOrder = { onShufflePlaylist(selected.id) }
+            )
+            return@Column
+        }
+
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             LibrarySection.entries.forEach { section ->
                 val title = when (section) {
@@ -517,7 +640,26 @@ private fun LibraryScreen(
             LibrarySection.PLAYLISTS -> emptyList()
         }
         if (state.librarySection == LibrarySection.PLAYLISTS) {
-            EmptyLibrary(Icons.AutoMirrored.Rounded.PlaylistPlay, "Сохранённых плейлистов пока нет", "Очередь можно будет сохранить здесь")
+            if (state.playlists.isEmpty()) {
+                EmptyLibrary(Icons.AutoMirrored.Rounded.PlaylistPlay, "Плейлистов пока нет", "Создай пустой или сохрани текущую очередь")
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = { createDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp)
+                ) { Text("Создать плейлист") }
+            } else {
+                LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 180.dp)) {
+                    items(state.playlists, key = AuraPlaylist::id) { playlist ->
+                        PlaylistCard(
+                            playlist = playlist,
+                            onOpen = { onOpenPlaylist(playlist.id) },
+                            onPlay = { onPlayPlaylist(playlist, false) }
+                        )
+                        Spacer(Modifier.height(10.dp))
+                    }
+                }
+            }
         } else if (tracks.isEmpty()) {
             EmptyLibrary(
                 when (state.librarySection) {
@@ -540,6 +682,117 @@ private fun LibraryScreen(
                     TrackRow(track, track.id in state.likedIds, { onTrack(track) })
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistNameDialog(
+    title: String,
+    initialName: String,
+    confirmLabel: String,
+    extraLabel: String? = null,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+    onExtra: ((String) -> Unit)? = null
+) {
+    var name by rememberSaveable(initialName) { mutableStateOf(initialName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.take(60) },
+                label = { Text("Название") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(name) }) { Text(confirmLabel) }
+        },
+        dismissButton = {
+            Row {
+                if (extraLabel != null && onExtra != null) {
+                    TextButton(onClick = { onExtra(name) }) { Text(extraLabel) }
+                }
+                TextButton(onClick = onDismiss) { Text("Отмена") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun PlaylistCard(playlist: AuraPlaylist, onOpen: () -> Unit, onPlay: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(ElevatedSurface)
+            .border(1.dp, Color.White.copy(.08f), RoundedCornerShape(22.dp))
+            .clickable(onClick = onOpen).padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(54.dp).background(Color.White.copy(.07f), RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) {
+            Icon(Icons.AutoMirrored.Rounded.PlaylistPlay, null, tint = AccentSilver)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(playlist.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${playlist.tracks.size} треков", color = SecondaryText, fontSize = 12.sp)
+        }
+        IconButton(onClick = onPlay, enabled = playlist.tracks.isNotEmpty()) {
+            Icon(Icons.Rounded.PlayArrow, "Включить")
+        }
+    }
+}
+
+@Composable
+private fun PlaylistDetail(
+    playlist: AuraPlaylist,
+    likedIds: Set<String>,
+    onTrack: (Int) -> Unit,
+    onPlay: () -> Unit,
+    onShuffle: () -> Unit,
+    onAddCurrent: () -> Unit,
+    onAddQueue: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    onRemove: (String) -> Unit,
+    onMove: (Int, Int) -> Unit,
+    onShuffleOrder: () -> Unit
+) {
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        PlayerAction(Icons.Rounded.PlayArrow, "Играть", onPlay)
+        PlayerAction(Icons.Rounded.Shuffle, "Вперемешку", onShuffle)
+        PlayerAction(Icons.Rounded.Add, "Текущий", onAddCurrent)
+        PlayerAction(Icons.Rounded.PlaylistAdd, "Очередь", onAddQueue)
+        PlayerAction(Icons.Rounded.DragHandle, "Смешать", onShuffleOrder)
+        PlayerAction(Icons.Rounded.Edit, "Название", onRename)
+        PlayerAction(Icons.Rounded.Delete, "Удалить", onDelete)
+    }
+    Spacer(Modifier.height(18.dp))
+    if (playlist.tracks.isEmpty()) {
+        EmptyLibrary(Icons.AutoMirrored.Rounded.PlaylistPlay, "Плейлист пуст", "Добавь текущий трек или всю очередь")
+        return
+    }
+    LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 180.dp)) {
+        itemsIndexed(playlist.tracks, key = { _, track -> track.id }) { index, track ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    IconButton(onClick = { onMove(index, index - 1) }, enabled = index > 0) {
+                        Icon(Icons.Rounded.ArrowUpward, "Выше", Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = { onMove(index, index + 1) }, enabled = index < playlist.tracks.lastIndex) {
+                        Icon(Icons.Rounded.ArrowDownward, "Ниже", Modifier.size(18.dp))
+                    }
+                }
+                Box(Modifier.weight(1f)) {
+                    TrackRow(track, track.id in likedIds, { onTrack(index) })
+                }
+                IconButton(onClick = { onRemove(track.id) }) {
+                    Icon(Icons.Rounded.Close, "Убрать")
+                }
+            }
+            HorizontalDivider(color = Color.White.copy(.05f))
         }
     }
 }

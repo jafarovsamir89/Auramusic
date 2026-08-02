@@ -15,6 +15,7 @@ import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.RadioBrowserProvider
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.database.AuraPlaybackSnapshot
+import az.simplesoft.aura.data.database.AuraPlaylist
 import az.simplesoft.aura.data.database.AuraStateRepository
 import az.simplesoft.aura.data.database.RecommendationEventType
 import az.simplesoft.aura.data.plugins.core.PluginFailureReason as CoreFailureReason
@@ -73,6 +74,8 @@ data class AuraUiState(
     val recentSearches: List<String> = emptyList(),
     val searchResults: List<Track> = emptyList(),
     val personalMix: List<Track> = emptyList(),
+    val playlists: List<AuraPlaylist> = emptyList(),
+    val selectedPlaylistId: String? = null,
     val assistantText: String = "Назови песню, которую хочешь услышать",
     val isListening: Boolean = false,
     val isLoading: Boolean = false,
@@ -102,6 +105,7 @@ data class AuraUiState(
     private val knownTracks: Map<String, Track> get() = (memoryTracks + queue).associateBy(Track::id)
     val favorites: List<Track> get() = likedIds.mapNotNull(knownTracks::get)
     val history: List<Track> get() = historyIds.mapNotNull(knownTracks::get)
+    val selectedPlaylist: AuraPlaylist? get() = playlists.firstOrNull { it.id == selectedPlaylistId }
 }
 
 class AuraViewModel(application: Application) : AndroidViewModel(application), PlaybackConnection.Listener {
@@ -164,6 +168,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 )
                 val restored = stateRepository.load()
                 val skippedTrackIds = stateRepository.skippedTrackIds()
+                val playlists = stateRepository.loadPlaylists()
                 _state.update { current ->
                     current.copy(
                         queue = restored.queue.ifEmpty { current.queue },
@@ -176,7 +181,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         likedIds = restored.likedIds,
                         historyIds = restored.historyIds,
                         recentSearches = restored.recentSearches,
-                        skippedTrackIds = skippedTrackIds
+                        skippedTrackIds = skippedTrackIds,
+                        playlists = playlists
                     )
                 }
                 playback.setShuffle(restored.shuffleEnabled)
@@ -236,6 +242,53 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             return
         }
         val answer = intentEngine.understand(input)
+        when (val intent = answer.intent) {
+            MusicIntent.OpenPlaylists -> {
+                _state.update {
+                    it.copy(
+                        destination = AuraDestination.LIBRARY,
+                        librarySection = LibrarySection.PLAYLISTS,
+                        selectedPlaylistId = null,
+                        assistantText = answer.text
+                    )
+                }
+                return
+            }
+            is MusicIntent.CreatePlaylist -> {
+                createPlaylist(intent.name, intent.includeQueue)
+                _state.update {
+                    it.copy(
+                        destination = AuraDestination.LIBRARY,
+                        librarySection = LibrarySection.PLAYLISTS,
+                        selectedPlaylistId = null,
+                        assistantText = answer.text
+                    )
+                }
+                return
+            }
+            is MusicIntent.PlayPlaylist -> {
+                val playlist = state.value.playlists.firstOrNull {
+                    it.name.equals(intent.name, ignoreCase = true)
+                } ?: state.value.playlists.firstOrNull {
+                    it.name.contains(intent.name, ignoreCase = true) ||
+                        intent.name.contains(it.name, ignoreCase = true)
+                }
+                if (playlist == null) {
+                    _state.update {
+                        it.copy(
+                            destination = AuraDestination.LIBRARY,
+                            librarySection = LibrarySection.PLAYLISTS,
+                            selectedPlaylistId = null,
+                            assistantText = "Не нашла плейлист ${intent.name}."
+                        )
+                    }
+                } else {
+                    playPlaylist(playlist, intent.shuffled)
+                }
+                return
+            }
+            else -> Unit
+        }
         val requestedSearch = answer.intent as? MusicIntent.Search
         if (requestedSearch != null) {
             requestedSearch.mood?.let {
@@ -351,6 +404,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     librarySection = LibrarySection.HISTORY,
                     assistantText = answer.text
                 )
+                MusicIntent.OpenPlaylists,
+                is MusicIntent.CreatePlaylist,
+                is MusicIntent.PlayPlaylist -> current
                 MusicIntent.Similar,
                 MusicIntent.MyMix,
                 MusicIntent.ContinueListening,
@@ -439,6 +495,143 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     fun clearQueue() = _state.update { current ->
         current.copy(queue = listOf(current.nowTrack), currentIndex = 0).also(::persist)
+    }
+
+    fun openPlaylist(playlistId: String) = _state.update { it.copy(selectedPlaylistId = playlistId) }
+
+    fun closePlaylist() = _state.update { it.copy(selectedPlaylistId = null) }
+
+    fun createPlaylist(name: String, includeQueue: Boolean = false) {
+        val tracks = if (includeQueue) state.value.queue else emptyList()
+        updatePlaylists { stateRepository.createPlaylist(name, tracks) }
+    }
+
+    fun saveQueueAsPlaylist(name: String) = createPlaylist(name, includeQueue = true)
+
+    fun renamePlaylist(playlistId: String, name: String) = updatePlaylists {
+        stateRepository.renamePlaylist(playlistId, name)
+    }
+
+    fun deletePlaylist(playlistId: String) = updatePlaylists {
+        stateRepository.deletePlaylist(playlistId)
+        _state.update { value ->
+            value.copy(selectedPlaylistId = value.selectedPlaylistId.takeUnless { it == playlistId })
+        }
+    }
+
+    fun addCurrentToPlaylist(playlistId: String) = updatePlaylists {
+        stateRepository.addToPlaylist(playlistId, listOf(state.value.nowTrack))
+    }
+
+    fun addQueueToPlaylist(playlistId: String) = updatePlaylists {
+        stateRepository.addToPlaylist(playlistId, state.value.queue)
+    }
+
+    fun removeFromPlaylist(playlistId: String, trackId: String) = updatePlaylists {
+        stateRepository.removeFromPlaylist(playlistId, trackId)
+    }
+
+    fun movePlaylistTrack(playlistId: String, from: Int, to: Int) = updatePlaylists {
+        stateRepository.movePlaylistTrack(playlistId, from, to)
+    }
+
+    fun shufflePlaylist(playlistId: String) = updatePlaylists {
+        stateRepository.shufflePlaylist(playlistId)
+    }
+
+    fun playPlaylist(playlist: AuraPlaylist, shuffled: Boolean = false) =
+        playPlaylistInternal(playlist, shuffled, 0)
+
+    fun playPlaylistFrom(playlist: AuraPlaylist, index: Int) =
+        playPlaylistInternal(playlist, shuffled = false, startIndex = index)
+
+    private fun playPlaylistInternal(playlist: AuraPlaylist, shuffled: Boolean, startIndex: Int) {
+        if (playlist.tracks.isEmpty()) return
+        _state.update {
+            it.copy(
+                isLoading = true,
+                assistantText = "Готовлю плейлист ${playlist.name}…",
+                searchPhase = SearchPhase.RESOLVING
+            )
+        }
+        viewModelScope.launch {
+            val source = if (shuffled) playlist.tracks.shuffled() else playlist.tracks
+            val requestedId = source.getOrNull(if (shuffled) 0 else startIndex)?.id
+            val queue = preparePlaylistTracks(source)
+            if (queue.isEmpty()) {
+                _state.update {
+                    it.copy(
+                        isLoading = false,
+                        searchPhase = SearchPhase.ERROR,
+                        assistantText = "В плейлисте пока нет доступных треков."
+                    )
+                }
+                return@launch
+            }
+            val selected = queue.firstOrNull { it.id == requestedId } ?: queue.first()
+            val selectedIndex = queue.indexOfFirst { it.id == selected.id }.coerceAtLeast(0)
+            _state.update {
+                it.copy(
+                    queue = queue,
+                    currentIndex = selectedIndex,
+                    positionMs = 0L,
+                    playbackDurationMs = selected.durationMs ?: 0L,
+                    isLoading = false,
+                    isBuffering = true,
+                    isPlayerExpanded = true,
+                    searchPhase = SearchPhase.BUFFERING,
+                    assistantText = "Играет плейлист ${playlist.name}."
+                ).also(::persist)
+            }
+            hasPreparedMedia = true
+            playback.play(queue, selected)
+        }
+    }
+
+    private fun updatePlaylists(action: suspend () -> Unit) {
+        viewModelScope.launch {
+            runCatching { action() }
+                .onSuccess { refreshPlaylists() }
+                .onFailure {
+                    _state.update { value -> value.copy(assistantText = "Не удалось изменить плейлист.") }
+                }
+        }
+    }
+
+    private suspend fun refreshPlaylists() {
+        val playlists = stateRepository.loadPlaylists()
+        _state.update { value ->
+            value.copy(
+                playlists = playlists,
+                selectedPlaylistId = value.selectedPlaylistId?.takeIf { id -> playlists.any { it.id == id } }
+            )
+        }
+    }
+
+    private suspend fun preparePlaylistTracks(tracks: List<Track>): List<Track> = buildList {
+        for (track in tracks) {
+            if (!track.streamUrl.isNullOrBlank()) {
+                add(track)
+                continue
+            }
+            if (track.sourceId != "youtube") continue
+            val videoId = track.id.removePrefix("youtube:")
+            if (!YOUTUBE_VIDEO_ID.matches(videoId)) continue
+            val candidate = TrackCandidate(
+                providerId = "youtube",
+                id = videoId,
+                title = track.title,
+                artist = track.artist,
+                detailUrl = track.sourcePageUrl,
+                artworkUrl = track.artworkUrl,
+                durationMs = track.durationMs,
+                playbackToken = videoId,
+                year = track.year,
+                popularity = track.popularity?.toLong()
+            )
+            val resolved = resolveCandidate(candidate)
+            if (resolved is ProviderResult.Success) add(resolved.value.track)
+        }
     }
 
     fun playMyMix() = startRecommendation("Собираю твой микс…") { context ->
@@ -941,5 +1134,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         private const val EARLY_SKIP_THRESHOLD_MS = 30_000L
         private const val AUTO_CONTINUE_THRESHOLD = 2
         private const val AUTO_CONTINUE_BATCH = 6
+        private val YOUTUBE_VIDEO_ID = Regex("[A-Za-z0-9_-]{11}")
     }
 }

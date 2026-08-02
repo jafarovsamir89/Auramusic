@@ -7,6 +7,14 @@ import java.util.UUID
 
 enum class RecommendationEventType { PLAY, SKIP, LIKE, UNLIKE }
 
+data class AuraPlaylist(
+    val id: String,
+    val name: String,
+    val tracks: List<Track>,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
 data class AuraPlaybackSnapshot(
     val queue: List<Track>,
     val currentIndex: Int,
@@ -124,6 +132,90 @@ class AuraStateRepository(
             .mapNotNull(RecommendationEventEntity::trackId)
             .toSet()
     }
+
+    suspend fun loadPlaylists(): List<AuraPlaylist> = dao.loadPlaylists().map { entity ->
+        val items = dao.loadPlaylistItems(entity.id)
+        val tracks = if (items.isEmpty()) emptyMap() else {
+            dao.loadTracks(items.map(PlaylistItemEntity::trackId)).associateBy(TrackEntity::id)
+        }
+        AuraPlaylist(
+            id = entity.id,
+            name = entity.name,
+            tracks = items.mapNotNull { tracks[it.trackId]?.toTrack() },
+            createdAt = entity.createdAt,
+            updatedAt = entity.updatedAt
+        )
+    }
+
+    suspend fun createPlaylist(name: String, tracks: List<Track> = emptyList()): AuraPlaylist {
+        val timestamp = now()
+        return savePlaylist(
+            AuraPlaylist(
+                id = UUID.randomUUID().toString(),
+                name = normalizedPlaylistName(name),
+                tracks = tracks.playlistTracks(),
+                createdAt = timestamp,
+                updatedAt = timestamp
+            )
+        )
+    }
+
+    suspend fun renamePlaylist(playlistId: String, name: String): AuraPlaylist? {
+        val playlist = loadPlaylists().firstOrNull { it.id == playlistId } ?: return null
+        return savePlaylist(playlist.copy(name = normalizedPlaylistName(name), updatedAt = now()))
+    }
+
+    suspend fun deletePlaylist(playlistId: String) = dao.deletePlaylist(playlistId)
+
+    suspend fun addToPlaylist(playlistId: String, tracks: List<Track>): AuraPlaylist? {
+        val playlist = loadPlaylists().firstOrNull { it.id == playlistId } ?: return null
+        return savePlaylist(
+            playlist.copy(
+                tracks = (playlist.tracks + tracks).playlistTracks(),
+                updatedAt = now()
+            )
+        )
+    }
+
+    suspend fun removeFromPlaylist(playlistId: String, trackId: String): AuraPlaylist? {
+        val playlist = loadPlaylists().firstOrNull { it.id == playlistId } ?: return null
+        return savePlaylist(
+            playlist.copy(
+                tracks = playlist.tracks.filterNot { it.id == trackId },
+                updatedAt = now()
+            )
+        )
+    }
+
+    suspend fun movePlaylistTrack(playlistId: String, from: Int, to: Int): AuraPlaylist? {
+        val playlist = loadPlaylists().firstOrNull { it.id == playlistId } ?: return null
+        if (from !in playlist.tracks.indices || to !in playlist.tracks.indices || from == to) return playlist
+        val reordered = playlist.tracks.toMutableList().apply { add(to, removeAt(from)) }
+        return savePlaylist(playlist.copy(tracks = reordered, updatedAt = now()))
+    }
+
+    suspend fun shufflePlaylist(playlistId: String): AuraPlaylist? {
+        val playlist = loadPlaylists().firstOrNull { it.id == playlistId } ?: return null
+        return savePlaylist(playlist.copy(tracks = playlist.tracks.shuffled(), updatedAt = now()))
+    }
+
+    private suspend fun savePlaylist(playlist: AuraPlaylist): AuraPlaylist {
+        val tracks = playlist.tracks.playlistTracks()
+        dao.replacePlaylist(
+            playlist = PlaylistEntity(playlist.id, playlist.name, playlist.createdAt, playlist.updatedAt),
+            tracks = tracks.map { it.toEntity(playlist.updatedAt) },
+            items = tracks.mapIndexed { index, track ->
+                PlaylistItemEntity(playlist.id, index, track.id, playlist.updatedAt)
+            }
+        )
+        return playlist.copy(tracks = tracks)
+    }
+
+    private fun normalizedPlaylistName(name: String): String =
+        name.trim().replace(Regex("\\s+"), " ").take(60).ifBlank { "Новый плейлист" }
+
+    private fun List<Track>.playlistTracks(): List<Track> =
+        filterNot { it.id == "aura-placeholder" }.distinctBy(Track::id).take(500)
 
     private fun String.normalizedQuery(): String = lowercase().trim().replace(Regex("\\s+"), " ")
 

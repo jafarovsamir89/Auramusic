@@ -32,6 +32,12 @@ interface AuraStateDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRecommendationEvent(value: RecommendationEventEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPlaylist(value: PlaylistEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPlaylistItems(values: List<PlaylistItemEntity>)
+
     @Query("DELETE FROM queue_items WHERE queueId = :queueId")
     suspend fun deleteQueueItems(queueId: String)
 
@@ -40,6 +46,12 @@ interface AuraStateDao {
 
     @Query("DELETE FROM play_history")
     suspend fun deleteHistory()
+
+    @Query("DELETE FROM playlist_items WHERE playlistId = :playlistId")
+    suspend fun deletePlaylistItems(playlistId: String)
+
+    @Query("DELETE FROM playlists WHERE id = :playlistId")
+    suspend fun deletePlaylistEntity(playlistId: String)
 
     @Query("SELECT * FROM queues WHERE id = :queueId LIMIT 1")
     suspend fun loadQueue(queueId: String): QueueEntity?
@@ -64,6 +76,30 @@ interface AuraStateDao {
 
     @Query("SELECT * FROM recommendation_events ORDER BY createdAt DESC LIMIT :limit")
     suspend fun loadRecommendationEvents(limit: Int = 500): List<RecommendationEventEntity>
+
+    @Query("SELECT * FROM playlists ORDER BY updatedAt DESC")
+    suspend fun loadPlaylists(): List<PlaylistEntity>
+
+    @Query("SELECT * FROM playlist_items WHERE playlistId = :playlistId ORDER BY position")
+    suspend fun loadPlaylistItems(playlistId: String): List<PlaylistItemEntity>
+
+    @Transaction
+    suspend fun replacePlaylist(
+        playlist: PlaylistEntity,
+        tracks: List<TrackEntity>,
+        items: List<PlaylistItemEntity>
+    ) {
+        if (tracks.isNotEmpty()) upsertTracks(tracks)
+        upsertPlaylist(playlist)
+        deletePlaylistItems(playlist.id)
+        if (items.isNotEmpty()) insertPlaylistItems(items)
+    }
+
+    @Transaction
+    suspend fun deletePlaylist(playlistId: String) {
+        deletePlaylistItems(playlistId)
+        deletePlaylistEntity(playlistId)
+    }
 
     @Transaction
     suspend fun importLegacy(

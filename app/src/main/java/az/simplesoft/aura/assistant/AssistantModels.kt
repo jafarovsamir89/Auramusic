@@ -20,6 +20,9 @@ sealed interface MusicIntent {
     data object Shuffle : MusicIntent
     data object NowPlaying : MusicIntent
     data object OpenHistory : MusicIntent
+    data object OpenPlaylists : MusicIntent
+    data class CreatePlaylist(val name: String, val includeQueue: Boolean) : MusicIntent
+    data class PlayPlaylist(val name: String, val shuffled: Boolean = false) : MusicIntent
     data object Similar : MusicIntent
     data object MyMix : MusicIntent
     data object ContinueListening : MusicIntent

@@ -91,6 +91,34 @@ class AuraStateRepositoryTest {
         assertTrue(repository.skippedTrackIds().isEmpty())
     }
 
+    @Test
+    fun playlistCrudPreservesOrderAndDeduplicatesTracks() = runBlocking {
+        val dao = FakeAuraStateDao()
+        var clock = 5_000L
+        val repository = AuraStateRepository(dao) { clock++ }
+        val one = track("youtube:one", "youtube", "https://youtube.test/one", PlaybackType.DIRECT_STREAM, null)
+        val two = track("youtube:two", "youtube", "https://youtube.test/two", PlaybackType.DIRECT_STREAM, null)
+        val three = track("youtube:three", "youtube", "https://youtube.test/three", PlaybackType.DIRECT_STREAM, null)
+
+        val created = repository.createPlaylist("  Дорога  ", listOf(one, two, one))
+        assertEquals("Дорога", created.name)
+        assertEquals(listOf(one.id, two.id), created.tracks.map(Track::id))
+
+        repository.addToPlaylist(created.id, listOf(two, three))
+        repository.movePlaylistTrack(created.id, from = 0, to = 2)
+        repository.renamePlaylist(created.id, "В машину")
+        val updated = repository.loadPlaylists().single()
+        assertEquals("В машину", updated.name)
+        assertEquals(listOf(two.id, three.id, one.id), updated.tracks.map(Track::id))
+
+        repository.removeFromPlaylist(created.id, three.id)
+        assertEquals(listOf(two.id, one.id), repository.loadPlaylists().single().tracks.map(Track::id))
+
+        repository.deletePlaylist(created.id)
+        assertTrue(repository.loadPlaylists().isEmpty())
+        assertTrue(dao.playlistItems.isEmpty())
+    }
+
     private fun track(
         id: String,
         sourceId: String,
@@ -120,6 +148,8 @@ private class FakeAuraStateDao : AuraStateDao {
     val searches = linkedMapOf<String, SearchHistoryEntity>()
     val preferences = linkedMapOf<String, UserPreferenceEntity>()
     val recommendationEvents = linkedMapOf<String, RecommendationEventEntity>()
+    val playlists = linkedMapOf<String, PlaylistEntity>()
+    val playlistItems = mutableListOf<PlaylistItemEntity>()
 
     override suspend fun upsertTracks(values: List<TrackEntity>) = values.forEach { tracks[it.id] = it }
     override suspend fun upsertQueue(value: QueueEntity) { queue = value }
@@ -131,9 +161,15 @@ private class FakeAuraStateDao : AuraStateDao {
     override suspend fun insertRecommendationEvent(value: RecommendationEventEntity) {
         recommendationEvents[value.id] = value
     }
+    override suspend fun upsertPlaylist(value: PlaylistEntity) { playlists[value.id] = value }
+    override suspend fun insertPlaylistItems(values: List<PlaylistItemEntity>) { playlistItems += values }
     override suspend fun deleteQueueItems(queueId: String) { queueItems.removeAll { it.queueId == queueId } }
     override suspend fun deleteFavorites() = favorites.clear()
     override suspend fun deleteHistory() = history.clear()
+    override suspend fun deletePlaylistItems(playlistId: String) {
+        playlistItems.removeAll { it.playlistId == playlistId }
+    }
+    override suspend fun deletePlaylistEntity(playlistId: String) { playlists.remove(playlistId) }
     override suspend fun loadQueue(queueId: String): QueueEntity? = queue?.takeIf { it.id == queueId }
     override suspend fun loadQueueItems(queueId: String): List<QueueItemEntity> =
         queueItems.filter { it.queueId == queueId }.sortedBy(QueueItemEntity::position)
@@ -146,4 +182,7 @@ private class FakeAuraStateDao : AuraStateDao {
     override suspend fun preference(key: String): String? = preferences[key]?.value
     override suspend fun loadRecommendationEvents(limit: Int): List<RecommendationEventEntity> =
         recommendationEvents.values.sortedByDescending(RecommendationEventEntity::createdAt).take(limit)
+    override suspend fun loadPlaylists(): List<PlaylistEntity> = playlists.values.sortedByDescending(PlaylistEntity::updatedAt)
+    override suspend fun loadPlaylistItems(playlistId: String): List<PlaylistItemEntity> =
+        playlistItems.filter { it.playlistId == playlistId }.sortedBy(PlaylistItemEntity::position)
 }
