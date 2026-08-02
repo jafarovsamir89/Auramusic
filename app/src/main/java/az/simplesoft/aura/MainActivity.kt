@@ -37,7 +37,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             AuraTheme {
                 AuraApp(
-                    initialCommand = if (BuildConfig.DEBUG) intent.getStringExtra("aura_command") else null
+                    initialCommand = if (BuildConfig.DEBUG) intent.getStringExtra("aura_command") else null,
+                    speakInitialCommand = BuildConfig.DEBUG && intent.getBooleanExtra("aura_speak", false),
+                    initialVoicePreview = if (BuildConfig.DEBUG) intent.getStringExtra("aura_voice_preview") else null
                 )
             }
         }

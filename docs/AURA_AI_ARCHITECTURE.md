@@ -1,8 +1,8 @@
-# AURA AI Core 0.3
+# AURA AI Core 0.4
 
 ## Goal
 
-AURA is an assistant that can operate music, not a search box with voice input. A phrase can be conversation, a local action, or a request that needs language-model reasoning. Only an explicit music intention may create a music search.
+AURA is an assistant that can operate music, not a search box with voice input. When configured, DeepSeek plans every utterance as conversation or one allow-listed application action. Only an explicit music intention may create a music search. Local parsing is an offline/error fallback and never outranks the online agent.
 
 ## Deep module
 
@@ -13,9 +13,9 @@ AuraViewModel
     |
     v
 AuraAiEngine
-    +-- LocalIntentEngine (private, fast, deterministic)
+    +-- OpenRouterAssistantAdapter (primary decision adapter)
     +-- CompactAssistantMemory (Room user_preferences adapter)
-    +-- OpenRouterAssistantAdapter (optional reasoning adapter)
+    +-- LocalIntentEngine (private offline fallback)
     |
     v
 validated MusicIntent
@@ -30,10 +30,10 @@ The language model never invokes Android or playback code directly. It returns J
 
 ## Routing invariant
 
-- Explicit commands such as `Поставь Руки Вверх`, `Növbəti mahnı`, and `pause` are handled locally.
-- Greetings and common small talk are answered locally without network cost.
-- Ambiguous conversation is sent to DeepSeek only when an OpenRouter key is configured.
-- A missing key or network failure produces a conversation fallback. It never produces `MusicIntent.Search`.
+- With an OpenRouter key, greetings, player commands, music requests and follow-ups all go to DeepSeek first.
+- DeepSeek returns exactly one JSON plan containing a spoken reply, language, allow-listed action and at most three durable memory facts.
+- Courtesy words such as `пожалуйста`, `zəhmət olmasa`, and `please` cannot become an executable query on their own.
+- A missing key or network failure activates `LocalIntentEngine` for simple player commands. Unknown conversation never produces `MusicIntent.Search`.
 - The dedicated Search screen still performs a direct catalog search.
 
 ## Compact memory
@@ -50,7 +50,7 @@ Memory is stored under one `user_preferences` entry, so no Room migration is req
 
 ## Languages and speech
 
-The first supported languages are Russian (`ru-RU`), Azerbaijani (`az-AZ`) and English (`en-US`). Android 14+ speech recognition requests automatic switching among those languages when supported by the installed recognizer. Earlier Android versions use the device language. Replies use the installed Android TTS voice closest to the detected language.
+The first supported languages are Russian (`ru-RU`), Azerbaijani (`az-AZ`) and English (`en-US`). Android 14+ speech recognition requests automatic switching among those languages when supported by the installed recognizer. Earlier Android versions use the device language. Azerbaijani replies prefer the local Silero V5 CIS Base `aze_gamat` voice. Its verified voice pack is downloaded once; Android system TTS is the fallback. Russian and English select the highest-quality matching Android voice available on the phone.
 
 ## OpenRouter
 

@@ -173,6 +173,8 @@ private val ReferenceBlue = Color(0xFF2467FF)
 @Composable
 fun AuraApp(
     initialCommand: String? = null,
+    speakInitialCommand: Boolean = false,
+    initialVoicePreview: String? = null,
     vm: AuraViewModel = viewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -190,8 +192,13 @@ fun AuraApp(
     }
     var playlistTarget by remember { mutableStateOf<Track?>(null) }
     DisposableEffect(Unit) { onDispose(recognizer::destroy) }
-    LaunchedEffect(initialCommand) {
-        initialCommand?.takeIf(String::isNotBlank)?.let(vm::submit)
+    LaunchedEffect(initialCommand, speakInitialCommand) {
+        initialCommand?.takeIf(String::isNotBlank)?.let {
+            if (speakInitialCommand) vm.submitVoice(it) else vm.submit(it)
+        }
+    }
+    LaunchedEffect(initialVoicePreview) {
+        initialVoicePreview?.takeIf(String::isNotBlank)?.let(vm::previewAzerbaijaniVoice)
     }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->

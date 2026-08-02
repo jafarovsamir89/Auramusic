@@ -14,7 +14,9 @@ val auraLocalProperties = Properties().apply {
 }
 
 fun auraConfig(name: String, fallback: String = ""): String =
-    providers.environmentVariable(name).orNull ?: auraLocalProperties.getProperty(name, fallback)
+    providers.environmentVariable(name).orNull?.takeIf(String::isNotBlank)
+        ?: auraLocalProperties.getProperty(name)?.takeIf(String::isNotBlank)
+        ?: fallback
 
 fun String.asBuildConfigString(): String = "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
@@ -37,6 +39,7 @@ android {
         targetSdk = 35
         versionCode = 3
         versionName = "0.3.0"
+        ndk.abiFilters += "arm64-v8a"
         buildConfigField("String", "OPENROUTER_API_KEY", auraConfig("OPENROUTER_API_KEY").asBuildConfigString())
         buildConfigField(
             "String",
@@ -74,6 +77,7 @@ dependencies {
     implementation("androidx.media3:media3-common:1.8.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.json:json:20260719")
+    implementation("org.pytorch:pytorch_android:2.1.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("androidx.room:room-runtime:2.8.4")
     implementation("androidx.room:room-ktx:2.8.4")

@@ -14,6 +14,15 @@ This file is an engineering inventory, not legal advice. Full license texts and 
 | JSON-java (`org.json`) | JSON parsing | JSON License | https://github.com/stleary/JSON-java |
 | JUnit 4 | Unit testing only | EPL-1.0 | https://github.com/junit-team/junit4 |
 | MockWebServer | Test HTTP server only | Apache-2.0 | https://github.com/square/okhttp |
+| PyTorch Android 2.1 | TorchScript runtime for the optional local Silero voice pack | BSD-style PyTorch license | https://github.com/pytorch/pytorch |
+
+## Optional voice models
+
+| Model | Purpose | Distribution | License | Source |
+|---|---|---|---|---|
+| Silero `v5_cis_base_nostress` / `aze_gamat` | Local Azerbaijani text-to-speech | Downloaded on first Azerbaijani voice response; SHA-256 pinned in the app | MIT for CIS Base models | https://github.com/snakers4/silero-models |
+
+The Silero model is not bundled into the base APK. AURA downloads the official 91,695,221-byte artifact over HTTPS, verifies SHA-256 `d7d361caf78b8480bcd65a0c367af665a2bf6f06c8507306e3781dc7c6ce781b`, and stores it in private application storage.
 
 Transitive dependencies must be captured from the final release dependency graph before distribution.
 

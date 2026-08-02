@@ -33,6 +33,28 @@ class OpenRouterAssistantAdapterTest {
     }
 
     @Test
+    fun `courtesy word alone is never executable music search`() {
+        val result = adapter.parsePlan(
+            """{"reply":"Что именно поставить?","language":"ru","action":{"type":"play_music","query":"пожалуйста"},"memory":[]}""",
+            AssistantLanguage.RUSSIAN
+        )
+
+        assertEquals(MusicIntent.Unknown, result.intent)
+    }
+
+    @Test
+    fun `courtesy words are removed from validated music query`() {
+        val result = adapter.parsePlan(
+            """{"reply":"Подбираю.","language":"ru","action":{"type":"play_music","query":"МакSим грустная песня пожалуйста","artist":"МакSим","mood":"sad"},"memory":[]}""",
+            AssistantLanguage.RUSSIAN
+        )
+
+        val search = result.intent as MusicIntent.Search
+        assertEquals("МакSим грустная песня", search.query)
+        assertEquals("МакSим", search.artist)
+    }
+
+    @Test
     fun `request sends compact memory and requires json`() {
         val request = adapter.requestJson(
             input = "hello",

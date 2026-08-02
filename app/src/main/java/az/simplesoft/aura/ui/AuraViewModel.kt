@@ -364,6 +364,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     fun submitVoice(text: String) = submitAssistant(text, speakResponse = true)
 
+    /** Debug/device verification hook. Production voice turns still go through the AI agent. */
+    fun previewAzerbaijaniVoice(text: String) = speech.speak(
+        text,
+        az.simplesoft.aura.assistant.AssistantLanguage.AZERBAIJANI
+    )
+
     fun search(text: String = state.value.query) {
         val query = text.trim()
         if (query.isBlank()) return
@@ -393,7 +399,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         _state.update { current ->
             current.copy(
                 query = "",
-                destination = AuraDestination.ASSISTANT,
+                destination = if (speakResponse) current.destination else AuraDestination.ASSISTANT,
                 assistantText = when (language) {
                     az.simplesoft.aura.assistant.AssistantLanguage.RUSSIAN -> "Думаю…"
                     az.simplesoft.aura.assistant.AssistantLanguage.AZERBAIJANI -> "Düşünürəm…"
@@ -419,7 +425,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     currentArtist = track?.artist,
                     isPlaying = current.isPlaying,
                     hourOfDay = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
-                    carMode = current.isCarMode
+                    carMode = current.isCarMode,
+                    queueSize = current.queue.size,
+                    playlists = current.playlists.map { it.name }
                 )
             )
             val replyTimestamp = System.currentTimeMillis()

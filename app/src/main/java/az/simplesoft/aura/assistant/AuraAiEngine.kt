@@ -5,7 +5,9 @@ data class AuraAiContext(
     val currentArtist: String? = null,
     val isPlaying: Boolean = false,
     val hourOfDay: Int,
-    val carMode: Boolean = false
+    val carMode: Boolean = false,
+    val queueSize: Int = 0,
+    val playlists: List<String> = emptyList()
 )
 
 interface RemoteAssistantAdapter {
@@ -18,32 +20,31 @@ interface RemoteAssistantAdapter {
     ): AssistantReply
 }
 
-/** The single seam used by UI: understand, remember and return one safe executable turn. */
+/**
+ * The single seam used by UI: ask the online agent for one safe executable turn,
+ * remember it, and fall back to deterministic local commands only when the agent is unavailable.
+ */
 class AuraAiEngine(
     private val local: LocalIntentEngine,
     private val remote: RemoteAssistantAdapter,
     private val memory: CompactAssistantMemory
 ) {
     suspend fun respond(input: String, context: AuraAiContext): AssistantReply {
-        val localReply = local.understand(input)
-        val finalReply = if (localReply.route != AssistantRoute.NEEDS_REASONING) {
-            localReply
-        } else if (remote.isAvailable) {
+        val detectedLanguage = AssistantLanguage.detect(input)
+        val finalReply = if (remote.isAvailable) {
             runCatching {
-                remote.reason(input, context, memory.snapshot(), localReply.language)
-            }.getOrElse {
-                localReply.copy(
-                    text = fallbackText(localReply.language, unavailable = false),
-                    route = AssistantRoute.LOCAL_CONVERSATION,
-                    source = AssistantSource.FALLBACK
-                )
+                remote.reason(input, context, memory.snapshot(), detectedLanguage)
+            }.getOrElse { error ->
+                runCatching {
+                    android.util.Log.w(
+                        "AuraAi",
+                        "Remote agent failed: ${error.javaClass.simpleName}: ${error.message.orEmpty().take(180)}"
+                    )
+                }
+                localFallback(input, detectedLanguage, remoteFailed = true)
             }
         } else {
-            localReply.copy(
-                text = fallbackText(localReply.language, unavailable = true),
-                route = AssistantRoute.LOCAL_CONVERSATION,
-                source = AssistantSource.FALLBACK
-            )
+            localFallback(input, detectedLanguage, remoteFailed = false)
         }
         memory.record(input, finalReply)
         return finalReply
@@ -52,15 +53,32 @@ class AuraAiEngine(
     suspend fun memorySnapshot(): AssistantMemorySnapshot = memory.snapshot()
     suspend fun clearMemory() = memory.clear()
 
-    private fun fallbackText(language: AssistantLanguage, unavailable: Boolean): String = when (language) {
-        AssistantLanguage.RUSSIAN -> if (unavailable) {
-            "Я поняла, что это не поиск музыки. Для свободного разговора осталось подключить мой AI-мозг."
-        } else "Сейчас не удалось связаться с моим AI-мозгом. Попробуем ещё раз?"
-        AssistantLanguage.AZERBAIJANI -> if (unavailable) {
-            "Bunun musiqi axtarışı olmadığını anladım. Sərbəst söhbət üçün AI beynimi qoşmaq qalıb."
-        } else "AI beynimlə indi əlaqə yaratmaq alınmadı. Bir daha yoxlayaq?"
-        AssistantLanguage.ENGLISH -> if (unavailable) {
-            "I understood that this isn't a music search. My AI brain still needs to be connected for open conversation."
-        } else "I couldn't reach my AI brain just now. Shall we try again?"
+    private fun localFallback(
+        input: String,
+        language: AssistantLanguage,
+        remoteFailed: Boolean
+    ): AssistantReply {
+        val localReply = local.understand(input)
+        if (localReply.intent != MusicIntent.Unknown) {
+            return localReply.copy(source = AssistantSource.FALLBACK)
+        }
+        return localReply.copy(
+            text = fallbackText(language, remoteFailed),
+            language = language,
+            route = AssistantRoute.LOCAL_CONVERSATION,
+            source = AssistantSource.FALLBACK
+        )
+    }
+
+    private fun fallbackText(language: AssistantLanguage, remoteFailed: Boolean): String = when (language) {
+        AssistantLanguage.RUSSIAN -> if (remoteFailed) {
+            "Не удалось связаться с моим AI-мозгом. Простые команды плеера всё ещё работают."
+        } else "AI-мозг не настроен. Пока доступны только простые команды плеера."
+        AssistantLanguage.AZERBAIJANI -> if (remoteFailed) {
+            "AI beynimlə əlaqə alınmadı. Sadə pleyer əmrləri hələ də işləyir."
+        } else "AI beynim qurulmayıb. Hələlik yalnız sadə pleyer əmrləri işləyir."
+        AssistantLanguage.ENGLISH -> if (remoteFailed) {
+            "I couldn't reach my AI brain. Basic player commands still work."
+        } else "My AI brain isn't configured. Only basic player commands are available for now."
     }
 }
