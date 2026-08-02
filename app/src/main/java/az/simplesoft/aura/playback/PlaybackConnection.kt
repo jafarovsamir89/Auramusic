@@ -11,6 +11,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.plugins.youtube.YouTubePlaybackIdentity
+import az.simplesoft.aura.domain.music.AuraRepeatMode
 import com.google.common.util.concurrent.ListenableFuture
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -27,7 +28,7 @@ class PlaybackConnection(
     private val appContext = context.applicationContext
     private val controllerFuture: ListenableFuture<MediaController>
     private var controller: MediaController? = null
-    private var pendingPlayback: (() -> Unit)? = null
+    private val pendingActions = mutableListOf<(MediaController) -> Unit>()
 
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -58,8 +59,9 @@ class PlaybackConnection(
                         isPlaying = it.isPlaying,
                         isBuffering = it.playbackState == Player.STATE_BUFFERING
                     )
-                    pendingPlayback?.invoke()
-                    pendingPlayback = null
+                    val actions = pendingActions.toList()
+                    pendingActions.clear()
+                    actions.forEach { action -> action(it) }
                 }.onFailure {
                     listener.onPlaybackError(null, "Не удалось подключить системный плеер.")
                 }
@@ -76,6 +78,16 @@ class PlaybackConnection(
         it.setMediaItems(playable.map(::toMediaItem), index, startPositionMs.coerceAtLeast(0L))
         it.prepare()
         it.play()
+    }
+
+    fun restore(queue: List<Track>, selected: Track, startPositionMs: Long = 0L) = withController {
+        val playable = queue.filter { !it.streamUrl.isNullOrBlank() }
+        val index = playable.indexOfFirst { track -> track.id == selected.id }.coerceAtLeast(0)
+        playable.filterNot { track -> track.sourceId == "youtube" }
+            .forEach { track -> PlaybackSourceRegistry.register(track.streamUrl.orEmpty(), track.requestHeaders) }
+        it.setMediaItems(playable.map(::toMediaItem), index, startPositionMs.coerceAtLeast(0L))
+        it.prepare()
+        it.pause()
     }
 
     fun replaceCurrent(track: Track, startPositionMs: Long) = withController { player ->
@@ -98,13 +110,47 @@ class PlaybackConnection(
         withController { it.addMediaItem(toMediaItem(track)) }
     }
 
+    /** Reconciles Media3 with AURA's queue without restarting the current item. */
+    fun syncQueue(queue: List<Track>) = withController { player ->
+        val playable = queue.filter { !it.streamUrl.isNullOrBlank() }
+        playable.filterNot { it.sourceId == "youtube" }
+            .forEach { track -> PlaybackSourceRegistry.register(track.streamUrl.orEmpty(), track.requestHeaders) }
+        playable.forEachIndexed { targetIndex, track ->
+            if (targetIndex < player.mediaItemCount && player.getMediaItemAt(targetIndex).mediaId == track.id) {
+                return@forEachIndexed
+            }
+            val existingIndex = (targetIndex until player.mediaItemCount)
+                .firstOrNull { player.getMediaItemAt(it).mediaId == track.id }
+            if (existingIndex == null) {
+                player.addMediaItem(targetIndex, toMediaItem(track))
+            } else {
+                player.moveMediaItem(existingIndex, targetIndex)
+            }
+        }
+        if (player.mediaItemCount > playable.size) {
+            player.removeMediaItems(playable.size, player.mediaItemCount)
+        }
+    }
+
     fun toggle() = withController { if (it.isPlaying) it.pause() else it.play() }
     fun play() = withController(MediaController::play)
     fun pause() = withController(MediaController::pause)
     fun next() = withController { if (it.hasNextMediaItem()) it.seekToNextMediaItem() else it.seekToDefaultPosition(0) }
     fun previous() = withController { if (it.hasPreviousMediaItem()) it.seekToPreviousMediaItem() else it.seekToDefaultPosition() }
+    fun playAt(index: Int) = withController {
+        if (index in 0 until it.mediaItemCount) {
+            it.seekToDefaultPosition(index)
+            it.play()
+        }
+    }
     fun setShuffle(enabled: Boolean) = withController { it.shuffleModeEnabled = enabled }
-    fun setRepeat(enabled: Boolean) = withController { it.repeatMode = if (enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF }
+    fun setRepeat(mode: AuraRepeatMode) = withController {
+        it.repeatMode = when (mode) {
+            AuraRepeatMode.OFF -> Player.REPEAT_MODE_OFF
+            AuraRepeatMode.ONE -> Player.REPEAT_MODE_ONE
+            AuraRepeatMode.ALL -> Player.REPEAT_MODE_ALL
+        }
+    }
     fun seekTo(positionMs: Long) = withController { it.seekTo(positionMs.coerceAtLeast(0L)) }
     fun currentPositionMs(): Long = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
     fun durationMs(): Long = controller?.duration?.takeIf { it > 0L } ?: 0L
@@ -116,7 +162,7 @@ class PlaybackConnection(
     }
 
     private fun withController(action: (MediaController) -> Unit) {
-        controller?.let(action) ?: run { pendingPlayback = { controller?.let(action) } }
+        controller?.let(action) ?: pendingActions.add(action)
     }
 
     private fun toMediaItem(track: Track): MediaItem {

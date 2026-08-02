@@ -2,6 +2,8 @@ package az.simplesoft.aura.data.database
 
 import androidx.room.Entity
 import androidx.room.Index
+import androidx.room.PrimaryKey
+import androidx.room.ColumnInfo
 
 @Entity(tableName = "tracks", primaryKeys = ["id"], indices = [Index("artist"), Index("sourceId")])
 data class TrackEntity(
@@ -54,6 +56,8 @@ data class QueueEntity(
     val currentPositionMs: Long,
     val shuffleEnabled: Boolean,
     val repeatEnabled: Boolean,
+    @ColumnInfo(defaultValue = "'OFF'") val repeatMode: String = "OFF",
+    @ColumnInfo(defaultValue = "1") val autoContinueEnabled: Boolean = true,
     val updatedAt: Long
 )
 
@@ -64,6 +68,22 @@ data class QueueItemEntity(
     val trackId: String,
     val activeSourceId: String,
     val alternativesJson: String = "[]"
+)
+
+@Entity(tableName = "queue_snapshots", indices = [Index("createdAt")])
+data class QueueSnapshotEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val currentIndex: Int,
+    val currentPositionMs: Long,
+    val createdAt: Long
+)
+
+@Entity(tableName = "queue_snapshot_items", primaryKeys = ["snapshotId", "position"], indices = [Index("trackId")])
+data class QueueSnapshotItemEntity(
+    val snapshotId: String,
+    val position: Int,
+    val trackId: String
 )
 
 @Entity(tableName = "playlists", primaryKeys = ["id"])

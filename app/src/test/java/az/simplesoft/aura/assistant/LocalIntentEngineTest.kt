@@ -44,4 +44,19 @@ class LocalIntentEngineTest {
             engine.understand("Перемешай плейлист Дорога").intent
         )
     }
+
+    @Test
+    fun recognizesQueueManagementCommandsBeforeGenericPlayback() {
+        assertEquals(
+            MusicIntent.QueueTrack("numb linkin park", playNext = true),
+            engine.understand("Поставь следующим numb linkin park").intent
+        )
+        assertEquals(
+            MusicIntent.QueueTrack("numb linkin park", playNext = false),
+            engine.understand("Добавь numb linkin park в очередь").intent
+        )
+        assertEquals(MusicIntent.OpenQueue, engine.understand("Открой очередь").intent)
+        assertEquals(MusicIntent.ClearQueue, engine.understand("Очисти очередь").intent)
+        assertEquals(MusicIntent.AutoContinue(false), engine.understand("Выключи автопродолжение").intent)
+    }
 }

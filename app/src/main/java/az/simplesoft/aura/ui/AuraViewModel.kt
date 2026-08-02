@@ -16,6 +16,7 @@ import az.simplesoft.aura.data.RadioBrowserProvider
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.database.AuraPlaybackSnapshot
 import az.simplesoft.aura.data.database.AuraPlaylist
+import az.simplesoft.aura.data.database.AuraQueueSnapshot
 import az.simplesoft.aura.data.database.AuraStateRepository
 import az.simplesoft.aura.data.database.RecommendationEventType
 import az.simplesoft.aura.data.plugins.core.PluginFailureReason as CoreFailureReason
@@ -33,7 +34,10 @@ import az.simplesoft.aura.data.search.CandidateRankerV2
 import az.simplesoft.aura.data.search.TrackIdentityResolver
 import az.simplesoft.aura.data.search.UnifiedTrackSession
 import az.simplesoft.aura.domain.music.MusicBrain
+import az.simplesoft.aura.domain.music.AuraRepeatMode
 import az.simplesoft.aura.domain.music.PersonalRecommendationEngine
+import az.simplesoft.aura.domain.music.QueueEditResult
+import az.simplesoft.aura.domain.music.QueueEditor
 import az.simplesoft.aura.domain.music.RecommendationContext
 import az.simplesoft.aura.domain.music.SearchOutcome
 import az.simplesoft.aura.playback.PlaybackConnection
@@ -75,6 +79,7 @@ data class AuraUiState(
     val searchResults: List<Track> = emptyList(),
     val personalMix: List<Track> = emptyList(),
     val playlists: List<AuraPlaylist> = emptyList(),
+    val queueHistory: List<AuraQueueSnapshot> = emptyList(),
     val selectedPlaylistId: String? = null,
     val assistantText: String = "Назови песню, которую хочешь услышать",
     val isListening: Boolean = false,
@@ -87,7 +92,7 @@ data class AuraUiState(
     val isPlayerExpanded: Boolean = false,
     val isQueueOpen: Boolean = false,
     val isShuffleEnabled: Boolean = false,
-    val isRepeatEnabled: Boolean = false,
+    val repeatMode: AuraRepeatMode = AuraRepeatMode.OFF,
     val isRecommendationLoading: Boolean = false,
     val autoContinueEnabled: Boolean = true,
     val searchPhase: SearchPhase = SearchPhase.IDLE,
@@ -106,6 +111,7 @@ data class AuraUiState(
     val favorites: List<Track> get() = likedIds.mapNotNull(knownTracks::get)
     val history: List<Track> get() = historyIds.mapNotNull(knownTracks::get)
     val selectedPlaylist: AuraPlaylist? get() = playlists.firstOrNull { it.id == selectedPlaylistId }
+    val isRepeatEnabled: Boolean get() = repeatMode != AuraRepeatMode.OFF
 }
 
 class AuraViewModel(application: Application) : AndroidViewModel(application), PlaybackConnection.Listener {
@@ -169,6 +175,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 val restored = stateRepository.load()
                 val skippedTrackIds = stateRepository.skippedTrackIds()
                 val playlists = stateRepository.loadPlaylists()
+                val queueHistory = stateRepository.loadQueueHistory()
                 _state.update { current ->
                     current.copy(
                         queue = restored.queue.ifEmpty { current.queue },
@@ -177,16 +184,22 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         positionMs = restored.positionMs,
                         playbackDurationMs = restored.queue.getOrNull(restored.currentIndex)?.durationMs ?: 0L,
                         isShuffleEnabled = restored.shuffleEnabled,
-                        isRepeatEnabled = restored.repeatEnabled,
+                        repeatMode = restored.repeatMode,
+                        autoContinueEnabled = restored.autoContinueEnabled,
                         likedIds = restored.likedIds,
                         historyIds = restored.historyIds,
                         recentSearches = restored.recentSearches,
                         skippedTrackIds = skippedTrackIds,
-                        playlists = playlists
+                        playlists = playlists,
+                        queueHistory = queueHistory
                     )
                 }
                 playback.setShuffle(restored.shuffleEnabled)
-                playback.setRepeat(restored.repeatEnabled)
+                playback.setRepeat(restored.repeatMode)
+                restored.queue.getOrNull(restored.currentIndex)?.let { selected ->
+                    playback.restore(restored.queue, selected, restored.positionMs)
+                    hasPreparedMedia = true
+                }
                 preferences.edit {
                     remove("liked")
                     remove("history")
@@ -287,6 +300,24 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 }
                 return
             }
+            MusicIntent.OpenQueue -> {
+                _state.update { it.copy(isQueueOpen = true, isPlayerExpanded = false, assistantText = answer.text) }
+                return
+            }
+            MusicIntent.ClearQueue -> {
+                clearQueue()
+                return
+            }
+            is MusicIntent.QueueTrack -> {
+                searchAndQueue(intent.query, intent.playNext)
+                return
+            }
+            is MusicIntent.AutoContinue -> {
+                _state.update {
+                    it.copy(autoContinueEnabled = intent.enabled, assistantText = answer.text).also(::persist)
+                }
+                return
+            }
             else -> Unit
         }
         val requestedSearch = answer.intent as? MusicIntent.Search
@@ -373,10 +404,10 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     assistantText = answer.text
                 ).also(::persist)
                 MusicIntent.Repeat -> current.copy(
-                    isRepeatEnabled = !current.isRepeatEnabled,
-                    assistantText = answer.text
+                    repeatMode = current.repeatMode.next(),
+                    assistantText = repeatModeMessage(current.repeatMode.next())
                 ).also {
-                    playback.setRepeat(it.isRepeatEnabled)
+                    playback.setRepeat(it.repeatMode)
                     persist(it)
                 }
                 MusicIntent.Shuffle -> current.copy(
@@ -406,7 +437,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 )
                 MusicIntent.OpenPlaylists,
                 is MusicIntent.CreatePlaylist,
-                is MusicIntent.PlayPlaylist -> current
+                is MusicIntent.PlayPlaylist,
+                MusicIntent.OpenQueue,
+                MusicIntent.ClearQueue,
+                is MusicIntent.QueueTrack,
+                is MusicIntent.AutoContinue -> current
                 MusicIntent.Similar,
                 MusicIntent.MyMix,
                 MusicIntent.ContinueListening,
@@ -466,8 +501,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     fun toggleRepeat() = _state.update {
-        it.copy(isRepeatEnabled = !it.isRepeatEnabled).also { next ->
-            playback.setRepeat(next.isRepeatEnabled)
+        it.copy(repeatMode = it.repeatMode.next()).also { next ->
+            playback.setRepeat(next.repeatMode)
             persist(next)
         }
     }
@@ -478,23 +513,137 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun openQueue() = _state.update { it.copy(isQueueOpen = true, isPlayerExpanded = false) }
     fun closeQueue() = _state.update { it.copy(isQueueOpen = false) }
 
-    fun removeFromQueue(track: Track) = _state.update { current ->
-        if (current.queue.size <= 1) current else {
-            val oldIndex = current.currentIndex
-            val removedIndex = current.queue.indexOfFirst { it.id == track.id }
-            val nextQueue = current.queue.filterNot { it.id == track.id }
-            val nextIndex = when {
-                removedIndex < 0 -> oldIndex
-                removedIndex < oldIndex -> oldIndex - 1
-                oldIndex >= nextQueue.size -> nextQueue.lastIndex
-                else -> oldIndex
-            }
-            current.copy(queue = nextQueue, currentIndex = nextIndex.coerceAtLeast(0)).also(::persist)
+    fun playNext(track: Track) = prepareQueueTrack(track) { ready ->
+        applyQueueEdit(QueueEditor.playNext(state.value.queue, state.value.currentIndex, ready), "Следующим: ${ready.title}")
+    }
+
+    fun addToQueue(track: Track) = prepareQueueTrack(track) { ready ->
+        applyQueueEdit(QueueEditor.addToEnd(state.value.queue, state.value.currentIndex, ready), "Добавлено в очередь: ${ready.title}")
+    }
+
+    fun playFromQueue(track: Track) {
+        val index = state.value.queue.indexOfFirst { it.id == track.id }
+        if (index < 0) return
+        _state.update {
+            it.copy(
+                currentIndex = index,
+                positionMs = 0L,
+                playbackDurationMs = track.durationMs ?: 0L,
+                isPlaying = true,
+                assistantText = "Играет ${track.title}"
+            ).also(::persist)
+        }
+        playback.playAt(index)
+    }
+
+    fun removeFromQueue(track: Track) = applyQueueEdit(
+        QueueEditor.remove(state.value.queue, state.value.currentIndex, track.id),
+        "Убрано из очереди: ${track.title}"
+    )
+
+    fun moveQueueTrack(from: Int, to: Int) = applyQueueEdit(
+        QueueEditor.move(state.value.queue, state.value.currentIndex, from, to),
+        "Порядок очереди изменён"
+    )
+
+    fun clearQueue() = applyQueueEdit(
+        QueueEditor.clear(state.value.queue, state.value.currentIndex),
+        "Очередь очищена"
+    )
+
+    fun toggleAutoContinue() = _state.update { current ->
+        current.copy(
+            autoContinueEnabled = !current.autoContinueEnabled,
+            assistantText = if (current.autoContinueEnabled) "Автопродолжение выключено."
+            else "Автопродолжение включено."
+        ).also(::persist)
+    }
+
+    fun restoreQueue(snapshot: AuraQueueSnapshot) {
+        if (snapshot.tracks.isEmpty()) return
+        archiveCurrentQueue("До восстановления")
+        val index = snapshot.currentIndex.coerceIn(0, snapshot.tracks.lastIndex)
+        val selected = snapshot.tracks[index]
+        _state.update {
+            it.copy(
+                queue = snapshot.tracks,
+                currentIndex = index,
+                positionMs = snapshot.positionMs,
+                playbackDurationMs = selected.durationMs ?: 0L,
+                isQueueOpen = false,
+                isPlayerExpanded = true,
+                isPlaying = false,
+                assistantText = "Очередь восстановлена: ${snapshot.title}"
+            ).also(::persist)
+        }
+        playback.restore(snapshot.tracks, selected, snapshot.positionMs)
+        hasPreparedMedia = true
+    }
+
+    fun deleteQueueSnapshot(snapshotId: String) {
+        viewModelScope.launch {
+            stateRepository.deleteQueueSnapshot(snapshotId)
+            refreshQueueHistory()
         }
     }
 
-    fun clearQueue() = _state.update { current ->
-        current.copy(queue = listOf(current.nowTrack), currentIndex = 0).also(::persist)
+    private fun prepareQueueTrack(track: Track, onReady: (Track) -> Unit) {
+        if (!track.streamUrl.isNullOrBlank()) {
+            onReady(track)
+            return
+        }
+        val candidate = candidatesByTrackId[track.id]
+        if (candidate == null) {
+            _state.update { it.copy(assistantText = "Сначала найди доступную версию ${track.title}.") }
+            return
+        }
+        _state.update {
+            it.copy(isLoading = true, searchPhase = SearchPhase.RESOLVING, assistantText = "Готовлю ${track.title} для очереди…")
+        }
+        viewModelScope.launch {
+            when (val result = resolveCandidate(candidate)) {
+                is ProviderResult.Success -> {
+                    val ready = unifiedTrackSession.canonicalize(candidate, result.value.track)
+                    _state.update { value -> value.copy(isLoading = false, searchPhase = SearchPhase.IDLE) }
+                    onReady(ready)
+                }
+                is ProviderResult.Failure -> _state.update {
+                    it.copy(
+                        isLoading = false,
+                        searchPhase = SearchPhase.ERROR,
+                        assistantText = friendlyFailure(result.reason, searching = false)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun applyQueueEdit(result: QueueEditResult, message: String) {
+        val current = state.value
+        if (result.tracks == current.queue && result.currentIndex == current.currentIndex) return
+        _state.update {
+            it.copy(
+                queue = result.tracks,
+                currentIndex = result.currentIndex,
+                assistantText = message
+            ).also(::persist)
+        }
+        playback.syncQueue(result.tracks)
+    }
+
+    private fun archiveCurrentQueue(reason: String) {
+        val current = state.value
+        val snapshot = playbackSnapshot(current)
+        val title = "$reason · ${current.nowTrack.title}"
+        viewModelScope.launch {
+            stateRepository.archiveQueue(snapshot, title)
+            refreshQueueHistory()
+        }
+    }
+
+    private suspend fun refreshQueueHistory() {
+        val history = stateRepository.loadQueueHistory()
+        _state.update { it.copy(queueHistory = history) }
     }
 
     fun openPlaylist(playlistId: String) = _state.update { it.copy(selectedPlaylistId = playlistId) }
@@ -570,6 +719,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             val selected = queue.firstOrNull { it.id == requestedId } ?: queue.first()
             val selectedIndex = queue.indexOfFirst { it.id == selected.id }.coerceAtLeast(0)
+            archiveCurrentQueue("До плейлиста")
             _state.update {
                 it.copy(
                     queue = queue,
@@ -684,6 +834,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 return@launch
             }
             val first = queue.first()
+            archiveCurrentQueue("До нового микса")
             _state.update {
                 it.copy(
                     queue = queue,
@@ -708,6 +859,54 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         viewModelScope.launch {
             val tracks = localProvider.load()
             _state.update { it.copy(localTracks = tracks) }
+        }
+    }
+
+    private fun searchAndQueue(query: String, playNext: Boolean) {
+        _state.update {
+            it.copy(
+                isLoading = true,
+                searchPhase = SearchPhase.SEARCHING,
+                assistantText = if (playNext) "Ищу трек, который сыграет следующим…" else "Ищу трек для очереди…"
+            )
+        }
+        viewModelScope.launch {
+            when (val search = searchCandidates(MusicSearchRequest(rawQuery = query, autoPlay = false))) {
+                is ProviderResult.Success -> {
+                    val candidate = search.value.firstOrNull()
+                    if (candidate == null) {
+                        _state.update { it.copy(isLoading = false, searchPhase = SearchPhase.ERROR, assistantText = "Трек не найден.") }
+                        return@launch
+                    }
+                    when (val resolved = resolveCandidate(candidate)) {
+                        is ProviderResult.Success -> {
+                            val track = unifiedTrackSession.canonicalize(candidate, resolved.value.track)
+                            _state.update { it.copy(isLoading = false, searchPhase = SearchPhase.IDLE) }
+                            val current = state.value
+                            val edit = if (playNext) {
+                                QueueEditor.playNext(current.queue, current.currentIndex, track)
+                            } else {
+                                QueueEditor.addToEnd(current.queue, current.currentIndex, track)
+                            }
+                            applyQueueEdit(edit, if (playNext) "Следующим: ${track.title}" else "Добавлено в очередь: ${track.title}")
+                        }
+                        is ProviderResult.Failure -> _state.update {
+                            it.copy(
+                                isLoading = false,
+                                searchPhase = SearchPhase.ERROR,
+                                assistantText = friendlyFailure(resolved.reason, searching = false)
+                            )
+                        }
+                    }
+                }
+                is ProviderResult.Failure -> _state.update {
+                    it.copy(
+                        isLoading = false,
+                        searchPhase = SearchPhase.ERROR,
+                        assistantText = friendlyFailure(search.reason, searching = true)
+                    )
+                }
+            }
         }
     }
 
@@ -872,6 +1071,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }.map { if (it.id == track.id) track else it }
         val index = playbackQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
         val history = listOf(track.id) + current.historyIds.filterNot { it == track.id }
+        if (current.queue.map(Track::id) != playbackQueue.map(Track::id)) {
+            archiveCurrentQueue("До нового поиска")
+        }
         _state.update {
             it.copy(
                 queue = playbackQueue,
@@ -1103,18 +1305,26 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     private fun persist(state: AuraUiState) {
-        persistenceQueue.trySend(
-            AuraPlaybackSnapshot(
-                queue = state.queue,
-                currentIndex = state.currentIndex,
-                positionMs = state.positionMs,
-                shuffleEnabled = state.isShuffleEnabled,
-                repeatEnabled = state.isRepeatEnabled,
-                likedIds = state.likedIds,
-                historyIds = state.historyIds,
-                recentSearches = state.recentSearches
-            )
-        )
+        persistenceQueue.trySend(playbackSnapshot(state))
+    }
+
+    private fun playbackSnapshot(state: AuraUiState) = AuraPlaybackSnapshot(
+        queue = state.queue,
+        currentIndex = state.currentIndex,
+        positionMs = state.positionMs,
+        shuffleEnabled = state.isShuffleEnabled,
+        repeatMode = state.repeatMode,
+        autoContinueEnabled = state.autoContinueEnabled,
+        likedIds = state.likedIds,
+        historyIds = state.historyIds,
+        recentSearches = state.recentSearches,
+        memoryTracks = state.memoryTracks
+    )
+
+    private fun repeatModeMessage(mode: AuraRepeatMode): String = when (mode) {
+        AuraRepeatMode.OFF -> "Повтор выключен."
+        AuraRepeatMode.ONE -> "Повторяю текущий трек."
+        AuraRepeatMode.ALL -> "Повторяю всю очередь."
     }
 
     private fun friendlyFailure(reason: ProviderFailureReason, searching: Boolean): String = when (reason) {

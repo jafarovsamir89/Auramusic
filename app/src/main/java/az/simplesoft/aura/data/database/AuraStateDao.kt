@@ -38,6 +38,12 @@ interface AuraStateDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPlaylistItems(values: List<PlaylistItemEntity>)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertQueueSnapshot(value: QueueSnapshotEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertQueueSnapshotItems(values: List<QueueSnapshotItemEntity>)
+
     @Query("DELETE FROM queue_items WHERE queueId = :queueId")
     suspend fun deleteQueueItems(queueId: String)
 
@@ -52,6 +58,12 @@ interface AuraStateDao {
 
     @Query("DELETE FROM playlists WHERE id = :playlistId")
     suspend fun deletePlaylistEntity(playlistId: String)
+
+    @Query("DELETE FROM queue_snapshot_items WHERE snapshotId = :snapshotId")
+    suspend fun deleteQueueSnapshotItems(snapshotId: String)
+
+    @Query("DELETE FROM queue_snapshots WHERE id = :snapshotId")
+    suspend fun deleteQueueSnapshotEntity(snapshotId: String)
 
     @Query("SELECT * FROM queues WHERE id = :queueId LIMIT 1")
     suspend fun loadQueue(queueId: String): QueueEntity?
@@ -83,6 +95,12 @@ interface AuraStateDao {
     @Query("SELECT * FROM playlist_items WHERE playlistId = :playlistId ORDER BY position")
     suspend fun loadPlaylistItems(playlistId: String): List<PlaylistItemEntity>
 
+    @Query("SELECT * FROM queue_snapshots ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun loadQueueSnapshots(limit: Int = 12): List<QueueSnapshotEntity>
+
+    @Query("SELECT * FROM queue_snapshot_items WHERE snapshotId = :snapshotId ORDER BY position")
+    suspend fun loadQueueSnapshotItems(snapshotId: String): List<QueueSnapshotItemEntity>
+
     @Transaction
     suspend fun replacePlaylist(
         playlist: PlaylistEntity,
@@ -99,6 +117,24 @@ interface AuraStateDao {
     suspend fun deletePlaylist(playlistId: String) {
         deletePlaylistItems(playlistId)
         deletePlaylistEntity(playlistId)
+    }
+
+    @Transaction
+    suspend fun replaceQueueSnapshot(
+        snapshot: QueueSnapshotEntity,
+        tracks: List<TrackEntity>,
+        items: List<QueueSnapshotItemEntity>
+    ) {
+        if (tracks.isNotEmpty()) upsertTracks(tracks)
+        upsertQueueSnapshot(snapshot)
+        deleteQueueSnapshotItems(snapshot.id)
+        if (items.isNotEmpty()) insertQueueSnapshotItems(items)
+    }
+
+    @Transaction
+    suspend fun deleteQueueSnapshot(snapshotId: String) {
+        deleteQueueSnapshotItems(snapshotId)
+        deleteQueueSnapshotEntity(snapshotId)
     }
 
     @Transaction

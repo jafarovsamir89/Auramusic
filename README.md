@@ -26,11 +26,15 @@ Signed `googlevideo` URLs are not stored in the queue or Room. They are resolved
 - 128 MiB LRU playback cache with URL-independent, format-aware keys.
 - Room persistence for metadata, favorites, history, queue state and preferences; transient stream URLs are excluded.
 - Local Room playlists with create, rename, delete, ordered items, queue import, shuffle and playback.
+- Queue 2.0 with play-next/append actions, drag reordering, Media3 synchronization, three repeat modes, controllable auto-continue and restorable Room history.
+- AURA Visual System 2.0: cinematic dark surfaces, accessible indigo/mint accents and 48 dp interaction targets.
 - Local-device music, radio, voice intents and automotive UI.
 
 The source review and the architecture derived from NewPipe, InnerTune, ViMusic and Harmony Music are recorded in [`docs/YOUTUBE_ARCHITECTURE_RESEARCH.md`](docs/YOUTUBE_ARCHITECTURE_RESEARCH.md).
 
 The product direction, priorities and explicit non-goals for AURA 2.0 are recorded in [`docs/AURA_V2_DIRECTION.md`](docs/AURA_V2_DIRECTION.md).
+
+The visual tokens and interaction principles are recorded in [`docs/AURA_DESIGN_SYSTEM.md`](docs/AURA_DESIGN_SYSTEM.md).
 
 ## Start on a clean computer
 

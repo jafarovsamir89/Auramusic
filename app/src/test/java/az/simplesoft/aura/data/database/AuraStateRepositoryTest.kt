@@ -2,6 +2,7 @@ package az.simplesoft.aura.data.database
 
 import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.Track
+import az.simplesoft.aura.domain.music.AuraRepeatMode
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -49,7 +50,8 @@ class AuraStateRepositoryTest {
                 currentIndex = 1,
                 positionMs = 42_000L,
                 shuffleEnabled = true,
-                repeatEnabled = false,
+                repeatMode = AuraRepeatMode.ALL,
+                autoContinueEnabled = false,
                 likedIds = setOf(online.id),
                 historyIds = listOf(local.id, online.id),
                 recentSearches = listOf("Linkin Park Numb")
@@ -61,6 +63,8 @@ class AuraStateRepositoryTest {
         assertEquals(1, restored.currentIndex)
         assertEquals(42_000L, restored.positionMs)
         assertTrue(restored.shuffleEnabled)
+        assertEquals(AuraRepeatMode.ALL, restored.repeatMode)
+        assertEquals(false, restored.autoContinueEnabled)
         assertNull(restored.queue[0].streamUrl)
         assertTrue(restored.queue[0].requestHeaders.isEmpty())
         assertEquals(local.streamUrl, restored.queue[1].streamUrl)
@@ -119,6 +123,36 @@ class AuraStateRepositoryTest {
         assertTrue(dao.playlistItems.isEmpty())
     }
 
+    @Test
+    fun queueHistoryCanBeArchivedRestoredAndDeleted() = runBlocking {
+        val dao = FakeAuraStateDao()
+        var clock = 9_000L
+        val repository = AuraStateRepository(dao) { clock++ }
+        val one = track("youtube:abcdefghijk", "youtube", "https://youtube.test/one", PlaybackType.DIRECT_STREAM, null)
+        val two = track("youtube:lmnopqrstuv", "youtube", "https://youtube.test/two", PlaybackType.DIRECT_STREAM, null)
+        val snapshot = AuraPlaybackSnapshot(
+            queue = listOf(one, two),
+            currentIndex = 1,
+            positionMs = 12_000L,
+            shuffleEnabled = false,
+            repeatMode = AuraRepeatMode.OFF,
+            likedIds = emptySet(),
+            historyIds = emptyList(),
+            recentSearches = emptyList()
+        )
+
+        val archived = repository.archiveQueue(snapshot, "Вечер")!!
+        val restored = repository.loadQueueHistory().single()
+        assertEquals(archived.id, restored.id)
+        assertEquals(listOf(one.id, two.id), restored.tracks.map(Track::id))
+        assertEquals("aura-youtube://play/abcdefghijk", restored.tracks.first().streamUrl)
+        assertEquals(1, restored.currentIndex)
+        assertEquals(12_000L, restored.positionMs)
+
+        repository.deleteQueueSnapshot(restored.id)
+        assertTrue(repository.loadQueueHistory().isEmpty())
+    }
+
     private fun track(
         id: String,
         sourceId: String,
@@ -150,6 +184,8 @@ private class FakeAuraStateDao : AuraStateDao {
     val recommendationEvents = linkedMapOf<String, RecommendationEventEntity>()
     val playlists = linkedMapOf<String, PlaylistEntity>()
     val playlistItems = mutableListOf<PlaylistItemEntity>()
+    val queueSnapshots = linkedMapOf<String, QueueSnapshotEntity>()
+    val queueSnapshotItems = mutableListOf<QueueSnapshotItemEntity>()
 
     override suspend fun upsertTracks(values: List<TrackEntity>) = values.forEach { tracks[it.id] = it }
     override suspend fun upsertQueue(value: QueueEntity) { queue = value }
@@ -163,6 +199,8 @@ private class FakeAuraStateDao : AuraStateDao {
     }
     override suspend fun upsertPlaylist(value: PlaylistEntity) { playlists[value.id] = value }
     override suspend fun insertPlaylistItems(values: List<PlaylistItemEntity>) { playlistItems += values }
+    override suspend fun upsertQueueSnapshot(value: QueueSnapshotEntity) { queueSnapshots[value.id] = value }
+    override suspend fun insertQueueSnapshotItems(values: List<QueueSnapshotItemEntity>) { queueSnapshotItems += values }
     override suspend fun deleteQueueItems(queueId: String) { queueItems.removeAll { it.queueId == queueId } }
     override suspend fun deleteFavorites() = favorites.clear()
     override suspend fun deleteHistory() = history.clear()
@@ -170,6 +208,10 @@ private class FakeAuraStateDao : AuraStateDao {
         playlistItems.removeAll { it.playlistId == playlistId }
     }
     override suspend fun deletePlaylistEntity(playlistId: String) { playlists.remove(playlistId) }
+    override suspend fun deleteQueueSnapshotItems(snapshotId: String) {
+        queueSnapshotItems.removeAll { it.snapshotId == snapshotId }
+    }
+    override suspend fun deleteQueueSnapshotEntity(snapshotId: String) { queueSnapshots.remove(snapshotId) }
     override suspend fun loadQueue(queueId: String): QueueEntity? = queue?.takeIf { it.id == queueId }
     override suspend fun loadQueueItems(queueId: String): List<QueueItemEntity> =
         queueItems.filter { it.queueId == queueId }.sortedBy(QueueItemEntity::position)
@@ -185,4 +227,8 @@ private class FakeAuraStateDao : AuraStateDao {
     override suspend fun loadPlaylists(): List<PlaylistEntity> = playlists.values.sortedByDescending(PlaylistEntity::updatedAt)
     override suspend fun loadPlaylistItems(playlistId: String): List<PlaylistItemEntity> =
         playlistItems.filter { it.playlistId == playlistId }.sortedBy(PlaylistItemEntity::position)
+    override suspend fun loadQueueSnapshots(limit: Int): List<QueueSnapshotEntity> =
+        queueSnapshots.values.sortedByDescending(QueueSnapshotEntity::createdAt).take(limit)
+    override suspend fun loadQueueSnapshotItems(snapshotId: String): List<QueueSnapshotItemEntity> =
+        queueSnapshotItems.filter { it.snapshotId == snapshotId }.sortedBy(QueueSnapshotItemEntity::position)
 }

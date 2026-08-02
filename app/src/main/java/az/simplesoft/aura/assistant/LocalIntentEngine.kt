@@ -10,6 +10,26 @@ class LocalIntentEngine {
         val text = raw.lowercase().trim()
         if (text.isBlank()) return reply(MusicIntent.Unknown, "Я тебя не расслышала.")
 
+        Regex("""(?:включи|поставь|сыграй)\s+следующим\s+(.+)""").find(text)?.let { match ->
+            val query = match.groupValues[1].trim()
+            return reply(MusicIntent.QueueTrack(query, playNext = true), "Добавляю следующим: $query.")
+        }
+        Regex("""добавь\s+(?:в\s+очередь\s+(.+)|(.+?)\s+в\s+очередь)""").find(text)?.let { match ->
+            val query = match.groupValues.drop(1).first(String::isNotBlank).trim()
+            return reply(MusicIntent.QueueTrack(query, playNext = false), "Добавляю в очередь: $query.")
+        }
+        if (containsAny(text, "открой очередь", "покажи очередь")) {
+            return reply(MusicIntent.OpenQueue, "Открываю очередь.")
+        }
+        if (containsAny(text, "очисти очередь", "очистить очередь")) {
+            return reply(MusicIntent.ClearQueue, "Очищаю очередь.")
+        }
+        if (containsAny(text, "выключи автопродолжение", "отключи автопродолжение")) {
+            return reply(MusicIntent.AutoContinue(false), "Автопродолжение выключено.")
+        }
+        if (containsAny(text, "включи автопродолжение")) {
+            return reply(MusicIntent.AutoContinue(true), "Автопродолжение включено.")
+        }
         Regex("""(?:включи|запусти|воспроизведи)\s+плейлист\s+(.+)""").find(text)?.let { match ->
             val name = match.groupValues[1].trim().replaceFirstChar { it.titlecase() }
             return reply(MusicIntent.PlayPlaylist(name), "Включаю плейлист $name.")

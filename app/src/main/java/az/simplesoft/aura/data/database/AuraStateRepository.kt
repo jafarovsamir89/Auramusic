@@ -3,6 +3,7 @@ package az.simplesoft.aura.data.database
 import android.content.Context
 import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.Track
+import az.simplesoft.aura.domain.music.AuraRepeatMode
 import java.util.UUID
 
 enum class RecommendationEventType { PLAY, SKIP, LIKE, UNLIKE }
@@ -15,12 +16,22 @@ data class AuraPlaylist(
     val updatedAt: Long
 )
 
+data class AuraQueueSnapshot(
+    val id: String,
+    val title: String,
+    val tracks: List<Track>,
+    val currentIndex: Int,
+    val positionMs: Long,
+    val createdAt: Long
+)
+
 data class AuraPlaybackSnapshot(
     val queue: List<Track>,
     val currentIndex: Int,
     val positionMs: Long,
     val shuffleEnabled: Boolean,
-    val repeatEnabled: Boolean,
+    val repeatMode: AuraRepeatMode,
+    val autoContinueEnabled: Boolean = true,
     val likedIds: Set<String>,
     val historyIds: List<String>,
     val recentSearches: List<String>,
@@ -63,7 +74,10 @@ class AuraStateRepository(
             currentIndex = queue?.currentIndex?.coerceIn(0, restoredQueue.lastIndex.coerceAtLeast(0)) ?: 0,
             positionMs = queue?.currentPositionMs?.coerceAtLeast(0L) ?: 0L,
             shuffleEnabled = queue?.shuffleEnabled ?: false,
-            repeatEnabled = queue?.repeatEnabled ?: false,
+            repeatMode = queue?.repeatMode?.let {
+                runCatching { AuraRepeatMode.valueOf(it) }.getOrNull()
+            } ?: if (queue?.repeatEnabled == true) AuraRepeatMode.ONE else AuraRepeatMode.OFF,
+            autoContinueEnabled = queue?.autoContinueEnabled ?: true,
             likedIds = favoriteIds.toSet(),
             historyIds = historyIds,
             recentSearches = dao.loadSearchHistory().map(SearchHistoryEntity::query),
@@ -90,7 +104,9 @@ class AuraStateRepository(
                 currentIndex = snapshot.currentIndex.coerceAtLeast(0),
                 currentPositionMs = snapshot.positionMs.coerceAtLeast(0L),
                 shuffleEnabled = snapshot.shuffleEnabled,
-                repeatEnabled = snapshot.repeatEnabled,
+                repeatEnabled = snapshot.repeatMode != AuraRepeatMode.OFF,
+                repeatMode = snapshot.repeatMode.name,
+                autoContinueEnabled = snapshot.autoContinueEnabled,
                 updatedAt = timestamp
             ),
             queueItems = queueItems,
@@ -132,6 +148,42 @@ class AuraStateRepository(
             .mapNotNull(RecommendationEventEntity::trackId)
             .toSet()
     }
+
+    suspend fun loadQueueHistory(): List<AuraQueueSnapshot> = dao.loadQueueSnapshots(HISTORY_LIMIT).map { entity ->
+        val items = dao.loadQueueSnapshotItems(entity.id)
+        val tracks = if (items.isEmpty()) emptyMap() else {
+            dao.loadTracks(items.map(QueueSnapshotItemEntity::trackId)).associateBy(TrackEntity::id)
+        }
+        AuraQueueSnapshot(
+            id = entity.id,
+            title = entity.title,
+            tracks = items.mapNotNull { tracks[it.trackId]?.toTrack() },
+            currentIndex = entity.currentIndex.coerceIn(0, items.lastIndex.coerceAtLeast(0)),
+            positionMs = entity.currentPositionMs.coerceAtLeast(0L),
+            createdAt = entity.createdAt
+        )
+    }
+
+    suspend fun archiveQueue(snapshot: AuraPlaybackSnapshot, title: String): AuraQueueSnapshot? {
+        val tracks = snapshot.queue.filterNot { it.id == "aura-placeholder" }.distinctBy(Track::id)
+        if (tracks.size < 2) return null
+        val previous = loadQueueHistory().firstOrNull()
+        if (previous?.tracks?.map(Track::id) == tracks.map(Track::id)) return previous
+        val timestamp = now()
+        val id = UUID.randomUUID().toString()
+        val currentIndex = snapshot.currentIndex.coerceIn(0, tracks.lastIndex)
+        dao.replaceQueueSnapshot(
+            snapshot = QueueSnapshotEntity(id, title.take(80), currentIndex, snapshot.positionMs, timestamp),
+            tracks = tracks.map { it.toEntity(timestamp) },
+            items = tracks.mapIndexed { index, track -> QueueSnapshotItemEntity(id, index, track.id) }
+        )
+        dao.loadQueueSnapshots(HISTORY_LIMIT + 20).drop(HISTORY_LIMIT).forEach {
+            dao.deleteQueueSnapshot(it.id)
+        }
+        return AuraQueueSnapshot(id, title.take(80), tracks, currentIndex, snapshot.positionMs, timestamp)
+    }
+
+    suspend fun deleteQueueSnapshot(snapshotId: String) = dao.deleteQueueSnapshot(snapshotId)
 
     suspend fun loadPlaylists(): List<AuraPlaylist> = dao.loadPlaylists().map { entity ->
         val items = dao.loadPlaylistItems(entity.id)
@@ -221,6 +273,8 @@ class AuraStateRepository(
 
     companion object {
         const val LAST_QUEUE_ID = "last_session"
+        const val HISTORY_LIMIT = 10
+        val YOUTUBE_VIDEO_ID = Regex("[A-Za-z0-9_-]{11}")
     }
 }
 
@@ -250,7 +304,12 @@ internal fun TrackEntity.toTrack(): Track {
         sourceId = sourceId,
         sourcePageUrl = sourcePageUrl,
         playbackType = type,
-        streamUrl = sourcePageUrl.takeIf { type == PlaybackType.LOCAL && it.startsWith("content://") },
+        streamUrl = when {
+            type == PlaybackType.LOCAL && sourcePageUrl.startsWith("content://") -> sourcePageUrl
+            sourceId == "youtube" -> id.removePrefix("youtube:").takeIf(AuraStateRepository.YOUTUBE_VIDEO_ID::matches)
+                ?.let { "aura-youtube://play/$it" }
+            else -> null
+        },
         requestHeaders = emptyMap(),
         isPlayable = true,
         popularity = popularity,
