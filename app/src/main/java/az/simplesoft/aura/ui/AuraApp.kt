@@ -144,6 +144,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import az.simplesoft.aura.assistant.OfflineSpeechRecognizer
+import az.simplesoft.aura.assistant.AssistantRole
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.RadioCountry
@@ -182,7 +183,7 @@ fun AuraApp(
             context = context,
             onText = {
                 vm.setQuery(it)
-                vm.submit(it)
+                vm.submitVoice(it)
             },
             onState = vm::setListening
         )
@@ -313,13 +314,13 @@ private fun MainShell(
                 AuraDestination.SEARCH -> SearchScreen(
                     state = state,
                     onQuery = vm::setQuery,
-                    onSubmit = vm::submit,
+                    onSubmit = vm::search,
                     onVoice = onVoice,
                     onTrack = vm::play,
                     onPlayNext = vm::playNext,
                     onAddQueue = vm::addToQueue,
                     onAddPlaylist = onAddToPlaylist,
-                    onRecent = vm::submit
+                    onRecent = vm::search
                 )
                 AuraDestination.RADIO -> RadioScreen(
                     state = state,
@@ -1199,67 +1200,99 @@ private fun AssistantScreen(
     onVoice: () -> Unit,
     onCommand: (String) -> Unit
 ) {
-    val suggestions = state.personalMix.ifEmpty { state.searchResults }.ifEmpty { state.queue }
-        .filterNot { it.id == DemoCatalog.tracks.first().id }
-        .take(4)
+    var draft by rememberSaveable { mutableStateOf("") }
+    val listState = rememberLazyListState()
+    LaunchedEffect(state.assistantMessages.size, state.isAssistantThinking) {
+        val extra = if (state.isAssistantThinking) 1 else 0
+        val target = state.assistantMessages.size + extra - 1
+        if (target >= 0) listState.animateScrollToItem(target)
+    }
     Column(
-        Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 170.dp),
+        Modifier.fillMaxSize().statusBarsPadding().imePadding().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 162.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Spacer(Modifier.size(48.dp))
-            Text("A U R A", Modifier.weight(1f), textAlign = TextAlign.Center, letterSpacing = 3.sp, fontSize = 14.sp)
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("A U R A", textAlign = TextAlign.Center, letterSpacing = 3.sp, fontSize = 14.sp)
+                Text(
+                    if (state.isCloudAiConfigured) "DeepSeek · память включена" else "Локальный режим · ожидается AI-ключ",
+                    color = if (state.isCloudAiConfigured) AuraMint else SecondaryText,
+                    fontSize = 9.sp
+                )
+            }
             IconButton(onClick = onVoice, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Rounded.GraphicEq, "Голос", tint = ReferenceMagenta)
             }
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(12.dp))
         LazyColumn(
             Modifier.fillMaxWidth().weight(1f),
+            state = listState,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Surface(
-                        onClick = { onCommand("Включи что-нибудь похожее на ${state.nowTrack.title}") },
-                        shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
-                        color = ReferencePurple
-                    ) {
-                        Text(
-                            if (state.nowTrack.id == DemoCatalog.tracks.first().id) "Включи что-нибудь для меня"
-                            else "Включи что-нибудь похожее на ${state.nowTrack.title}",
-                            Modifier.padding(horizontal = 15.dp, vertical = 12.dp),
-                            fontSize = 13.sp
-                        )
+            if (state.assistantMessages.isEmpty()) {
+                item(key = "welcome") {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                        MiniAuraFace(34.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp),
+                            color = Color(0xFF202631),
+                            modifier = Modifier.weight(1f, fill = false)
+                        ) {
+                            Text(state.assistantText, Modifier.padding(horizontal = 14.dp, vertical = 11.dp), fontSize = 13.sp)
+                        }
                     }
                 }
             }
-            item {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                    MiniAuraFace(34.dp)
-                    Spacer(Modifier.width(10.dp))
-                    Surface(
-                        shape = RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp),
-                        color = Color(0xFF202631),
-                        modifier = Modifier.weight(1f, fill = false)
-                    ) {
-                        Text(
-                            if (suggestions.isEmpty()) state.assistantText
-                            else "Конечно. Я подобрала несколько треков, которые тебе понравятся.",
-                            Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
-                            color = PrimaryText,
-                            fontSize = 13.sp
-                        )
+            items(state.assistantMessages, key = { it.id }) { message ->
+                if (message.role == AssistantRole.USER) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
+                            color = ReferencePurple,
+                            modifier = Modifier.fillMaxWidth(.78f)
+                        ) {
+                            Text(message.text, Modifier.padding(horizontal = 15.dp, vertical = 12.dp), fontSize = 13.sp)
+                        }
+                    }
+                } else {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                        MiniAuraFace(34.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp),
+                            color = Color(0xFF202631),
+                            modifier = Modifier.fillMaxWidth(.82f)
+                        ) {
+                            Text(message.text, Modifier.padding(horizontal = 14.dp, vertical = 11.dp), fontSize = 13.sp)
+                        }
                     }
                 }
             }
-            if (suggestions.isNotEmpty()) {
-                item {
+            if (state.isAssistantThinking) {
+                item(key = "thinking") {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        MiniAuraFace(34.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Surface(shape = RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp), color = Color(0xFF202631)) {
+                            Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = AuraAccentSoft)
+                                Spacer(Modifier.width(8.dp))
+                                Text(state.assistantText, color = SecondaryText, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+            if (state.searchResults.isNotEmpty() && state.assistantMessages.isNotEmpty()) {
+                item(key = "suggestions") {
                     Column(
                         Modifier.padding(start = 44.dp).fillMaxWidth().clip(RoundedCornerShape(18.dp))
                             .background(Color(0xFF171D27)).padding(horizontal = 10.dp, vertical = 4.dp)
                     ) {
-                        suggestions.forEach { track ->
+                        state.searchResults.take(3).forEach { track ->
                             Row(
                                 Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                                     .clickable { onCommand("Включи ${track.artist} ${track.title}") }
@@ -1272,33 +1305,55 @@ private fun AssistantScreen(
                                     Text(track.title, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     Text(track.artist, color = SecondaryText, fontSize = 11.sp, maxLines = 1)
                                 }
-                                Box(Modifier.size(32.dp).background(Color.White.copy(.12f), CircleShape), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Rounded.PlayArrow, "Включить", Modifier.size(20.dp))
-                                }
+                                Icon(Icons.Rounded.PlayArrow, "Включить", Modifier.size(22.dp))
                             }
                         }
                     }
                 }
             }
         }
-        Spacer(Modifier.height(12.dp))
-        Box(
-            Modifier.fillMaxWidth().height(112.dp).clip(RoundedCornerShape(28.dp))
-                .background(
-                    Brush.radialGradient(
-                        listOf(ReferencePurple.copy(.22f), Color(0xFF0B1020)),
-                        center = Offset(500f, 0f),
-                        radius = 650f
-                    )
-                ).border(1.dp, ReferencePurple.copy(.25f), RoundedCornerShape(28.dp))
-                .clickable(onClick = onVoice),
-            contentAlignment = Alignment.Center
+        Spacer(Modifier.height(10.dp))
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color(0xFF171D27))
+                .border(1.dp, Color.White.copy(.08f), RoundedCornerShape(22.dp)).padding(start = 16.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                MiniAuraFace(48.dp)
-                Spacer(Modifier.height(6.dp))
-                Text(if (state.isListening) "Слушаю тебя…" else "Нажми и говори", color = SecondaryText, fontSize = 12.sp)
+            BasicTextField(
+                value = draft,
+                onValueChange = { draft = it.take(700) },
+                modifier = Modifier.weight(1f).padding(vertical = 14.dp),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = PrimaryText),
+                cursorBrush = SolidColor(AuraAccentSoft),
+                decorationBox = { field ->
+                    if (draft.isBlank()) Text("Скажи или напиши AURA…", color = SecondaryText, fontSize = 13.sp)
+                    field()
+                }
+            )
+            IconButton(
+                onClick = {
+                    draft.trim().takeIf(String::isNotBlank)?.let {
+                        onCommand(it)
+                        draft = ""
+                    }
+                }
+            ) {
+                Icon(Icons.Rounded.ArrowUpward, "Отправить", tint = if (draft.isBlank()) SecondaryText else AuraAccentSoft)
             }
+            IconButton(onClick = onVoice) {
+                Icon(Icons.Rounded.Mic, "Голос", tint = if (state.isListening) ReferenceMagenta else PrimaryText)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth().height(54.dp).clip(RoundedCornerShape(22.dp))
+                .background(Brush.horizontalGradient(listOf(ReferencePurple.copy(.24f), ReferenceBlue.copy(.12f))))
+                .border(1.dp, ReferencePurple.copy(.25f), RoundedCornerShape(22.dp)).clickable(onClick = onVoice),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            MiniAuraFace(34.dp)
+            Spacer(Modifier.width(10.dp))
+            Text(if (state.isListening) "Слушаю тебя…" else "Нажми и говори", color = PrimaryText, fontSize = 12.sp)
         }
     }
 }

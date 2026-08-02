@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,6 +7,16 @@ plugins {
     id("com.google.devtools.ksp")
     id("androidx.room")
 }
+
+val auraLocalProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
+fun auraConfig(name: String, fallback: String = ""): String =
+    providers.environmentVariable(name).orNull ?: auraLocalProperties.getProperty(name, fallback)
+
+fun String.asBuildConfigString(): String = "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 room {
     schemaDirectory("$projectDir/schemas")
@@ -23,8 +35,14 @@ android {
         applicationId = "az.simplesoft.aura"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
+        buildConfigField("String", "OPENROUTER_API_KEY", auraConfig("OPENROUTER_API_KEY").asBuildConfigString())
+        buildConfigField(
+            "String",
+            "OPENROUTER_MODEL",
+            auraConfig("OPENROUTER_MODEL", "~deepseek/deepseek-v4-flash-latest").asBuildConfigString()
+        )
     }
 
     buildFeatures {

@@ -3,12 +3,23 @@ package az.simplesoft.aura.ui
 import android.app.Application
 import android.content.Context
 import android.media.AudioManager
+import az.simplesoft.aura.BuildConfig
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.content.edit
+import az.simplesoft.aura.assistant.AssistantMessage
+import az.simplesoft.aura.assistant.AssistantReply
+import az.simplesoft.aura.assistant.AssistantRole
+import az.simplesoft.aura.assistant.AssistantSource
+import az.simplesoft.aura.assistant.AuraAiContext
+import az.simplesoft.aura.assistant.AuraAiEngine
+import az.simplesoft.aura.assistant.AuraSpeechSynthesizer
+import az.simplesoft.aura.assistant.CompactAssistantMemory
 import az.simplesoft.aura.assistant.LocalIntentEngine
 import az.simplesoft.aura.assistant.MusicIntent
 import az.simplesoft.aura.assistant.Mood
+import az.simplesoft.aura.assistant.OpenRouterAssistantAdapter
+import az.simplesoft.aura.assistant.RoomAssistantMemoryPersistence
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.LocalMusicProvider
 import az.simplesoft.aura.data.PlaybackType
@@ -87,7 +98,11 @@ data class AuraUiState(
     val playlists: List<AuraPlaylist> = emptyList(),
     val queueHistory: List<AuraQueueSnapshot> = emptyList(),
     val selectedPlaylistId: String? = null,
-    val assistantText: String = "Назови песню, которую хочешь услышать",
+    val assistantText: String = "Привет! Я AURA. Что будем слушать?",
+    val assistantMessages: List<AssistantMessage> = emptyList(),
+    val isAssistantThinking: Boolean = false,
+    val assistantSource: AssistantSource = AssistantSource.LOCAL,
+    val isCloudAiConfigured: Boolean = BuildConfig.OPENROUTER_API_KEY.isNotBlank(),
     val isListening: Boolean = false,
     val isLoading: Boolean = false,
     val isBuffering: Boolean = false,
@@ -126,6 +141,16 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val radioProvider = RadioBrowserProvider()
     private val preferences = application.getSharedPreferences("aura_state", Context.MODE_PRIVATE)
     private val stateRepository = AuraStateRepository(application)
+    private val assistantMemory = CompactAssistantMemory(RoomAssistantMemoryPersistence(stateRepository))
+    private val auraAi = AuraAiEngine(
+        local = intentEngine,
+        remote = OpenRouterAssistantAdapter(
+            apiKey = BuildConfig.OPENROUTER_API_KEY,
+            model = BuildConfig.OPENROUTER_MODEL
+        ),
+        memory = assistantMemory
+    )
+    private val speech = AuraSpeechSynthesizer(application)
     private val audio = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val playback = PlaybackConnection(application, this)
     private val providerManager = ProviderManager(
@@ -160,6 +185,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private var isExtendingQueue = false
     private var stateRestored = false
     private var pendingCommand: String? = null
+    private var pendingCommandShouldSpeak = false
 
     private val initialLiked = preferences.getStringSet("liked", emptySet()).orEmpty().toSet()
     private val initialHistory = preferences.getString("history", "")
@@ -182,6 +208,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 val skippedTrackIds = stateRepository.skippedTrackIds()
                 val playlists = stateRepository.loadPlaylists()
                 val queueHistory = stateRepository.loadQueueHistory()
+                val assistantMessages = auraAi.memorySnapshot().recentMessages
                 _state.update { current ->
                     current.copy(
                         queue = restored.queue.ifEmpty { current.queue },
@@ -197,7 +224,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         recentSearches = restored.recentSearches,
                         skippedTrackIds = skippedTrackIds,
                         playlists = playlists,
-                        queueHistory = queueHistory
+                        queueHistory = queueHistory,
+                        assistantMessages = assistantMessages
                     )
                 }
                 playback.setShuffle(restored.shuffleEnabled)
@@ -222,7 +250,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 }
             }
             stateRestored = true
-            pendingCommand?.also { pendingCommand = null }?.let(::submit)
+            pendingCommand?.also { pendingCommand = null }?.let { submitAssistant(it, pendingCommandShouldSpeak) }
         }
         viewModelScope.launch {
             for (snapshot in persistenceQueue) runCatching { stateRepository.save(snapshot) }
@@ -332,15 +360,89 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun setListening(value: Boolean) = _state.update { it.copy(isListening = value) }
     fun setQuery(value: String) = _state.update { it.copy(query = value) }
 
-    fun submit(text: String = state.value.query) {
+    fun submit(text: String = state.value.query) = submitAssistant(text, speakResponse = false)
+
+    fun submitVoice(text: String) = submitAssistant(text, speakResponse = true)
+
+    fun search(text: String = state.value.query) {
+        val query = text.trim()
+        if (query.isBlank()) return
+        if (!stateRestored) {
+            _state.update { it.copy(assistantText = "Восстанавливаю твою музыку…") }
+            return
+        }
+        executeAssistantReply(
+            AssistantReply(
+                intent = MusicIntent.Search(query),
+                text = "Ищу песню: $query"
+            )
+        )
+    }
+
+    private fun submitAssistant(text: String, speakResponse: Boolean) {
         val input = text.trim()
         if (input.isBlank()) return
         if (!stateRestored) {
             pendingCommand = input
+            pendingCommandShouldSpeak = speakResponse
             _state.update { it.copy(assistantText = "Восстанавливаю твою музыку…") }
             return
         }
-        val answer = intentEngine.understand(input)
+        val language = az.simplesoft.aura.assistant.AssistantLanguage.detect(input)
+        val timestamp = System.currentTimeMillis()
+        _state.update { current ->
+            current.copy(
+                query = "",
+                destination = AuraDestination.ASSISTANT,
+                assistantText = when (language) {
+                    az.simplesoft.aura.assistant.AssistantLanguage.RUSSIAN -> "Думаю…"
+                    az.simplesoft.aura.assistant.AssistantLanguage.AZERBAIJANI -> "Düşünürəm…"
+                    az.simplesoft.aura.assistant.AssistantLanguage.ENGLISH -> "Thinking…"
+                },
+                isAssistantThinking = true,
+                assistantMessages = (current.assistantMessages + AssistantMessage(
+                    id = "ui:user:$timestamp",
+                    role = AssistantRole.USER,
+                    text = input.take(320),
+                    language = language,
+                    createdAt = timestamp
+                )).takeLast(20)
+            )
+        }
+        viewModelScope.launch {
+            val current = state.value
+            val track = current.nowTrack.takeIf { it.id != DemoCatalog.tracks.first().id }
+            val answer = auraAi.respond(
+                input = input,
+                context = AuraAiContext(
+                    currentTrack = track?.title,
+                    currentArtist = track?.artist,
+                    isPlaying = current.isPlaying,
+                    hourOfDay = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
+                    carMode = current.isCarMode
+                )
+            )
+            val replyTimestamp = System.currentTimeMillis()
+            _state.update { value ->
+                value.copy(
+                    assistantText = answer.text,
+                    isAssistantThinking = false,
+                    assistantSource = answer.source,
+                    assistantMessages = (value.assistantMessages + AssistantMessage(
+                        id = "ui:aura:$replyTimestamp",
+                        role = AssistantRole.AURA,
+                        text = answer.text,
+                        language = answer.language,
+                        createdAt = replyTimestamp
+                    )).takeLast(20)
+                )
+            }
+            if (speakResponse) speech.speak(answer.text, answer.language)
+            executeAssistantReply(answer)
+        }
+    }
+
+    private fun executeAssistantReply(answer: AssistantReply) {
         when (val intent = answer.intent) {
             MusicIntent.OpenPlaylists -> {
                 _state.update {
@@ -413,7 +515,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
         val requestedSearch = answer.intent as? MusicIntent.Search
         if (requestedSearch != null) {
-            requestedSearch.mood?.let {
+            requestedSearch.mood?.takeIf {
+                requestedSearch.artist.isNullOrBlank() && requestedSearch.query.isGenericMoodQuery(it)
+            }?.let {
                 playMoodMix(it)
                 return
             }
@@ -1406,6 +1510,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     override fun onCleared() {
+        speech.shutdown()
         playback.release()
         super.onCleared()
     }
@@ -1444,6 +1549,15 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     private fun durationCompatible(left: Long?, right: Long?): Boolean =
         left == null || right == null || abs(left - right) <= 10_000L
+
+    private fun String.isGenericMoodQuery(mood: Mood): Boolean {
+        val withoutMoodWords = lowercase()
+            .replace(Regex("спокойн\\p{L}*|расслаб\\p{L}*|релакс\\p{L}*|дорог\\p{L}*|поездк\\p{L}*|энерг\\p{L}*|трениров\\p{L}*|груст\\p{L}*|печал\\p{L}*|вес[её]л\\p{L}*|радост\\p{L}*|ночн\\p{L}*|вечерн\\p{L}*|calm|relax|drive|focus|energy|sad|happy|night|sakit|kədərli|şad|gecə"), " ")
+            .replace(Regex("музык\\p{L}*|песн\\p{L}*|трек\\p{L}*|music|song|track|musiqi|mahnı"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        return withoutMoodWords.isBlank() || trim().equals(mood.title, ignoreCase = true)
+    }
 
     companion object {
         private const val AUTO_PLAY_CONFIDENCE = 0.72

@@ -149,6 +149,12 @@ class AuraStateRepository(
             .toSet()
     }
 
+    suspend fun loadPreference(key: String): String? = dao.preference(key)
+
+    suspend fun savePreference(key: String, value: String) {
+        dao.upsertPreference(UserPreferenceEntity(key, value, now()))
+    }
+
     suspend fun loadQueueHistory(): List<AuraQueueSnapshot> = dao.loadQueueSnapshots(HISTORY_LIMIT).map { entity ->
         val items = dao.loadQueueSnapshotItems(entity.id)
         val tracks = if (items.isEmpty()) emptyMap() else {

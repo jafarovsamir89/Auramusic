@@ -35,6 +35,48 @@ sealed interface MusicIntent {
     data object Unknown : MusicIntent
 }
 
+enum class AssistantLanguage(val tag: String) {
+    RUSSIAN("ru-RU"),
+    AZERBAIJANI("az-AZ"),
+    ENGLISH("en-US");
+
+    companion object {
+        fun detect(text: String): AssistantLanguage {
+            val normalized = text.lowercase()
+            return when {
+                normalized.any { it in 'ә'..'ә' || it in "çğıöşü" } ||
+                    listOf("salam", "necəsən", "mahnı", "musiqi", "zəhmət").any(normalized::contains) -> AZERBAIJANI
+                normalized.any { it in 'а'..'я' || it == 'ё' } -> RUSSIAN
+                else -> ENGLISH
+            }
+        }
+    }
+}
+
+enum class AssistantRoute {
+    LOCAL_ACTION,
+    LOCAL_CONVERSATION,
+    NEEDS_REASONING
+}
+
+enum class AssistantRole { USER, AURA }
+
+enum class AssistantSource { LOCAL, DEEPSEEK, FALLBACK }
+
+data class AssistantMessage(
+    val id: String,
+    val role: AssistantRole,
+    val text: String,
+    val language: AssistantLanguage,
+    val createdAt: Long
+)
+
+data class MemoryInsight(
+    val category: String,
+    val key: String,
+    val value: String
+)
+
 enum class Mood(val title: String) {
     CALM("спокойное"),
     DRIVE("для поездки"),
@@ -47,5 +89,13 @@ enum class Mood(val title: String) {
 
 data class AssistantReply(
     val intent: MusicIntent,
-    val text: String
+    val text: String,
+    val language: AssistantLanguage = AssistantLanguage.RUSSIAN,
+    val route: AssistantRoute = if (intent == MusicIntent.Unknown) {
+        AssistantRoute.NEEDS_REASONING
+    } else {
+        AssistantRoute.LOCAL_ACTION
+    },
+    val memoryInsights: List<MemoryInsight> = emptyList(),
+    val source: AssistantSource = AssistantSource.LOCAL
 )

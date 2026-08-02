@@ -1,0 +1,6 @@
+# Android Studio normally writes sdk.dir automatically.
+sdk.dir=C\:\\Users\\YOU\\AppData\\Local\\Android\\Sdk
+
+# Optional personal-development configuration. Never commit a real key.
+OPENROUTER_API_KEY=
+OPENROUTER_MODEL=~deepseek/deepseek-v4-flash-latest

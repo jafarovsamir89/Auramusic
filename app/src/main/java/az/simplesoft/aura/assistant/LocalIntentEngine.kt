@@ -1,129 +1,204 @@
 package az.simplesoft.aura.assistant
 
 /**
- * Полностью локальный движок команд.
- * Не отправляет текст на сервер и не расходует токены.
+ * Fast, private first-pass understanding. Only explicit music and device commands become actions.
+ * Ambiguous phrases are deliberately returned as NEEDS_REASONING and never become a search.
  */
 class LocalIntentEngine {
 
     fun understand(raw: String): AssistantReply {
-        val text = raw.lowercase().trim()
-        if (text.isBlank()) return reply(MusicIntent.Unknown, "Я тебя не расслышала.")
+        val original = raw.trim()
+        val text = original.lowercase().replace(Regex("\\s+"), " ")
+        val language = AssistantLanguage.detect(text)
+        if (text.isBlank()) return conversation(language, phrase(language, "Я тебя не расслышала.", "Səni eşidə bilmədim.", "I didn't catch that."))
 
-        Regex("""(?:включи|поставь|сыграй)\s+следующим\s+(.+)""").find(text)?.let { match ->
-            val query = match.groupValues[1].trim()
-            return reply(MusicIntent.QueueTrack(query, playNext = true), "Добавляю следующим: $query.")
-        }
-        Regex("""добавь\s+(?:в\s+очередь\s+(.+)|(.+?)\s+в\s+очередь)""").find(text)?.let { match ->
-            val query = match.groupValues.drop(1).first(String::isNotBlank).trim()
-            return reply(MusicIntent.QueueTrack(query, playNext = false), "Добавляю в очередь: $query.")
-        }
-        if (containsAny(text, "открой очередь", "покажи очередь") || text == "очередь") {
-            return reply(MusicIntent.OpenQueue, "Открываю очередь.")
-        }
-        if (containsAny(text, "открой радио", "покажи радио", "радиостанции", "радио по странам") || text == "радио") {
-            return reply(MusicIntent.OpenRadio, "Открываю радио по странам.")
-        }
-        if (containsAny(text, "очисти очередь", "очистить очередь")) {
-            return reply(MusicIntent.ClearQueue, "Очищаю очередь.")
-        }
-        if (containsAny(text, "выключи автопродолжение", "отключи автопродолжение")) {
-            return reply(MusicIntent.AutoContinue(false), "Автопродолжение выключено.")
-        }
-        if (containsAny(text, "включи автопродолжение")) {
-            return reply(MusicIntent.AutoContinue(true), "Автопродолжение включено.")
-        }
-        Regex("""(?:включи|запусти|воспроизведи)\s+плейлист\s+(.+)""").find(text)?.let { match ->
-            val name = match.groupValues[1].trim().replaceFirstChar { it.titlecase() }
-            return reply(MusicIntent.PlayPlaylist(name), "Включаю плейлист $name.")
-        }
-        Regex("""(?:перемешай|перемешать)\s+плейлист\s+(.+)""").find(text)?.let { match ->
-            val name = match.groupValues[1].trim().replaceFirstChar { it.titlecase() }
-            return reply(MusicIntent.PlayPlaylist(name, shuffled = true), "Перемешиваю плейлист $name.")
-        }
-        if (containsAny(text, "открой плейлисты", "покажи плейлисты", "мои плейлисты") || text == "плейлисты") {
-            return reply(MusicIntent.OpenPlaylists, "Открываю твои плейлисты.")
-        }
-        if (containsAny(text, "сохрани очередь", "сохранить очередь")) {
-            val name = text.substringAfter("плейлист", "Сохранённая очередь").trim()
-                .ifBlank { "Сохранённая очередь" }
-                .replaceFirstChar { it.titlecase() }
-            return reply(MusicIntent.CreatePlaylist(name, includeQueue = true), "Сохраняю очередь в плейлист.")
-        }
-        Regex("""(?:создай|создать)\s+плейлист\s*(.*)""").find(text)?.let { match ->
-            val name = match.groupValues[1].trim().ifBlank { "Новый плейлист" }
-                .replaceFirstChar { it.titlecase() }
-            return reply(MusicIntent.CreatePlaylist(name, includeQueue = false), "Создаю плейлист $name.")
-        }
+        explicitQueueIntent(text, language)?.let { return it }
+        explicitLibraryIntent(text, language)?.let { return it }
+        localPlaybackIntent(text, language)?.let { return it }
+        localConversation(text, language)?.let { return it }
+        explicitMusicSearch(text, language)?.let { return it }
 
-        when {
-            containsAny(text, "мой микс", "включи мой микс", "музыка для меня") ->
-                return reply(MusicIntent.MyMix, "Собираю твой микс.")
-            containsAny(text, "продолжить прослушивание", "продолжи слушать", "продолжи мою музыку") ->
-                return reply(MusicIntent.ContinueListening, "Продолжаю с того, что тебе нравится.")
-            containsAny(text, "пауза", "останови", "стоп") ->
-                return reply(MusicIntent.Pause, "Ставлю на паузу.")
-            containsAny(text, "продолжи", "играй дальше", "воспроизведи") ->
-                return reply(MusicIntent.Play, "Продолжаю.")
-            containsAny(text, "следующая", "следующий трек", "переключи") ->
-                return reply(MusicIntent.Next, "Следующий трек.")
-            containsAny(text, "предыдущая", "назад") ->
-                return reply(MusicIntent.Previous, "Возвращаю предыдущий трек.")
-            containsAny(text, "громче", "прибавь") ->
-                return reply(MusicIntent.Louder, "Делаю громче.")
-            containsAny(text, "тише", "убавь") ->
-                return reply(MusicIntent.Quieter, "Делаю тише.")
-            containsAny(text, "без звука", "выключи звук", "mute") ->
-                return reply(MusicIntent.Mute, "Выключаю звук.")
-            containsAny(text, "убери из любимых", "удали из любимых", "не нравится") ->
-                return reply(MusicIntent.Unlike, "Убрала из любимых.")
-            containsAny(text, "нравится", "в любимые", "лайк") ->
-                return reply(MusicIntent.Like, "Добавила в любимые.")
-            containsAny(text, "повтор", "повторяй") ->
-                return reply(MusicIntent.Repeat, "Повтор включён.")
-            containsAny(text, "случайный порядок", "перемешай", "шаффл") ->
-                return reply(MusicIntent.Shuffle, "Перемешиваю очередь.")
-            containsAny(text, "что сейчас играет", "что играет") ->
-                return reply(MusicIntent.NowPlaying, "Сейчас играет.")
-            containsAny(text, "открой историю", "покажи историю") ->
-                return reply(MusicIntent.OpenHistory, "Открываю историю.")
-            containsAny(text, "похожее", "ещё такое", "похожие песни") ->
-                return reply(MusicIntent.Similar, "Подбираю похожее.")
-            containsAny(text, "режим машины", "автомобильный режим", "я за рулём") ->
-                return reply(MusicIntent.CarMode, "Включаю автомобильный режим.")
-        }
-
-        val mood = when {
-            containsAny(text, "спокойн", "расслаб", "релакс") -> Mood.CALM
-            containsAny(text, "дорог", "поездк", "за рул") -> Mood.DRIVE
-            containsAny(text, "работ", "концентрац", "фокус") -> Mood.FOCUS
-            containsAny(text, "энерг", "трениров", "бодр") -> Mood.ENERGY
-            containsAny(text, "ноч", "вечер") -> Mood.NIGHT
-            containsAny(text, "груст", "печаль") -> Mood.SAD
-            containsAny(text, "весёл", "радост", "позитив") -> Mood.HAPPY
-            else -> null
-        }
-
-        val decade = Regex("""(19|20)\d0""").find(text)?.value?.toIntOrNull()
-        val cleaned = text
-            .replace(Regex("""\b(включи|поставь|найди|сыграй|музыку|песни|песню|трек|треки)\b"""), "")
-            .replace(Regex("""\s+"""), " ")
-            .trim()
-
-        if (containsAny(text, "включи", "поставь", "найди", "сыграй") || mood != null) {
-            val query = cleaned.ifBlank { mood?.title ?: "музыка" }
-            return reply(
-                MusicIntent.Search(query = query, mood = mood, decade = decade),
-                "Ищу: $query"
-            )
-        }
-
-        return reply(MusicIntent.Search(text), "Попробую найти: $text")
+        return AssistantReply(
+            intent = MusicIntent.Unknown,
+            text = phrase(
+                language,
+                "Секунду, я подумаю…",
+                "Bir saniyə, düşünüm…",
+                "One moment, let me think…"
+            ),
+            language = language,
+            route = AssistantRoute.NEEDS_REASONING,
+            memoryInsights = extractMemoryInsights(original, language)
+        )
     }
 
-    private fun containsAny(text: String, vararg values: String) =
-        values.any(text::contains)
+    private fun explicitQueueIntent(text: String, language: AssistantLanguage): AssistantReply? {
+        listOf(
+            Regex("(?:включи|поставь|сыграй)\\s+следующим\\s+(.+)"),
+            Regex("(?:play|put)\\s+(.+?)\\s+next"),
+            Regex("(.+?)\\s+növbəti\\s+çal")
+        ).firstNotNullOfOrNull { it.find(text)?.groupValues?.getOrNull(1)?.trim() }?.let { query ->
+            return action(MusicIntent.QueueTrack(query, true), language,
+                "Добавляю следующим: $query.", "$query növbəti səslənəcək.", "I'll play $query next.")
+        }
+        listOf(
+            Regex("добавь\\s+(?:в\\s+очередь\\s+(.+)|(.+?)\\s+в\\s+очередь)"),
+            Regex("add\\s+(.+?)\\s+to\\s+(?:the\\s+)?queue"),
+            Regex("(.+?)\\s+növbəyə\\s+əlavə\\s+et")
+        ).forEach { regex ->
+            regex.find(text)?.let { match ->
+                val query = match.groupValues.drop(1).firstOrNull(String::isNotBlank)?.trim().orEmpty()
+                if (query.isNotBlank()) return action(MusicIntent.QueueTrack(query, false), language,
+                    "Добавляю в очередь: $query.", "$query növbəyə əlavə olunur.", "Adding $query to the queue.")
+            }
+        }
+        return when {
+            matchesAny(text, "очисти очередь", "очистить очередь", "clear queue", "növbəni təmizlə") ->
+                action(MusicIntent.ClearQueue, language, "Очищаю очередь.", "Növbəni təmizləyirəm.", "Clearing the queue.")
+            matchesAny(text, "открой очередь", "покажи очередь", "open queue", "show queue", "növbəni göstər") || text == "очередь" ->
+                action(MusicIntent.OpenQueue, language, "Открываю очередь.", "Növbəni açıram.", "Opening the queue.")
+            matchesAny(text, "выключи автопродолжение", "отключи автопродолжение", "disable autoplay") ->
+                action(MusicIntent.AutoContinue(false), language, "Автопродолжение выключено.", "Avtomatik davam söndürüldü.", "Auto-continue is off.")
+            matchesAny(text, "включи автопродолжение", "enable autoplay") ->
+                action(MusicIntent.AutoContinue(true), language, "Автопродолжение включено.", "Avtomatik davam aktivdir.", "Auto-continue is on.")
+            else -> null
+        }
+    }
 
-    private fun reply(intent: MusicIntent, text: String) =
-        AssistantReply(intent, text)
+    private fun explicitLibraryIntent(text: String, language: AssistantLanguage): AssistantReply? {
+        listOf(
+            Regex("(?:включи|запусти|воспроизведи)\\s+плейлист\\s+(.+)"),
+            Regex("play\\s+(?:the\\s+)?playlist\\s+(.+)"),
+            Regex("(.+?)\\s+pleylistini\\s+çal")
+        ).firstNotNullOfOrNull { it.find(text)?.groupValues?.getOrNull(1)?.trim() }?.let { name ->
+            val display = name.replaceFirstChar { it.titlecase() }
+            return action(MusicIntent.PlayPlaylist(display), language,
+                "Включаю плейлист $display.", "$display pleylistini açıram.", "Playing playlist $display.")
+        }
+        listOf(
+            Regex("(?:перемешай|перемешать)\\s+плейлист\\s+(.+)"),
+            Regex("shuffle\\s+(?:the\\s+)?playlist\\s+(.+)")
+        ).firstNotNullOfOrNull { it.find(text)?.groupValues?.getOrNull(1)?.trim() }?.let { name ->
+            val display = name.replaceFirstChar { it.titlecase() }
+            return action(MusicIntent.PlayPlaylist(display, true), language,
+                "Перемешиваю плейлист $display.", "$display pleylistini qarışdırıram.", "Shuffling playlist $display.")
+        }
+        if (matchesAny(text, "открой плейлисты", "покажи плейлисты", "мои плейлисты", "плейлисты", "open playlists", "my playlists", "pleylistlərimi göstər")) {
+            return action(MusicIntent.OpenPlaylists, language, "Открываю твои плейлисты.", "Pleylistlərini açıram.", "Opening your playlists.")
+        }
+        if (matchesAny(text, "открой радио", "покажи радио", "радиостанции", "радио", "open radio", "radio stations", "radionu aç")) {
+            return action(MusicIntent.OpenRadio, language, "Открываю радио по странам.", "Radionu açıram.", "Opening radio stations.")
+        }
+        if (matchesAny(text, "сохрани очередь", "save queue")) {
+            val name = text.substringAfter("плейлист", "Сохранённая очередь").trim()
+                .ifBlank { "Сохранённая очередь" }.replaceFirstChar { it.titlecase() }
+            return action(MusicIntent.CreatePlaylist(name, true), language,
+                "Сохраняю очередь в плейлист.", "Növbəni pleylist kimi saxlayıram.", "Saving the queue as a playlist.")
+        }
+        listOf(Regex("(?:создай|создать)\\s+плейлист\\s*(.*)"), Regex("create\\s+(?:a\\s+)?playlist\\s*(.*)"))
+            .firstNotNullOfOrNull { it.find(text)?.groupValues?.getOrNull(1)?.trim() }?.let { rawName ->
+                val name = rawName.ifBlank { "Новый плейлист" }.replaceFirstChar { it.titlecase() }
+                return action(MusicIntent.CreatePlaylist(name, false), language,
+                    "Создаю плейлист $name.", "$name pleylistini yaradıram.", "Creating playlist $name.")
+            }
+        return null
+    }
+
+    private fun localPlaybackIntent(text: String, language: AssistantLanguage): AssistantReply? = when {
+        matchesAny(text, "мой микс", "включи мой микс", "музыка для меня", "my mix", "mənim miksim") -> action(MusicIntent.MyMix, language, "Собираю твой микс.", "Sənin miksini hazırlayıram.", "Building your mix.")
+        matchesAny(text, "продолжить прослушивание", "продолжи слушать", "continue listening", "musiqini davam etdir") -> action(MusicIntent.ContinueListening, language, "Продолжаю с того, что тебе нравится.", "Sevdiyin musiqidən davam edirəm.", "Continuing with music you like.")
+        matchesAny(text, "пауза", "останови", "стоп", "pause", "stop", "dayandır") -> action(MusicIntent.Pause, language, "Ставлю на паузу.", "Pauza edirəm.", "Pausing.")
+        matchesAny(text, "продолжи", "играй дальше", "resume", "continue playing", "davam et") -> action(MusicIntent.Play, language, "Продолжаю.", "Davam edirəm.", "Resuming.")
+        matchesAny(text, "следующая", "следующий трек", "переключи", "next song", "next track", "növbəti mahnı") -> action(MusicIntent.Next, language, "Следующий трек.", "Növbəti mahnı.", "Next track.")
+        matchesAny(text, "предыдущая", "предыдущий трек", "previous track", "əvvəlki mahnı") -> action(MusicIntent.Previous, language, "Возвращаю предыдущий трек.", "Əvvəlki mahnıya qayıdıram.", "Going back one track.")
+        matchesAny(text, "громче", "прибавь звук", "louder", "volume up", "səsi artır") -> action(MusicIntent.Louder, language, "Делаю громче.", "Səsi artırıram.", "Turning it up.")
+        matchesAny(text, "тише", "убавь звук", "quieter", "volume down", "səsi azalt") -> action(MusicIntent.Quieter, language, "Делаю тише.", "Səsi azaldıram.", "Turning it down.")
+        matchesAny(text, "без звука", "выключи звук", "mute", "səsi söndür") -> action(MusicIntent.Mute, language, "Выключаю звук.", "Səsi söndürürəm.", "Muting.")
+        matchesAny(text, "убери из любимых", "не нравится", "dislike", "remove from favorites", "xoşum gəlmir") -> action(MusicIntent.Unlike, language, "Убрала из любимых.", "Seçilmişlərdən sildim.", "Removed from favorites.")
+        matchesAny(text, "добавь в любимые", "мне нравится", "лайк", "add to favorites", "like this", "xoşuma gəlir") -> action(MusicIntent.Like, language, "Добавила в любимые.", "Seçilmişlərə əlavə etdim.", "Added to favorites.")
+        matchesAny(text, "повтор", "повторяй", "repeat", "təkrar et") -> action(MusicIntent.Repeat, language, "Переключаю режим повтора.", "Təkrar rejimini dəyişirəm.", "Changing repeat mode.")
+        matchesAny(text, "случайный порядок", "перемешай", "шаффл", "shuffle", "qarışdır") -> action(MusicIntent.Shuffle, language, "Перемешиваю очередь.", "Növbəni qarışdırıram.", "Shuffling the queue.")
+        matchesAny(text, "что сейчас играет", "что играет", "what is playing", "nə səslənir") -> action(MusicIntent.NowPlaying, language, "Сейчас играет.", "Hazırda səslənir.", "Now playing.")
+        matchesAny(text, "открой историю", "покажи историю", "open history", "tarixçəni göstər") -> action(MusicIntent.OpenHistory, language, "Открываю историю.", "Tarixçəni açıram.", "Opening history.")
+        matchesAny(text, "похожее", "ещё такое", "похожие песни", "similar music", "more like this", "oxşar musiqi") -> action(MusicIntent.Similar, language, "Подбираю похожее.", "Oxşar musiqi seçirəm.", "Finding similar music.")
+        matchesAny(text, "режим машины", "автомобильный режим", "я за рулём", "car mode", "driving mode", "maşın rejimi") -> action(MusicIntent.CarMode, language, "Включаю автомобильный режим.", "Avtomobil rejimini açıram.", "Turning on car mode.")
+        else -> null
+    }
+
+    private fun localConversation(text: String, language: AssistantLanguage): AssistantReply? {
+        val response = when {
+            text.matches(Regex("(?:привет|здравствуй|доброе утро|добрый вечер|salam|sabahın xeyir|hello|hi|hey)[!. ]*")) ->
+                phrase(language, "Привет! Как настроение? Что будем слушать?", "Salam! Əhvalın necədir? Nə dinləyək?", "Hi! How are you feeling? What shall we listen to?")
+            matchesAny(text, "как дела", "как ты", "necəsən", "how are you") ->
+                phrase(language, "У меня всё отлично — я рядом и готова помочь. А ты как?", "Məndə hər şey əladır, yanındayam. Bəs sən necəsən?", "I'm great and ready to help. How are you?")
+            matchesAny(text, "спасибо", "благодарю", "təşəkkür", "sağ ol", "thank you", "thanks") ->
+                phrase(language, "Всегда пожалуйста ♥", "Həmişə məmnuniyyətlə ♥", "Always happy to help ♥")
+            matchesAny(text, "расскажи шутку", "пошути", "zarafat et", "tell me a joke") ->
+                phrase(language, "Почему музыканты не спорят с метрономом? Он всё равно всегда прав по такту.", "Musiqiçilər niyə metronomla mübahisə etmir? Çünki o, həmişə ritmdə haqlıdır.", "Why don't musicians argue with a metronome? It always has perfect timing.")
+            else -> null
+        }
+        return response?.let { conversation(language, it, extractMemoryInsights(text, language)) }
+    }
+
+    private fun explicitMusicSearch(text: String, language: AssistantLanguage): AssistantReply? {
+        val musicCue = when (language) {
+            AssistantLanguage.RUSSIAN -> Regex("\\b(включи|поставь|сыграй)\\b|\\bнайди\\b.*\\b(песню|песни|музыку|трек)\\b")
+            AssistantLanguage.AZERBAIJANI -> Regex("\\b(çal|qoş|səsləndir)\\b|\\btap\\b.*\\b(mahnı|musiqi)\\b")
+            AssistantLanguage.ENGLISH -> Regex("\\b(play|put on)\\b|\\bfind\\b.*\\b(song|music|track)\\b")
+        }
+        if (!musicCue.containsMatchIn(text)) return null
+
+        val mood = detectMood(text)
+        val decade = Regex("(19|20)\\d0").find(text)?.value?.toIntOrNull()
+        val cleaned = text
+            .replace(Regex("\\b(включи|поставь|найди|сыграй|музыку|песни|песню|трек|треки|play|put|on|find|song|music|track|çal|qoş|tap|mahnı|musiqi)\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        val query = cleaned.ifBlank { mood?.title ?: phrase(language, "музыка", "musiqi", "music") }
+        return AssistantReply(
+            intent = MusicIntent.Search(query = query, mood = mood, decade = decade),
+            text = phrase(language, "Хорошо, ищу $query.", "Oldu, $query axtarıram.", "Okay, looking for $query."),
+            language = language,
+            route = AssistantRoute.LOCAL_ACTION
+        )
+    }
+
+    private fun detectMood(text: String): Mood? = when {
+        matchesAny(text, "спокойн", "расслаб", "релакс", "calm", "relax", "sakit") -> Mood.CALM
+        matchesAny(text, "дорог", "поездк", "за рул", "driving", "road", "yol") -> Mood.DRIVE
+        matchesAny(text, "работ", "концентрац", "фокус", "focus", "work", "diqqət") -> Mood.FOCUS
+        matchesAny(text, "энерг", "трениров", "бодр", "energy", "workout", "enerj") -> Mood.ENERGY
+        matchesAny(text, "ноч", "вечер", "night", "gecə") -> Mood.NIGHT
+        matchesAny(text, "груст", "печал", "sad", "kədər") -> Mood.SAD
+        matchesAny(text, "весёл", "радост", "позитив", "happy", "cheerful", "şad") -> Mood.HAPPY
+        else -> null
+    }
+
+    private fun extractMemoryInsights(text: String, language: AssistantLanguage): List<MemoryInsight> {
+        val normalized = text.trim()
+        val name = listOf(
+            Regex("(?i)меня зовут\\s+([\\p{L}\\-]{2,30})"),
+            Regex("(?i)моё имя\\s+([\\p{L}\\-]{2,30})"),
+            Regex("(?i)mənim adım\\s+([\\p{L}\\-]{2,30})"),
+            Regex("(?i)my name is\\s+([\\p{L}\\-]{2,30})")
+        ).firstNotNullOfOrNull { it.find(normalized)?.groupValues?.getOrNull(1) }
+        return buildList {
+            if (!name.isNullOrBlank()) add(MemoryInsight("identity", "name", name.replaceFirstChar { it.titlecase() }))
+            add(MemoryInsight("language", "preferred", language.tag))
+        }
+    }
+
+    private fun action(intent: MusicIntent, language: AssistantLanguage, ru: String, az: String, en: String) =
+        AssistantReply(intent, phrase(language, ru, az, en), language, AssistantRoute.LOCAL_ACTION)
+
+    private fun conversation(language: AssistantLanguage, text: String, insights: List<MemoryInsight> = emptyList()) =
+        AssistantReply(MusicIntent.Unknown, text, language, AssistantRoute.LOCAL_CONVERSATION, insights)
+
+    private fun phrase(language: AssistantLanguage, ru: String, az: String, en: String) = when (language) {
+        AssistantLanguage.RUSSIAN -> ru
+        AssistantLanguage.AZERBAIJANI -> az
+        AssistantLanguage.ENGLISH -> en
+    }
+
+    private fun matchesAny(text: String, vararg values: String) = values.any { text == it || text.contains(it) }
 }

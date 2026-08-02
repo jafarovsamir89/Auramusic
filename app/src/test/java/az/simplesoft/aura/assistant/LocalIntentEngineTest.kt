@@ -1,6 +1,7 @@
 package az.simplesoft.aura.assistant
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalIntentEngineTest {
@@ -63,5 +64,51 @@ class LocalIntentEngineTest {
         assertEquals(MusicIntent.OpenQueue, engine.understand("Открой очередь").intent)
         assertEquals(MusicIntent.ClearQueue, engine.understand("Очисти очередь").intent)
         assertEquals(MusicIntent.AutoContinue(false), engine.understand("Выключи автопродолжение").intent)
+    }
+
+    @Test
+    fun `greeting is conversation and never music search`() {
+        val result = engine.understand("Привет")
+
+        assertEquals(MusicIntent.Unknown, result.intent)
+        assertEquals(AssistantRoute.LOCAL_CONVERSATION, result.route)
+        assertEquals(AssistantLanguage.RUSSIAN, result.language)
+    }
+
+    @Test
+    fun `unknown question needs reasoning instead of falling back to search`() {
+        val result = engine.understand("Какой сегодня день?")
+
+        assertEquals(MusicIntent.Unknown, result.intent)
+        assertEquals(AssistantRoute.NEEDS_REASONING, result.route)
+    }
+
+    @Test
+    fun `explicit artist request becomes playable search`() {
+        val result = engine.understand("Поставь Руки Вверх")
+
+        assertEquals(MusicIntent.Search("руки вверх"), result.intent)
+        assertEquals(AssistantRoute.LOCAL_ACTION, result.route)
+    }
+
+    @Test
+    fun `artist and sad mood stay together in music request`() {
+        val result = engine.understand("Найди грустную песню МакSим")
+        val search = result.intent as MusicIntent.Search
+
+        assertEquals(Mood.SAD, search.mood)
+        assertTrue(search.query.contains("макsим"))
+        assertTrue(search.query.contains("груст"))
+    }
+
+    @Test
+    fun `azerbaijani and english conversations do not search`() {
+        val az = engine.understand("Salam")
+        val en = engine.understand("How are you?")
+
+        assertEquals(AssistantLanguage.AZERBAIJANI, az.language)
+        assertEquals(AssistantRoute.LOCAL_CONVERSATION, az.route)
+        assertEquals(AssistantLanguage.ENGLISH, en.language)
+        assertEquals(AssistantRoute.LOCAL_CONVERSATION, en.route)
     }
 }

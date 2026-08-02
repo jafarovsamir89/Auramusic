@@ -22,8 +22,12 @@ Transitive dependencies must be captured from the final release dependency graph
 | Service | Purpose | Data terms | Source |
 |---|---|---|---|
 | Radio Browser | Country/station directory and click counting | Collected station data is dedicated to the public domain; the service is free for use in free and non-free apps. Individual station streams remain subject to their broadcasters' terms and regional availability. | https://www.radio-browser.info/ |
+| OpenRouter | Optional gateway for AURA AI chat completions | Usage, model pricing, retention and provider routing are governed by the user's OpenRouter account and current service terms. | https://openrouter.ai/docs |
+| DeepSeek models | Optional multilingual conversation and structured action planning through OpenRouter | Model access and output are governed by the selected OpenRouter model/provider terms. | https://openrouter.ai/models |
 
 AURA calls the public API directly with a descriptive User-Agent, discovers distributed servers through `all.api.radio-browser.info`, reports station clicks, retries across hosts, and does not copy Radio Browser server source code.
+
+AURA does not contain an OpenRouter credential in source control. The optional development credential is read from ignored `local.properties` or an environment variable. A permanent provider key must not be shipped in a public APK.
 
 ## Architectural references
 
