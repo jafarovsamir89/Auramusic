@@ -6,12 +6,13 @@ import android.content.Context
  * (Kseniya); Azerbaijani uses its local Silero voice. Unsupported text or a
  * download/load failure falls back to the best system voice on the phone.
  */
-class AuraSpeechSynthesizer(context: Context) {
+class AuraSpeechSynthesizer(context: Context) : VoiceEngine {
+    val voicePacks = VoicePackManager(context)
     private val system = AndroidSystemVoiceEngine(context)
     private val silero = SileroVoiceEngine(context)
     private val russianSilero = SileroRussianVoiceEngine(context)
 
-    fun speak(text: String, language: AssistantLanguage) {
+    override fun speak(text: String, language: AssistantLanguage) {
         stop()
         when (language) {
             AssistantLanguage.RUSSIAN -> russianSilero.speak(text) { system.speak(text, language) }
@@ -20,13 +21,13 @@ class AuraSpeechSynthesizer(context: Context) {
         }
     }
 
-    fun stop() {
+    override fun stop() {
         silero.stop()
         russianSilero.stop()
         system.stop()
     }
 
-    fun shutdown() {
+    override fun shutdown() {
         silero.shutdown()
         russianSilero.shutdown()
         system.shutdown()

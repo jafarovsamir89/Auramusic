@@ -45,7 +45,7 @@ Signed `googlevideo` URLs are not stored in the queue or Room. They are resolved
 - AURA Visual System 2.1: reference-led compact cinematic UI, violet/magenta energy accents, central AURA character and 48 dp interaction targets.
 - Free Radio Browser catalog by country with secure station streams, retry states, playback and playlist persistence.
 - Local-device music, voice intents and automotive UI.
-- AURA AI Core: local intent recognition, dialogue branches, compact memory and spoken replies without LLMs.
+- AURA AI Core: local intent recognition, dialogue branches, compact memory and spoken replies without a generative model.
 - Local Azerbaijani Silero voice pack (`aze_gamat`) with pinned checksum, one-time download and Android TTS fallback. The current arm64 debug APK includes the legacy full TorchScript runtime and is therefore roughly 100 MB; the voice model adds about 87.4 MiB in private app storage after first AZ reply.
 
 The source review and the architecture derived from NewPipe, InnerTune, ViMusic and Harmony Music are recorded in [`docs/YOUTUBE_ARCHITECTURE_RESEARCH.md`](docs/YOUTUBE_ARCHITECTURE_RESEARCH.md).

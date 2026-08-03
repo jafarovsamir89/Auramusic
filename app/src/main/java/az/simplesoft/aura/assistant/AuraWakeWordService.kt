@@ -13,8 +13,19 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import az.simplesoft.aura.MainActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+
+enum class WakeWordServiceState {
+    DISABLED, STARTING, WAITING_FOR_WAKE_WORD, LISTENING_FOR_COMMAND, EXECUTING, COOLDOWN, RECOVERING, ERROR
+}
 
 /**
  * User-enabled foreground microphone service. It stays active while the app is
@@ -24,26 +35,43 @@ import az.simplesoft.aura.MainActivity
 class AuraWakeWordService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var recognizer: OfflineSpeechRecognizer
+    private lateinit var coordinator: AssistantCommandCoordinator
+    private lateinit var actionExecutor: BackgroundMusicActionExecutor
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var waitingForFollowUp = false
     private var followUpExpiresAt = 0L
     private var cooldownAfterCommand = false
+    private var failureStreak = 0
+    @Volatile var state: WakeWordServiceState = WakeWordServiceState.DISABLED
+        private set
 
     override fun onCreate() {
         super.onCreate()
+        state = WakeWordServiceState.STARTING
+        coordinator = AssistantCommandCoordinator(this)
+        actionExecutor = BackgroundMusicActionExecutor(this)
         recognizer = OfflineSpeechRecognizer(
             context = this,
             onCommand = ::handleUtterance,
-            onState = {},
+            onState = { listening -> state = if (listening) WakeWordServiceState.LISTENING_FOR_COMMAND else WakeWordServiceState.WAITING_FOR_WAKE_WORD },
             onTerminal = ::handleTerminal
         )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            state = WakeWordServiceState.DISABLED
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            state = WakeWordServiceState.ERROR
+            Log.w(TAG, "Wake-word service cannot start without RECORD_AUDIO")
             stopSelf()
             return START_NOT_STICKY
         }
         promoteToForeground()
+        state = WakeWordServiceState.WAITING_FOR_WAKE_WORD
         beginListening(0L)
         return START_NOT_STICKY
     }
@@ -51,6 +79,8 @@ class AuraWakeWordService : Service() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         recognizer.destroy()
+        actionExecutor.release()
+        serviceScope.cancel()
         super.onDestroy()
     }
 
@@ -63,7 +93,7 @@ class AuraWakeWordService : Service() {
                 waitingForFollowUp = false
                 followUpExpiresAt = 0L
                 cooldownAfterCommand = true
-                AuraWakeWordBus.submit(utterance)
+                submitToCoordinator(utterance)
             }
             waitingForFollowUp -> {
                 waitingForFollowUp = false
@@ -76,8 +106,16 @@ class AuraWakeWordService : Service() {
             }
             else -> {
                 cooldownAfterCommand = true
-                AuraWakeWordBus.submit(commandAfterWakeWord)
+                submitToCoordinator(commandAfterWakeWord)
             }
+        }
+    }
+
+    private fun submitToCoordinator(command: String) {
+        state = WakeWordServiceState.EXECUTING
+        serviceScope.launch {
+            val result = coordinator.submit(command, source = "wake_word", executor = actionExecutor)
+            Log.i(TAG, "Background command result: ${result.javaClass.simpleName}")
         }
     }
 
@@ -91,6 +129,7 @@ class AuraWakeWordService : Service() {
             waitingForFollowUp -> FOLLOW_UP_DELAY_MS
             else -> RETRY_DELAY_MS
         }
+        state = if (delay >= COMMAND_COOLDOWN_MS) WakeWordServiceState.COOLDOWN else WakeWordServiceState.RECOVERING
         beginListening(delay)
     }
 
@@ -98,9 +137,18 @@ class AuraWakeWordService : Service() {
         handler.removeCallbacksAndMessages(null)
         handler.postDelayed({
             runCatching { recognizer.start() }
+                .onSuccess { failureStreak = 0 }
                 .onFailure { error ->
+                    failureStreak += 1
                     Log.w(TAG, "Wake-word recognizer failed to start", error)
-                    beginListening(RETRY_DELAY_MS)
+                    if (failureStreak >= MAX_RETRY_STREAK) {
+                        state = WakeWordServiceState.ERROR
+                        beginListening(LONG_RECOVERY_DELAY_MS)
+                        failureStreak = 0
+                    } else {
+                        state = WakeWordServiceState.RECOVERING
+                        beginListening(RETRY_DELAY_MS * failureStreak)
+                    }
                 }
         }, delayMs)
     }
@@ -142,6 +190,8 @@ class AuraWakeWordService : Service() {
         private const val FOLLOW_UP_DELAY_MS = 250L
         private const val FOLLOW_UP_WINDOW_MS = 6_000L
         private const val COMMAND_COOLDOWN_MS = 8_000L
+        private const val MAX_RETRY_STREAK = 6
+        private const val LONG_RECOVERY_DELAY_MS = 60_000L
         private const val ACTION_START = "az.simplesoft.aura.action.START_WAKE_WORD"
         private const val ACTION_STOP = "az.simplesoft.aura.action.STOP_WAKE_WORD"
 

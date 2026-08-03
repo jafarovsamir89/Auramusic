@@ -51,7 +51,8 @@ internal class SileroRussianVoiceEngine(
             runCatching {
                 val tokenIds = SileroRussianTokenizer.encode(safeText)
                 require(tokenIds.size > 2) { "Text has no supported Russian symbols" }
-                val loaded = module ?: Module.load(ensureModel().absolutePath).also { module = it }
+                val model = cachedVerifiedModel() ?: error("Russian voice pack is not installed")
+                val loaded = module ?: Module.load(model.absolutePath).also { module = it }
                 val textTensor = Tensor.fromBlob(tokenIds, longArrayOf(1, tokenIds.size.toLong()))
                 // Silero V1 single-speaker JIT exposes one text-tensor input.
                 val output = loaded.forward(IValue.from(textTensor))
@@ -78,6 +79,13 @@ internal class SileroRussianVoiceEngine(
                 runCatching { track.release() }
             }
             currentAudio = null
+        }
+    }
+
+    fun prepare(onComplete: (Throwable?) -> Unit = {}) {
+        worker.execute {
+            val error = runCatching { ensureModel() }.exceptionOrNull()
+            mainHandler.post { onComplete(error) }
         }
     }
 

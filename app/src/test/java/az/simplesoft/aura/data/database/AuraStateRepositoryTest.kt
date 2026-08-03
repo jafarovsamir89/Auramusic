@@ -216,6 +216,15 @@ private class FakeAuraStateDao : AuraStateDao {
     override suspend fun insertRecommendationEvent(value: RecommendationEventEntity) {
         recommendationEvents[value.id] = value
     }
+    override suspend fun upsertDialogueNodes(values: List<AssistantDialogueNodeEntity>) = Unit
+    override suspend fun upsertDialogueVariants(values: List<AssistantDialogueVariantEntity>) = Unit
+    override suspend fun upsertIntentPatterns(values: List<AssistantIntentPatternEntity>) = Unit
+    override suspend fun upsertConversationState(value: AssistantConversationStateEntity) = Unit
+    override suspend fun upsertPendingCommand(value: AssistantPendingCommandEntity) = Unit
+    override suspend fun upsertUserMemory(value: AssistantUserMemoryEntity) = Unit
+    override suspend fun upsertLearnedPhrase(value: AssistantLearnedPhraseEntity) = Unit
+    override suspend fun upsertUnknownUtterance(value: AssistantUnknownUtteranceEntity) = Unit
+    override suspend fun upsertResponseStat(value: AssistantResponseStatEntity) = Unit
     override suspend fun upsertPlaylist(value: PlaylistEntity) { playlists[value.id] = value }
     override suspend fun insertPlaylistItems(values: List<PlaylistItemEntity>) { playlistItems += values }
     override suspend fun upsertQueueSnapshot(value: QueueSnapshotEntity) { queueSnapshots[value.id] = value }
@@ -241,6 +250,19 @@ private class FakeAuraStateDao : AuraStateDao {
     override suspend fun loadSearchHistory(limit: Int): List<SearchHistoryEntity> =
         searches.values.sortedByDescending(SearchHistoryEntity::searchedAt).take(limit)
     override suspend fun preference(key: String): String? = preferences[key]?.value
+    override suspend fun dialogueVariants(nodeId: String, language: String): List<AssistantDialogueVariantEntity> = emptyList()
+    override suspend fun conversationState(): AssistantConversationStateEntity? = null
+    override suspend fun intentPatterns(language: String): List<AssistantIntentPatternEntity> = emptyList()
+    override suspend fun dialogueNodes(language: String): List<AssistantDialogueNodeEntity> = emptyList()
+    override suspend fun dialogueNodeForPattern(patternId: String): AssistantDialogueNodeEntity? = null
+    override suspend fun pendingUiCommands(limit: Int): List<AssistantPendingCommandEntity> = emptyList()
+    override suspend fun recentCommand(fingerprint: String, after: Long): AssistantPendingCommandEntity? = null
+    override suspend fun updateCommandStatus(commandId: String, expectedStatus: String, status: String, updatedAt: Long): Int = 0
+    override suspend fun unknownUtterance(normalized: String): AssistantUnknownUtteranceEntity? = null
+    override suspend fun userMemory(): List<AssistantUserMemoryEntity> = emptyList()
+    override suspend fun deleteUserMemory(key: String) = Unit
+    override suspend fun clearUserMemory() = Unit
+    override suspend fun responseStats(variantIds: List<String>): List<AssistantResponseStatEntity> = emptyList()
     override suspend fun loadRecommendationEvents(limit: Int): List<RecommendationEventEntity> =
         recommendationEvents.values.sortedByDescending(RecommendationEventEntity::createdAt).take(limit)
     override suspend fun loadPlaylists(): List<PlaylistEntity> = playlists.values.sortedByDescending(PlaylistEntity::updatedAt)

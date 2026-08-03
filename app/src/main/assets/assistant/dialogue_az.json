@@ -1,0 +1,24 @@
+{
+  "nodes": [
+    {"id":"az_greeting","topic":"greeting","priority":100,"variants":[
+      {"id":"az_greeting_1","tone":"warm","text":"Salam. Buradayam. Nə edək?","weight":3,"cooldownKey":"greeting"},
+      {"id":"az_greeting_2","tone":"calm","text":"Salam. Musiqi qoşa və ya söhbət edə bilərik.","weight":2,"cooldownKey":"greeting"}],"patterns":[
+      {"id":"az_greeting_p1","intent":"GREETING","pattern":"salam","priority":20}]},
+    {"id":"az_thanks","topic":"thanks","priority":80,"variants":[
+      {"id":"az_thanks_1","tone":"warm","text":"Buyur, həmişə yanındayam.","weight":2,"cooldownKey":"thanks"},
+      {"id":"az_thanks_2","tone":"bright","text":"Kömək etmək xoşdur.","weight":1,"cooldownKey":"thanks"}],"patterns":[
+      {"id":"az_thanks_p1","intent":"THANKS","pattern":"təşəkkür edirəm","priority":20}]},
+    {"id":"az_sad","topic":"emotion","priority":70,"variants":[
+      {"id":"az_sad_1","tone":"supportive","text":"Yanındayam. Sakit musiqi istəyirsən, yoxsa danışaq?","weight":3,"cooldownKey":"sad"},
+      {"id":"az_sad_2","tone":"soft","text":"Tələsməyək. Musiqi və ya söhbət seçə bilərsən.","weight":2,"cooldownKey":"sad"}],"patterns":[
+      {"id":"az_sad_p1","intent":"SADNESS","pattern":"kədərlənmişəm","priority":20}]},
+    {"id":"az_about","topic":"capabilities","priority":60,"variants":[
+      {"id":"az_about_1","tone":"clear","text":"Mən AURAyam. Pleyer, növbə, pleylist və qısa söhbətlərdə kömək edirəm.","weight":2,"cooldownKey":"about"},
+      {"id":"az_about_2","tone":"clear","text":"Əsas funksiyalar telefonda lokal işləyir.","weight":1,"cooldownKey":"about"}],"patterns":[
+      {"id":"az_about_p1","intent":"INTRODUCTION","pattern":"sən kimsən","priority":20},
+      {"id":"az_about_p2","intent":"CAPABILITIES","pattern":"nə edə bilərsən","priority":20}]},
+    {"id":"az_memory","topic":"memory","priority":50,"variants":[
+      {"id":"az_memory_1","tone":"clear","text":"Yaddaşımda yalnız sənin paylaşdığın və silə bildiyin məlumatlar olur.","weight":2,"cooldownKey":"memory"}],"patterns":[
+      {"id":"az_memory_p1","intent":"MEMORY","pattern":"nə xatırlayırsan","priority":20}]}
+  ]
+}

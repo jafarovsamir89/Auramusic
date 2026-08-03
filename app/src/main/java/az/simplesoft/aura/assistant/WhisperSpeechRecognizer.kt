@@ -1,6 +1,10 @@
 package az.simplesoft.aura.assistant
 
 import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
+import android.annotation.SuppressLint
+import androidx.core.content.ContextCompat
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -21,6 +25,7 @@ internal class WhisperSpeechRecognizer(
     private val onState: (Boolean) -> Unit,
     private val onFailure: (Throwable) -> Unit = {}
 ) {
+    private val appContext = context.applicationContext
     private val engine = WhisperCppEngine(context)
     private val worker = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "aura-whisper-asr") }
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -58,7 +63,11 @@ internal class WhisperSpeechRecognizer(
         engine.close()
     }
 
+    @SuppressLint("MissingPermission")
     private fun captureUtterance(): FloatArray {
+        check(ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            "Microphone permission is required for offline recognition"
+        }
         val minBuffer = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,

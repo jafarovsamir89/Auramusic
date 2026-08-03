@@ -1,0 +1,25 @@
+{
+  "nodes": [
+    {"id":"en_greeting","topic":"greeting","priority":100,"variants":[
+      {"id":"en_greeting_1","tone":"warm","text":"Hi. I am here. What shall we do?","weight":3,"cooldownKey":"greeting"},
+      {"id":"en_greeting_2","tone":"calm","text":"Hello. I can play music or keep you company.","weight":2,"cooldownKey":"greeting"}],"patterns":[
+      {"id":"en_greeting_p1","intent":"GREETING","pattern":"hello","priority":20},
+      {"id":"en_greeting_p2","intent":"GREETING","pattern":"hi","priority":20}]},
+    {"id":"en_thanks","topic":"thanks","priority":80,"variants":[
+      {"id":"en_thanks_1","tone":"warm","text":"You are welcome. I am here.","weight":2,"cooldownKey":"thanks"},
+      {"id":"en_thanks_2","tone":"bright","text":"Happy to help.","weight":1,"cooldownKey":"thanks"}],"patterns":[
+      {"id":"en_thanks_p1","intent":"THANKS","pattern":"thank you","priority":20}]},
+    {"id":"en_sad","topic":"emotion","priority":70,"variants":[
+      {"id":"en_sad_1","tone":"supportive","text":"I am here. Would you like calm music or a little conversation?","weight":3,"cooldownKey":"sad"},
+      {"id":"en_sad_2","tone":"soft","text":"We can take it slowly. Music or a chat?","weight":2,"cooldownKey":"sad"}],"patterns":[
+      {"id":"en_sad_p1","intent":"SADNESS","pattern":"i feel sad","priority":20}]},
+    {"id":"en_about","topic":"capabilities","priority":60,"variants":[
+      {"id":"en_about_1","tone":"clear","text":"I am AURA, a local companion for music, queues, playlists, and short conversations.","weight":2,"cooldownKey":"about"},
+      {"id":"en_about_2","tone":"clear","text":"Core assistant features run on the phone without a remote server.","weight":1,"cooldownKey":"about"}],"patterns":[
+      {"id":"en_about_p1","intent":"INTRODUCTION","pattern":"who are you","priority":20},
+      {"id":"en_about_p2","intent":"CAPABILITIES","pattern":"what can you do","priority":20}]},
+    {"id":"en_memory","topic":"memory","priority":50,"variants":[
+      {"id":"en_memory_1","tone":"clear","text":"I only keep things you choose to share, and you can delete them locally.","weight":2,"cooldownKey":"memory"}],"patterns":[
+      {"id":"en_memory_p1","intent":"MEMORY","pattern":"what do you remember","priority":20}]}
+  ]
+}

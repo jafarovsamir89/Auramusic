@@ -1,0 +1,36 @@
+{
+  "nodes": [
+    {"id":"ru_greeting","topic":"greeting","priority":100,"variants":[
+      {"id":"ru_greeting_1","tone":"warm","text":"Привет. Я рядом. Что сделаем?","weight":3,"cooldownKey":"greeting"},
+      {"id":"ru_greeting_2","tone":"calm","text":"Привет. Могу включить музыку или просто поговорить.","weight":2,"cooldownKey":"greeting"}],"patterns":[
+      {"id":"ru_greeting_p1","intent":"GREETING","pattern":"привет","priority":20},
+      {"id":"ru_greeting_p2","intent":"GREETING","pattern":"доброе утро","priority":20}]},
+    {"id":"ru_thanks","topic":"thanks","priority":80,"variants":[
+      {"id":"ru_thanks_1","tone":"warm","text":"Пожалуйста, я здесь.","weight":2,"cooldownKey":"thanks"},
+      {"id":"ru_thanks_2","tone":"bright","text":"Рада помочь.","weight":1,"cooldownKey":"thanks"}],"patterns":[
+      {"id":"ru_thanks_p1","intent":"THANKS","pattern":"спасибо","priority":20}]},
+    {"id":"ru_sad","topic":"emotion","priority":70,"variants":[
+      {"id":"ru_sad_1","tone":"supportive","text":"Я рядом. Хочешь спокойную музыку или немного поговорим?","weight":3,"cooldownKey":"sad"},
+      {"id":"ru_sad_2","tone":"soft","text":"Понимаю. Давай без спешки: музыка или разговор?","weight":2,"cooldownKey":"sad"}],"patterns":[
+      {"id":"ru_sad_p1","intent":"SADNESS","pattern":"мне грустно","emotion":"sad","priority":30},
+      {"id":"ru_sad_p2","intent":"SADNESS","pattern":"мне плохо","emotion":"sad","priority":20}]},
+    {"id":"ru_tired","topic":"emotion","priority":70,"variants":[
+      {"id":"ru_tired_1","tone":"soft","text":"Понимаю. Могу включить что-нибудь спокойное.","weight":2,"cooldownKey":"tired"},
+      {"id":"ru_tired_2","tone":"soft","text":"Сделай паузу. Я побуду рядом.","weight":1,"cooldownKey":"tired"}],"patterns":[
+      {"id":"ru_tired_p1","intent":"FATIGUE","pattern":"я устал","priority":20},
+      {"id":"ru_tired_p2","intent":"FATIGUE","pattern":"я устала","priority":20}]},
+    {"id":"ru_about","topic":"capabilities","priority":60,"variants":[
+      {"id":"ru_about_1","tone":"clear","text":"Я AURA, локальный помощник. Я понимаю команды плеера, очередь, плейлисты и короткие разговоры.","weight":2,"cooldownKey":"about"},
+      {"id":"ru_about_2","tone":"clear","text":"Основные функции работают на телефоне без сервера.","weight":1,"cooldownKey":"about"}],"patterns":[
+      {"id":"ru_about_p1","intent":"INTRODUCTION","pattern":"кто ты","priority":20},
+      {"id":"ru_about_p2","intent":"CAPABILITIES","pattern":"что ты умеешь","priority":20}]},
+    {"id":"ru_memory","topic":"memory","priority":50,"variants":[
+      {"id":"ru_memory_1","tone":"clear","text":"Я помню только то, чем ты поделился и что можно удалить в настройках.","weight":2,"cooldownKey":"memory"},
+      {"id":"ru_memory_2","tone":"clear","text":"Память хранится локально. Ею можно управлять отдельно от истории музыки.","weight":1,"cooldownKey":"memory"}],"patterns":[
+      {"id":"ru_memory_p1","intent":"MEMORY","pattern":"что ты помнишь","priority":20}]},
+    {"id":"ru_farewell","topic":"farewell","priority":40,"variants":[
+      {"id":"ru_farewell_1","tone":"warm","text":"До связи. Я буду здесь.","weight":2,"cooldownKey":"farewell"},
+      {"id":"ru_farewell_2","tone":"warm","text":"Хорошего дня. Возвращайся, когда захочешь.","weight":1,"cooldownKey":"farewell"}],"patterns":[
+      {"id":"ru_farewell_p1","intent":"FAREWELL","pattern":"пока","priority":20}]}
+  ]
+}

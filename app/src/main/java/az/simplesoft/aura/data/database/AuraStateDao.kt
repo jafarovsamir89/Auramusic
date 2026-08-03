@@ -45,6 +45,21 @@ interface AuraStateDao {
     suspend fun upsertConversationState(value: AssistantConversationStateEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPendingCommand(value: AssistantPendingCommandEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertUserMemory(value: AssistantUserMemoryEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertLearnedPhrase(value: AssistantLearnedPhraseEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertUnknownUtterance(value: AssistantUnknownUtteranceEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertResponseStat(value: AssistantResponseStatEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertPlaylist(value: PlaylistEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -85,6 +100,39 @@ interface AuraStateDao {
 
     @Query("SELECT * FROM assistant_conversation_state WHERE id = 'active' LIMIT 1")
     suspend fun conversationState(): AssistantConversationStateEntity?
+
+    @Query("SELECT * FROM assistant_intent_patterns WHERE language = :language OR language = 'all' ORDER BY priority DESC")
+    suspend fun intentPatterns(language: String): List<AssistantIntentPatternEntity>
+
+    @Query("SELECT * FROM assistant_dialogue_nodes WHERE language = :language OR language = 'all' ORDER BY priority DESC")
+    suspend fun dialogueNodes(language: String): List<AssistantDialogueNodeEntity>
+
+    @Query("SELECT n.* FROM assistant_dialogue_nodes n INNER JOIN assistant_intent_patterns p ON p.nodeId = n.id AND p.id = :patternId LIMIT 1")
+    suspend fun dialogueNodeForPattern(patternId: String): AssistantDialogueNodeEntity?
+
+    @Query("SELECT * FROM assistant_pending_commands WHERE status = 'PENDING' AND requiresUi = 1 ORDER BY createdAt LIMIT :limit")
+    suspend fun pendingUiCommands(limit: Int = 20): List<AssistantPendingCommandEntity>
+
+    @Query("SELECT * FROM assistant_pending_commands WHERE fingerprint = :fingerprint AND createdAt > :after LIMIT 1")
+    suspend fun recentCommand(fingerprint: String, after: Long): AssistantPendingCommandEntity?
+
+    @Query("UPDATE assistant_pending_commands SET status = :status, updatedAt = :updatedAt, attempts = attempts + 1 WHERE commandId = :commandId AND status = :expectedStatus")
+    suspend fun updateCommandStatus(commandId: String, expectedStatus: String, status: String, updatedAt: Long): Int
+
+    @Query("SELECT * FROM assistant_unknown_utterances WHERE normalizedText = :normalized LIMIT 1")
+    suspend fun unknownUtterance(normalized: String): AssistantUnknownUtteranceEntity?
+
+    @Query("SELECT * FROM assistant_user_memory ORDER BY updatedAt DESC")
+    suspend fun userMemory(): List<AssistantUserMemoryEntity>
+
+    @Query("DELETE FROM assistant_user_memory WHERE key = :key")
+    suspend fun deleteUserMemory(key: String)
+
+    @Query("DELETE FROM assistant_user_memory")
+    suspend fun clearUserMemory()
+
+    @Query("SELECT * FROM assistant_response_stats WHERE variantId IN (:variantIds)")
+    suspend fun responseStats(variantIds: List<String>): List<AssistantResponseStatEntity>
 
     @Query("SELECT * FROM queue_items WHERE queueId = :queueId ORDER BY position")
     suspend fun loadQueueItems(queueId: String): List<QueueItemEntity>
@@ -167,6 +215,20 @@ interface AuraStateDao {
         if (history.isNotEmpty()) insertHistory(history)
         upsertPreference(UserPreferenceEntity("legacy_current_index", currentIndex.toString(), migratedAt))
         upsertPreference(UserPreferenceEntity(LEGACY_MIGRATION_KEY, "1", migratedAt))
+    }
+
+    @Transaction
+    suspend fun importDialoguePackage(
+        nodes: List<AssistantDialogueNodeEntity>,
+        variants: List<AssistantDialogueVariantEntity>,
+        patterns: List<AssistantIntentPatternEntity>,
+        version: String,
+        importedAt: Long
+    ) {
+        upsertDialogueNodes(nodes)
+        upsertDialogueVariants(variants)
+        upsertIntentPatterns(patterns)
+        upsertPreference(UserPreferenceEntity("assistant_dialogue_version", version, importedAt))
     }
 
     @Transaction

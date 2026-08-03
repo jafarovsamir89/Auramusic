@@ -15,6 +15,8 @@ import az.simplesoft.aura.assistant.AuraAiEngine
 import az.simplesoft.aura.assistant.AuraSpeechSynthesizer
 import az.simplesoft.aura.assistant.AuraWakeWordService
 import az.simplesoft.aura.assistant.CompactAssistantMemory
+import az.simplesoft.aura.assistant.DataBackedCompanionEngine
+import az.simplesoft.aura.assistant.AssistantCommandCoordinator
 import az.simplesoft.aura.assistant.LocalIntentEngine
 import az.simplesoft.aura.assistant.MusicIntent
 import az.simplesoft.aura.assistant.Mood
@@ -142,9 +144,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val preferences = application.getSharedPreferences("aura_state", Context.MODE_PRIVATE)
     private val stateRepository = AuraStateRepository(application)
     private val assistantMemory = CompactAssistantMemory(RoomAssistantMemoryPersistence(stateRepository))
+    private val assistantCommandCoordinator = AssistantCommandCoordinator(application)
     private val auraAi = AuraAiEngine(
         local = intentEngine,
-        memory = assistantMemory
+        memory = assistantMemory,
+        dataBackedCompanion = DataBackedCompanionEngine(application)
     )
     private val speech = AuraSpeechSynthesizer(application)
     private val audio = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -252,6 +256,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             stateRestored = true
             pendingCommand?.also { pendingCommand = null }?.let { submitAssistant(it, pendingCommandShouldSpeak) }
+            assistantCommandCoordinator.claimPendingForUi().forEach { pending ->
+                submitAssistant(pending.text, speakResponse = true, pendingCommandId = pending.commandId)
+            }
         }
         viewModelScope.launch {
             for (snapshot in persistenceQueue) runCatching { stateRepository.save(snapshot) }
@@ -418,7 +425,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         )
     }
 
-    private fun submitAssistant(text: String, speakResponse: Boolean) {
+    private fun submitAssistant(text: String, speakResponse: Boolean, pendingCommandId: String? = null) {
         val input = text.trim()
         if (input.isBlank()) return
         if (!stateRestored) {
@@ -480,6 +487,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             if (speakResponse) speech.speak(answer.text, answer.language)
             executeAssistantReply(answer)
+            pendingCommandId?.let { commandId ->
+                viewModelScope.launch { assistantCommandCoordinator.complete(commandId) }
+            }
         }
     }
 

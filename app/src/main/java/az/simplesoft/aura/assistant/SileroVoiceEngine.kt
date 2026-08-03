@@ -62,7 +62,8 @@ internal class SileroVoiceEngine(
                 val startedAt = System.currentTimeMillis()
                 val tokenIds = SileroAzerbaijaniTokenizer.encode(safeText)
                 require(tokenIds.size > 2) { "Text has no supported Azerbaijani symbols" }
-                val loaded = module ?: Module.load(ensureModel().absolutePath).also { module = it }
+                val model = cachedVerifiedModel() ?: error("Azerbaijani voice pack is not installed")
+                val loaded = module ?: Module.load(model.absolutePath).also { module = it }
                 val textTensor = Tensor.fromBlob(tokenIds, longArrayOf(1, tokenIds.size.toLong()))
                 val speakerTensor = Tensor.fromBlob(longArrayOf(AZERBAIJANI_SPEAKER_ID), longArrayOf(1))
                 val audio = loaded.forward(IValue.from(textTensor), IValue.from(speakerTensor))
@@ -90,6 +91,13 @@ internal class SileroVoiceEngine(
                 runCatching { track.release() }
             }
             currentAudio = null
+        }
+    }
+
+    fun prepare(onComplete: (Throwable?) -> Unit = {}) {
+        worker.execute {
+            val error = runCatching { ensureModel() }.exceptionOrNull()
+            mainHandler.post { onComplete(error) }
         }
     }
 

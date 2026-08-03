@@ -1,7 +1,9 @@
 #include <jni.h>
 #include <android/log.h>
+#include <algorithm>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 #include "whisper.h"
 
@@ -62,7 +64,8 @@ Java_az_simplesoft_aura_assistant_WhisperCppEngine_nativeTranscribe(
     params.translate = false;
     params.no_context = true;
     params.single_segment = false;
-    params.n_threads = 4;
+    const long cores = sysconf(_SC_NPROCESSORS_ONLN);
+    params.n_threads = static_cast<int>(std::max(1L, std::min(4L, cores > 1 ? cores - 1 : 1L)));
     params.detect_language = std::string(requested_language) == "auto";
     params.language = params.detect_language ? "en" : requested_language;
     const int status = whisper_full(holder->context, params, pcm.data(), pcm.size());

@@ -14,13 +14,15 @@ data class AuraAiContext(
 class AuraAiEngine(
     private val local: LocalIntentEngine,
     private val companion: LocalCompanionEngine = LocalCompanionEngine(),
-    private val memory: CompactAssistantMemory
+    private val memory: CompactAssistantMemory,
+    private val dataBackedCompanion: DataBackedCompanionEngine? = null
 ) {
     suspend fun respond(input: String, context: AuraAiContext): AssistantReply {
         val detectedLanguage = AssistantLanguage.detect(input)
         val localReply = local.understand(input)
         val finalReply = if (localReply.intent != MusicIntent.Unknown) localReply else {
-            companion.respond(input, context, memory.snapshot(), detectedLanguage)
+            (dataBackedCompanion?.respond(input, detectedLanguage)
+                ?: companion.respond(input, context, memory.snapshot(), detectedLanguage))
                 .copy(memoryInsights = localReply.memoryInsights + companion.extractMemory(input))
         }
         memory.record(input, finalReply)
