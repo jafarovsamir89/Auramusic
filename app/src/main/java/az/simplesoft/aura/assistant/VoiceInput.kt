@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.speech.SpeechRecognizer
+import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -71,6 +72,7 @@ class DefaultVoiceInputController(
 
     override fun start() {
         if (!active.compareAndSet(false, true)) return
+        fallbackUsed = false
         mutableState.value = VoiceInputState.CheckingAvailability
         if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             active.set(false)
@@ -78,6 +80,7 @@ class DefaultVoiceInputController(
             return
         }
         val selected = VoiceRecognitionPolicy.select(appContext, modelManager.isReady())
+        Log.i(TAG, "voice start: backend=$selected whisperReady=${selected == RecognitionBackend.Whisper}")
         mutableBackend.value = selected
         when (selected) {
             RecognitionBackend.Whisper -> startWhisper()
@@ -103,6 +106,8 @@ class DefaultVoiceInputController(
     }
 
     private fun startWhisper() {
+        system?.destroy()
+        system = null
         whisper?.destroy()
         whisper = WhisperSpeechRecognizer(
             context = appContext,
@@ -121,10 +126,12 @@ class DefaultVoiceInputController(
             },
             onDiagnostics = onDiagnostics
         )
-        whisper?.start()
+        runCatching { whisper?.start() }
+            .onFailure { fail("Не удалось запустить локальный Whisper.", it) }
     }
 
     private fun startSystem(preferOnDevice: Boolean) {
+        Log.i(TAG, "voice fallback: preferOnDevice=$preferOnDevice")
         whisper?.stop()
         system?.destroy()
         mutableBackend.value = if (preferOnDevice) RecognitionBackend.AndroidOnDevice else RecognitionBackend.AndroidSystem
@@ -145,6 +152,7 @@ class DefaultVoiceInputController(
 
     private fun completeTranscript(text: String) {
         val transcript = text.trim()
+        Log.i(TAG, "voice transcript received: chars=${transcript.length}")
         if (transcript.isBlank()) {
             noSpeech("Не услышала речь.")
             return
@@ -160,7 +168,12 @@ class DefaultVoiceInputController(
     }
 
     private fun fail(message: String, cause: Throwable? = null) {
+        Log.w(TAG, "voice failed: $message", cause)
         active.set(false)
         mutableState.value = VoiceInputState.Failed(message, cause)
+    }
+
+    private companion object {
+        const val TAG = "AuraVoiceDiag"
     }
 }

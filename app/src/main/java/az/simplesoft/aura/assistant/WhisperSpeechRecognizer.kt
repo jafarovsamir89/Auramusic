@@ -10,6 +10,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
@@ -48,9 +49,12 @@ internal class WhisperSpeechRecognizer(
         if (!recording.compareAndSet(false, true)) return
         worker.execute {
             runCatching {
+                Log.i(TAG, "whisper capture started")
                 val pcm = captureUtterance()
+                Log.i(TAG, "whisper capture finished: samples=${pcm.size}")
                 val transcriptionStarted = System.currentTimeMillis()
                 val transcript = engine.transcribe(pcm)
+                Log.i(TAG, "whisper transcription finished: ms=${System.currentTimeMillis() - transcriptionStarted}, chars=${transcript.length}")
                 lastCaptureDiagnostics?.copy(
                     transcriptionDurationMs = System.currentTimeMillis() - transcriptionStarted,
                     sampleCount = pcm.size
@@ -63,6 +67,7 @@ internal class WhisperSpeechRecognizer(
                     if (transcript.trim().isBlank()) onNoSpeech("Не услышала речь.") else onCommand(transcript)
                 }
             }.onFailure { error ->
+                Log.w(TAG, "whisper pipeline failed", error)
                 recording.set(false)
                 mainHandler.post {
                     onState(false)
@@ -174,6 +179,7 @@ internal class WhisperSpeechRecognizer(
     }
 
     companion object {
+        private const val TAG = "AuraVoiceDiag"
         private const val SAMPLE_RATE = 16_000
         private const val MINIMUM_THRESHOLD = 0.008f
         private const val NOISE_MULTIPLIER = 2.5f
