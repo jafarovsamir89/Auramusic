@@ -22,10 +22,13 @@ class OfflineSpeechRecognizer(
     private val onPartialText: (String) -> Unit = {},
     private val onCommand: (String) -> Unit,
     private val onState: (Boolean) -> Unit,
-    private val onTerminal: () -> Unit = {}
+    private val onNoSpeech: (String) -> Unit = {},
+    private val onFailure: (Throwable) -> Unit = {},
+    private val onTerminal: () -> Unit = {},
+    private val preferOnDevice: Boolean = false
 ) {
     private val commandGate = VoiceCommandGate()
-    private val recognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
+    private val recognizer = createRecognizer(context).apply {
         setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) = onState(true)
             override fun onBeginningOfSpeech() = Unit
@@ -34,6 +37,13 @@ class OfflineSpeechRecognizer(
             override fun onEndOfSpeech() = onState(false)
             override fun onError(error: Int) {
                 onState(false)
+                if (error == SpeechRecognizer.ERROR_NO_MATCH ||
+                    error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                ) {
+                    onNoSpeech("No speech was detected")
+                } else {
+                    onFailure(IllegalStateException("Android recognizer error=$error"))
+                }
                 onTerminal()
             }
             override fun onPartialResults(partialResults: Bundle?) {
@@ -43,8 +53,10 @@ class OfflineSpeechRecognizer(
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
             override fun onResults(results: Bundle?) {
                 onState(false)
-                results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()?.let(commandGate::onFinal)?.let(onCommand)
+                val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull().orEmpty()
+                if (text.isBlank()) onNoSpeech("No speech was detected")
+                else commandGate.onFinal(text)?.let(onCommand)
                 onTerminal()
             }
             override fun onLanguageDetection(results: Bundle) = Unit
@@ -77,4 +89,14 @@ class OfflineSpeechRecognizer(
 
     fun stop() = recognizer.stopListening()
     fun destroy() = recognizer.destroy()
+
+    private fun createRecognizer(context: Context): SpeechRecognizer {
+        return if (preferOnDevice && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+        ) {
+            SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+        } else {
+            SpeechRecognizer.createSpeechRecognizer(context)
+        }
+    }
 }

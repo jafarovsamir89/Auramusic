@@ -14,6 +14,16 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
+data class VoiceCaptureDiagnostics(
+    val averageRms: Float,
+    val peakRms: Float,
+    val captureDurationMs: Long,
+    val heardSpeech: Boolean,
+    val sampleCount: Int,
+    val backend: String,
+    val transcriptionDurationMs: Long? = null
+)
+
 /**
  * Records one utterance locally and transcribes it with Whisper. The simple
  * endpoint detector keeps capture bounded for slower phones; it never sends
@@ -23,31 +33,40 @@ internal class WhisperSpeechRecognizer(
     context: Context,
     private val onCommand: (String) -> Unit,
     private val onState: (Boolean) -> Unit,
-    private val onFailure: (Throwable) -> Unit = {}
+    private val onFailure: (Throwable) -> Unit = {},
+    private val onNoSpeech: (String) -> Unit = {},
+    private val onDiagnostics: (VoiceCaptureDiagnostics) -> Unit = {}
 ) {
     private val appContext = context.applicationContext
     private val engine = WhisperCppEngine(context)
     private val worker = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "aura-whisper-asr") }
     private val mainHandler = Handler(Looper.getMainLooper())
     private val recording = AtomicBoolean(false)
+    @Volatile private var lastCaptureDiagnostics: VoiceCaptureDiagnostics? = null
 
     fun start() {
         if (!recording.compareAndSet(false, true)) return
         worker.execute {
             runCatching {
                 val pcm = captureUtterance()
-                engine.transcribe(pcm)
+                val transcriptionStarted = System.currentTimeMillis()
+                val transcript = engine.transcribe(pcm)
+                lastCaptureDiagnostics?.copy(
+                    transcriptionDurationMs = System.currentTimeMillis() - transcriptionStarted,
+                    sampleCount = pcm.size
+                )?.let(onDiagnostics)
+                transcript
             }.onSuccess { transcript ->
                 recording.set(false)
                 mainHandler.post {
                     onState(false)
-                    transcript.trim().takeIf(String::isNotBlank)?.let(onCommand)
+                    if (transcript.trim().isBlank()) onNoSpeech("Не услышала речь.") else onCommand(transcript)
                 }
             }.onFailure { error ->
                 recording.set(false)
                 mainHandler.post {
                     onState(false)
-                    onFailure(error)
+                    if (error.message == "Speech was not detected") onNoSpeech("Не услышала речь.") else onFailure(error)
                 }
             }
         }
@@ -91,6 +110,13 @@ internal class WhisperSpeechRecognizer(
         var heardSpeech = false
         val startedAt = System.currentTimeMillis()
         var lastSpeechAt = startedAt
+        var speechStartedAt = 0L
+        var sumSquares = 0.0
+        var sampleCount = 0
+        var readBlocks = 0
+        var peakRms = 0f
+        var noiseSum = 0.0
+        var noiseSamples = 0
         try {
             recorder.startRecording()
             mainHandler.post { onState(true) }
@@ -100,7 +126,20 @@ internal class WhisperSpeechRecognizer(
                 for (index in 0 until count) captured += shortBuffer[index]
                 val rms = rms(shortBuffer, count)
                 val now = System.currentTimeMillis()
-                if (rms >= SPEECH_RMS_THRESHOLD) {
+                sumSquares += rms.toDouble() * rms
+                sampleCount += count
+                readBlocks++
+                peakRms = maxOf(peakRms, rms)
+                if (now - startedAt <= NOISE_CALIBRATION_MS) {
+                    noiseSum += rms
+                    noiseSamples++
+                }
+                val noiseFloor = if (noiseSamples == 0) MINIMUM_THRESHOLD else (noiseSum / noiseSamples).toFloat()
+                val speechThreshold = maxOf(MINIMUM_THRESHOLD, noiseFloor * NOISE_MULTIPLIER)
+                if (rms >= speechThreshold) {
+                    if (speechStartedAt == 0L) speechStartedAt = now
+                }
+                if (speechStartedAt != 0L && now - speechStartedAt >= MIN_SPEECH_MS) {
                     heardSpeech = true
                     lastSpeechAt = now
                 }
@@ -112,6 +151,15 @@ internal class WhisperSpeechRecognizer(
             runCatching { recorder.stop() }
             recorder.release()
         }
+        lastCaptureDiagnostics = VoiceCaptureDiagnostics(
+            averageRms = if (readBlocks == 0) 0f else sqrt(sumSquares / readBlocks).toFloat(),
+            peakRms = peakRms,
+            captureDurationMs = System.currentTimeMillis() - startedAt,
+            heardSpeech = heardSpeech,
+            sampleCount = sampleCount,
+            backend = "Whisper"
+        )
+        lastCaptureDiagnostics?.let(onDiagnostics)
         check(heardSpeech) { "Speech was not detected" }
         return FloatArray(captured.size) { index -> captured[index] / Short.MAX_VALUE.toFloat() }
     }
@@ -127,7 +175,10 @@ internal class WhisperSpeechRecognizer(
 
     companion object {
         private const val SAMPLE_RATE = 16_000
-        private const val SPEECH_RMS_THRESHOLD = 0.015f
+        private const val MINIMUM_THRESHOLD = 0.008f
+        private const val NOISE_MULTIPLIER = 2.5f
+        private const val NOISE_CALIBRATION_MS = 400L
+        private const val MIN_SPEECH_MS = 280L
         private const val WAIT_FOR_SPEECH_MS = 6_000L
         private const val END_SILENCE_MS = 1_000L
         private const val MAX_CAPTURE_MS = 16_000L

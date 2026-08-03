@@ -14,6 +14,9 @@ import az.simplesoft.aura.assistant.AuraAiContext
 import az.simplesoft.aura.assistant.AuraAiEngine
 import az.simplesoft.aura.assistant.AuraSpeechSynthesizer
 import az.simplesoft.aura.assistant.AuraWakeWordService
+import az.simplesoft.aura.assistant.RecognitionBackend
+import az.simplesoft.aura.assistant.VoiceCaptureDiagnostics
+import az.simplesoft.aura.assistant.VoiceInputState
 import az.simplesoft.aura.assistant.CompactAssistantMemory
 import az.simplesoft.aura.assistant.DataBackedCompanionEngine
 import az.simplesoft.aura.assistant.AssistantCommandCoordinator
@@ -109,6 +112,9 @@ data class AuraUiState(
     val assistantSource: AssistantSource = AssistantSource.LOCAL,
     val isOfflineOnly: Boolean = true,
     val isListening: Boolean = false,
+    val voiceInputState: VoiceInputState = VoiceInputState.Idle,
+    val recognitionBackend: RecognitionBackend = RecognitionBackend.Unavailable,
+    val voiceDiagnostics: VoiceCaptureDiagnostics? = null,
     val wakeWordEnabled: Boolean = false,
     val isLoading: Boolean = false,
     val isBuffering: Boolean = false,
@@ -387,6 +393,47 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun setLibrarySection(section: LibrarySection) = _state.update { it.copy(librarySection = section) }
     fun setListening(value: Boolean) = _state.update { it.copy(isListening = value) }
     fun setQuery(value: String) = _state.update { it.copy(query = value) }
+
+    fun setVoiceInputState(value: VoiceInputState, backend: RecognitionBackend) {
+        _state.update { current ->
+            val status = when (value) {
+                VoiceInputState.Idle -> current.assistantText
+                VoiceInputState.CheckingAvailability -> "Checking voice recognition..."
+                VoiceInputState.Listening -> "Listening..."
+                VoiceInputState.Processing -> "Recognizing speech..."
+                is VoiceInputState.TranscriptReady -> "Heard: \"${value.text}\""
+                is VoiceInputState.PermissionRequired -> "Microphone permission is required"
+                is VoiceInputState.ModelRequired -> "Whisper model is required: ${value.modelId}"
+                is VoiceInputState.NoSpeech -> value.message
+                is VoiceInputState.Failed -> value.message
+            }
+            current.copy(
+                assistantText = status,
+                isListening = value is VoiceInputState.Listening,
+                voiceInputState = value,
+                recognitionBackend = backend
+            )
+        }
+    }
+
+    fun setVoiceDiagnostics(value: VoiceCaptureDiagnostics) = _state.update {
+        it.copy(voiceDiagnostics = value)
+    }
+
+    fun startPushToTalk(start: () -> Unit) {
+        viewModelScope.launch {
+            if (state.value.wakeWordEnabled) {
+                runCatching { AuraWakeWordService.stop(getApplication()) }
+                delay(350L)
+            }
+            start()
+        }
+    }
+
+    fun resumeWakeWordAfterPushToTalk() {
+        if (!state.value.wakeWordEnabled) return
+        runCatching { AuraWakeWordService.start(getApplication()) }
+    }
 
     /** Must be invoked while the activity is visible: Android blocks background microphone starts. */
     fun setWakeWordEnabled(enabled: Boolean) {

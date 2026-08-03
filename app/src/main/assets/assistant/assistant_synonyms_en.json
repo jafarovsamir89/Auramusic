@@ -1,0 +1,8 @@
+{
+  "play": ["start", "resume", "put on"],
+  "stop": ["pause", "halt", "turn off"],
+  "louder": ["increase volume", "turn it up", "make it louder"],
+  "quieter": ["lower volume", "turn it down", "make it quieter"],
+  "next": ["skip", "next track", "move on"],
+  "like": ["love this", "add to favorites", "save this"]
+}

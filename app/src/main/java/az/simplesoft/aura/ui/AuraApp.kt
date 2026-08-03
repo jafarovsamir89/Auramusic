@@ -1,6 +1,13 @@
 package az.simplesoft.aura.ui
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
@@ -144,13 +151,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import az.simplesoft.aura.assistant.WhisperSpeechRecognizer
+import androidx.core.content.ContextCompat
+import az.simplesoft.aura.assistant.DefaultVoiceInputController
 import az.simplesoft.aura.assistant.OfflineModelManager
 import az.simplesoft.aura.assistant.OfflineModelState
 import az.simplesoft.aura.assistant.VoicePackManager
 import az.simplesoft.aura.assistant.VoicePackStatus
 import az.simplesoft.aura.assistant.AssistantRole
 import az.simplesoft.aura.assistant.AuraWakeWordBus
+import az.simplesoft.aura.assistant.VoiceInputState
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.RadioCountry
@@ -189,18 +198,41 @@ fun AuraApp(
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val recognizer = remember {
-        WhisperSpeechRecognizer(
+    val voiceController = remember(context) {
+        DefaultVoiceInputController(
             context = context,
-            onCommand = vm::submitVoice,
-            onState = vm::setListening
+            onTranscript = vm::submitVoice,
+            onDiagnostics = vm::setVoiceDiagnostics
         )
     }
+    val voiceState by voiceController.state.collectAsStateWithLifecycle()
+    val voiceBackend by voiceController.backend.collectAsStateWithLifecycle()
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) vm.startPushToTalk(voiceController::start)
+        else vm.setVoiceInputState(VoiceInputState.PermissionRequired(Manifest.permission.RECORD_AUDIO), voiceBackend)
+    }
     val voiceInput = {
-        if (!state.wakeWordEnabled) recognizer.start()
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            vm.startPushToTalk(voiceController::start)
+        }
     }
     var playlistTarget by remember { mutableStateOf<Track?>(null) }
-    DisposableEffect(Unit) { onDispose(recognizer::destroy) }
+    DisposableEffect(Unit) { onDispose(voiceController::destroy) }
+    LaunchedEffect(voiceState, voiceBackend) {
+        vm.setVoiceInputState(voiceState, voiceBackend)
+        when (voiceState) {
+            is VoiceInputState.TranscriptReady,
+            is VoiceInputState.PermissionRequired,
+            is VoiceInputState.ModelRequired,
+            is VoiceInputState.NoSpeech,
+            is VoiceInputState.Failed -> vm.resumeWakeWordAfterPushToTalk()
+            else -> Unit
+        }
+    }
     LaunchedEffect(initialCommand, speakInitialCommand) {
         initialCommand?.takeIf(String::isNotBlank)?.let {
             if (speakInitialCommand) vm.submitVoice(it) else vm.submit(it)
@@ -298,7 +330,20 @@ fun AuraApp(
                 onCar = vm::toggleCarMode,
                 onAddToPlaylist = { playlistTarget = state.nowTrack }
             )
-                else -> MainShell(state, vm, voiceInput) { playlistTarget = it }
+                else -> MainShell(
+                    state = state,
+                    vm = vm,
+                    onVoice = voiceInput,
+                    onOpenSettings = {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:${context.packageName}")
+                            )
+                        )
+                    },
+                    onAddToPlaylist = { playlistTarget = it }
+                )
             }
         }
     }
@@ -309,6 +354,7 @@ private fun MainShell(
     state: AuraUiState,
     vm: AuraViewModel,
     onVoice: () -> Unit,
+    onOpenSettings: () -> Unit,
     onAddToPlaylist: (Track) -> Unit
 ) {
     Box(Modifier.fillMaxSize()) {
@@ -378,11 +424,16 @@ private fun MainShell(
                     state = state,
                     onVoice = onVoice,
                     onCommand = vm::submit,
-                    onWakeWord = vm::setWakeWordEnabled
+                    onWakeWord = vm::setWakeWordEnabled,
+                    onOpenSettings = onOpenSettings
                 )
                 AuraDestination.DIAGNOSTICS -> DiagnosticsScreen(
                     diagnostics = state.diagnostics,
-                    onBack = { vm.navigate(AuraDestination.HOME) }
+                    onBack = { vm.navigate(AuraDestination.HOME) },
+                    voiceState = state.voiceInputState,
+                    voiceBackend = state.recognitionBackend,
+                    voiceDiagnostics = state.voiceDiagnostics,
+                    onTestVoice = onVoice
                 )
             }
         }
@@ -635,7 +686,14 @@ private fun HeroAction(label: String, icon: ImageVector, onClick: () -> Unit) {
 }
 
 @Composable
-private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Unit) {
+private fun DiagnosticsScreen(
+    diagnostics: ProviderDiagnostics,
+    onBack: () -> Unit,
+    voiceState: VoiceInputState,
+    voiceBackend: az.simplesoft.aura.assistant.RecognitionBackend,
+    voiceDiagnostics: az.simplesoft.aura.assistant.VoiceCaptureDiagnostics?,
+    onTestVoice: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val whisper = remember(context) { OfflineModelManager(context) }
@@ -670,6 +728,19 @@ private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Un
         item { DiagnosticRow("MIME", diagnostics.mimeType) }
         item { DiagnosticRow("Истекает", diagnostics.expiresAt?.let { Date(it).toString() } ?: "—") }
         item { DiagnosticRow("Fallback", diagnostics.fallbackReason) }
+        item {
+            Text("Voice input", color = SecondaryText, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            DiagnosticRow("Backend", voiceBackend.toString())
+            DiagnosticRow("State", voiceState.toString())
+            voiceDiagnostics?.let { capture ->
+                DiagnosticRow("RMS / peak", "${"%.4f".format(capture.averageRms)} / ${"%.4f".format(capture.peakRms)}")
+                DiagnosticRow("Capture", "${capture.captureDurationMs} ms, ${capture.sampleCount} samples")
+                DiagnosticRow("Speech", if (capture.heardSpeech) "heard" else "not heard")
+                DiagnosticRow("Transcription", capture.transcriptionDurationMs?.let { "$it ms" } ?: "-")
+            }
+            TextButton(onClick = onTestVoice) { Text("Test microphone") }
+        }
         item { DiagnosticRow("Страница", diagnostics.selectedPage) }
         item {
             Text("Кандидаты", color = SecondaryText, fontSize = 12.sp)
@@ -1320,7 +1391,8 @@ private fun AssistantScreen(
     state: AuraUiState,
     onVoice: () -> Unit,
     onCommand: (String) -> Unit,
-    onWakeWord: (Boolean) -> Unit
+    onWakeWord: (Boolean) -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -1338,7 +1410,12 @@ private fun AssistantScreen(
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("A U R A", textAlign = TextAlign.Center, letterSpacing = 3.sp, fontSize = 14.sp)
                 Text(
-                    if (state.isOfflineOnly) "Офлайн-режим · голос не отправляется в сеть" else "Локальный режим",
+                    when (state.recognitionBackend) {
+                        az.simplesoft.aura.assistant.RecognitionBackend.Whisper -> "Whisper · полностью локально"
+                        az.simplesoft.aura.assistant.RecognitionBackend.AndroidOnDevice -> "Android on-device"
+                        az.simplesoft.aura.assistant.RecognitionBackend.AndroidSystem -> "Системное распознавание · сеть возможна"
+                        az.simplesoft.aura.assistant.RecognitionBackend.Unavailable -> "Распознавание недоступно"
+                    },
                     color = AuraMint,
                     fontSize = 9.sp
                 )
@@ -1346,6 +1423,28 @@ private fun AssistantScreen(
             IconButton(onClick = onVoice, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Rounded.GraphicEq, "Голос", tint = ReferenceMagenta)
             }
+        }
+        when (val voiceState = state.voiceInputState) {
+            is VoiceInputState.NoSpeech,
+            is VoiceInputState.Failed,
+            is VoiceInputState.PermissionRequired,
+            is VoiceInputState.ModelRequired -> Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFF38202B),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(state.assistantText, Modifier.weight(1f), color = PrimaryText, fontSize = 12.sp)
+                    TextButton(onClick = onVoice) { Text("Повторить") }
+                    if (voiceState is VoiceInputState.PermissionRequired) {
+                        TextButton(onClick = onOpenSettings) { Text("Настройки") }
+                    }
+                }
+            }
+            else -> Unit
         }
         Spacer(Modifier.height(12.dp))
         Surface(
@@ -1502,7 +1601,20 @@ private fun AssistantScreen(
         ) {
             MiniAuraFace(34.dp)
             Spacer(Modifier.width(10.dp))
-            Text(if (state.isListening) "Слушаю тебя…" else "Нажми и говори", color = PrimaryText, fontSize = 12.sp)
+            Text(
+                when (state.voiceInputState) {
+                    VoiceInputState.Listening -> "Слушаю тебя..."
+                    VoiceInputState.Processing -> "Распознаю..."
+                    is VoiceInputState.TranscriptReady -> "Текст получен"
+                    is VoiceInputState.NoSpeech,
+                    is VoiceInputState.Failed,
+                    is VoiceInputState.PermissionRequired,
+                    is VoiceInputState.ModelRequired -> "Повторить голосовой ввод"
+                    else -> "Нажми и говори"
+                },
+                color = PrimaryText,
+                fontSize = 12.sp
+            )
         }
     }
 }
