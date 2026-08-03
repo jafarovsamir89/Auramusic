@@ -76,11 +76,11 @@ class LocalIntentEngineTest {
     }
 
     @Test
-    fun `unknown question needs reasoning instead of falling back to search`() {
+    fun `unknown question stays a local conversation instead of falling back to search`() {
         val result = engine.understand("Какой сегодня день?")
 
         assertEquals(MusicIntent.Unknown, result.intent)
-        assertEquals(AssistantRoute.NEEDS_REASONING, result.route)
+        assertEquals(AssistantRoute.LOCAL_CONVERSATION, result.route)
     }
 
     @Test
@@ -89,6 +89,13 @@ class LocalIntentEngineTest {
 
         assertEquals(MusicIntent.Search("руки вверх"), result.intent)
         assertEquals(AssistantRoute.LOCAL_ACTION, result.route)
+    }
+
+    @Test
+    fun `polite word is not passed into music search`() {
+        val result = engine.understand("Пожалуйста поставь Руки Вверх")
+
+        assertEquals(MusicIntent.Search("руки вверх"), result.intent)
     }
 
     @Test

@@ -55,13 +55,12 @@ enum class AssistantLanguage(val tag: String) {
 
 enum class AssistantRoute {
     LOCAL_ACTION,
-    LOCAL_CONVERSATION,
-    NEEDS_REASONING
+    LOCAL_CONVERSATION
 }
 
 enum class AssistantRole { USER, AURA }
 
-enum class AssistantSource { LOCAL, DEEPSEEK, FALLBACK }
+enum class AssistantSource { LOCAL, FALLBACK }
 
 data class AssistantMessage(
     val id: String,
@@ -92,7 +91,7 @@ data class AssistantReply(
     val text: String,
     val language: AssistantLanguage = AssistantLanguage.RUSSIAN,
     val route: AssistantRoute = if (intent == MusicIntent.Unknown) {
-        AssistantRoute.NEEDS_REASONING
+        AssistantRoute.LOCAL_CONVERSATION
     } else {
         AssistantRoute.LOCAL_ACTION
     },

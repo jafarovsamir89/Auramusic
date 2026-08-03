@@ -3,7 +3,6 @@ package az.simplesoft.aura.ui
 import android.app.Application
 import android.content.Context
 import android.media.AudioManager
-import az.simplesoft.aura.BuildConfig
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.content.edit
@@ -14,11 +13,17 @@ import az.simplesoft.aura.assistant.AssistantSource
 import az.simplesoft.aura.assistant.AuraAiContext
 import az.simplesoft.aura.assistant.AuraAiEngine
 import az.simplesoft.aura.assistant.AuraSpeechSynthesizer
+import az.simplesoft.aura.assistant.AuraWakeWordService
+import az.simplesoft.aura.assistant.RecognitionBackend
+import az.simplesoft.aura.assistant.VoiceCaptureDiagnostics
+import az.simplesoft.aura.assistant.VoiceInputState
 import az.simplesoft.aura.assistant.CompactAssistantMemory
+import az.simplesoft.aura.assistant.DataBackedCompanionEngine
+import az.simplesoft.aura.assistant.AssistantCommandCoordinator
+import az.simplesoft.aura.assistant.ActionExecutionResult
 import az.simplesoft.aura.assistant.LocalIntentEngine
 import az.simplesoft.aura.assistant.MusicIntent
 import az.simplesoft.aura.assistant.Mood
-import az.simplesoft.aura.assistant.OpenRouterAssistantAdapter
 import az.simplesoft.aura.assistant.RoomAssistantMemoryPersistence
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.LocalMusicProvider
@@ -56,10 +61,13 @@ import az.simplesoft.aura.playback.PlaybackConnection
 import az.simplesoft.aura.playback.PlaybackConnectionCoordinator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import java.util.Calendar
 import kotlin.math.abs
@@ -102,8 +110,12 @@ data class AuraUiState(
     val assistantMessages: List<AssistantMessage> = emptyList(),
     val isAssistantThinking: Boolean = false,
     val assistantSource: AssistantSource = AssistantSource.LOCAL,
-    val isCloudAiConfigured: Boolean = BuildConfig.OPENROUTER_API_KEY.isNotBlank(),
+    val isOfflineOnly: Boolean = true,
     val isListening: Boolean = false,
+    val voiceInputState: VoiceInputState = VoiceInputState.Idle,
+    val recognitionBackend: RecognitionBackend = RecognitionBackend.Unavailable,
+    val voiceDiagnostics: VoiceCaptureDiagnostics? = null,
+    val wakeWordEnabled: Boolean = false,
     val isLoading: Boolean = false,
     val isBuffering: Boolean = false,
     val isPlaying: Boolean = false,
@@ -142,13 +154,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val preferences = application.getSharedPreferences("aura_state", Context.MODE_PRIVATE)
     private val stateRepository = AuraStateRepository(application)
     private val assistantMemory = CompactAssistantMemory(RoomAssistantMemoryPersistence(stateRepository))
+    private val assistantCommandCoordinator = AssistantCommandCoordinator(application)
     private val auraAi = AuraAiEngine(
         local = intentEngine,
-        remote = OpenRouterAssistantAdapter(
-            apiKey = BuildConfig.OPENROUTER_API_KEY,
-            model = BuildConfig.OPENROUTER_MODEL
-        ),
-        memory = assistantMemory
+        memory = assistantMemory,
+        dataBackedCompanion = DataBackedCompanionEngine(application)
     )
     private val speech = AuraSpeechSynthesizer(application)
     private val audio = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -186,13 +196,19 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private var stateRestored = false
     private var pendingCommand: String? = null
     private var pendingCommandShouldSpeak = false
+    private val claimedPendingCommands = mutableSetOf<String>()
 
     private val initialLiked = preferences.getStringSet("liked", emptySet()).orEmpty().toSet()
     private val initialHistory = preferences.getString("history", "")
         .orEmpty().split('|').filter(String::isNotBlank)
+    private val initialWakeWordEnabled = preferences.getBoolean("wake_word_enabled", false)
 
     private val _state = MutableStateFlow(
-        AuraUiState(likedIds = initialLiked, historyIds = initialHistory)
+        AuraUiState(
+            likedIds = initialLiked,
+            historyIds = initialHistory,
+            wakeWordEnabled = initialWakeWordEnabled
+        )
     )
     val state = _state.asStateFlow()
 
@@ -250,7 +266,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 }
             }
             stateRestored = true
+            runCatching { assistantCommandCoordinator.recoverStale() }
             pendingCommand?.also { pendingCommand = null }?.let { submitAssistant(it, pendingCommandShouldSpeak) }
+            watchPendingCommands()
         }
         viewModelScope.launch {
             for (snapshot in persistenceQueue) runCatching { stateRepository.save(snapshot) }
@@ -268,6 +286,22 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 }
                 positionPersistenceTick = (positionPersistenceTick + 1) % 10
                 if (positionPersistenceTick == 0) persist(_state.value)
+            }
+        }
+    }
+
+    private fun watchPendingCommands() {
+        viewModelScope.launch {
+            assistantCommandCoordinator.observePendingUiCommands().collect { commands ->
+                commands.forEach { pending ->
+                    if (!claimedPendingCommands.add(pending.commandId)) return@forEach
+                    val claimed = assistantCommandCoordinator.claim(pending.commandId)
+                    if (claimed == null) {
+                        claimedPendingCommands.remove(pending.commandId)
+                    } else {
+                        submitAssistant(claimed.text, speakResponse = true, pendingCommandId = claimed.commandId)
+                    }
+                }
             }
         }
     }
@@ -360,9 +394,88 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun setListening(value: Boolean) = _state.update { it.copy(isListening = value) }
     fun setQuery(value: String) = _state.update { it.copy(query = value) }
 
+    fun setVoiceInputState(value: VoiceInputState, backend: RecognitionBackend) {
+        _state.update { current ->
+            val status = when (value) {
+                VoiceInputState.Idle -> current.assistantText
+                VoiceInputState.CheckingAvailability -> "Checking voice recognition..."
+                VoiceInputState.Listening -> "Listening..."
+                VoiceInputState.Processing -> "Recognizing speech..."
+                is VoiceInputState.TranscriptReady -> "Heard: \"${value.text}\""
+                is VoiceInputState.PermissionRequired -> "Microphone permission is required"
+                is VoiceInputState.ModelRequired -> "Whisper model is required: ${value.modelId}"
+                is VoiceInputState.NoSpeech -> value.message
+                is VoiceInputState.Failed -> value.message
+            }
+            current.copy(
+                assistantText = status,
+                isListening = value is VoiceInputState.Listening,
+                voiceInputState = value,
+                recognitionBackend = backend
+            )
+        }
+    }
+
+    fun setVoiceDiagnostics(value: VoiceCaptureDiagnostics) = _state.update {
+        it.copy(voiceDiagnostics = value)
+    }
+
+    fun startPushToTalk(start: () -> Unit) {
+        viewModelScope.launch {
+            if (state.value.wakeWordEnabled) {
+                runCatching { AuraWakeWordService.stop(getApplication()) }
+                delay(350L)
+            }
+            start()
+        }
+    }
+
+    fun resumeWakeWordAfterPushToTalk() {
+        if (!state.value.wakeWordEnabled) return
+        runCatching { AuraWakeWordService.start(getApplication()) }
+    }
+
+    /** Must be invoked while the activity is visible: Android blocks background microphone starts. */
+    fun setWakeWordEnabled(enabled: Boolean) {
+        runCatching {
+            if (enabled) AuraWakeWordService.start(getApplication())
+            else AuraWakeWordService.stop(getApplication())
+        }.onSuccess {
+            preferences.edit { putBoolean("wake_word_enabled", enabled) }
+            _state.update { it.copy(wakeWordEnabled = enabled) }
+        }.onFailure {
+            _state.update { current ->
+                current.copy(
+                    assistantText = "Не удалось включить голосовую активацию. Проверь разрешение на микрофон."
+                )
+            }
+        }
+    }
+
+    fun resumeWakeWordServiceIfNeeded() {
+        if (!state.value.wakeWordEnabled) return
+        runCatching { AuraWakeWordService.start(getApplication()) }
+            .onFailure {
+                _state.update { current ->
+                    current.copy(
+                        wakeWordEnabled = false,
+                        assistantText = "Голосовая активация выключена: разреши доступ к микрофону."
+                    )
+                }
+            }
+    }
+
     fun submit(text: String = state.value.query) = submitAssistant(text, speakResponse = false)
 
     fun submitVoice(text: String) = submitAssistant(text, speakResponse = true)
+
+    /** Debug/device verification hook. Production voice turns still go through the AI agent. */
+    fun previewAzerbaijaniVoice(text: String) = speech.speak(
+        text,
+        az.simplesoft.aura.assistant.AssistantLanguage.AZERBAIJANI
+    )
+
+    fun previewVoice(text: String, language: az.simplesoft.aura.assistant.AssistantLanguage) = speech.speak(text, language)
 
     fun search(text: String = state.value.query) {
         val query = text.trim()
@@ -371,15 +484,17 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             _state.update { it.copy(assistantText = "Восстанавливаю твою музыку…") }
             return
         }
-        executeAssistantReply(
+        viewModelScope.launch {
+            executeAssistantReply(
             AssistantReply(
                 intent = MusicIntent.Search(query),
                 text = "Ищу песню: $query"
             )
-        )
+            )
+        }
     }
 
-    private fun submitAssistant(text: String, speakResponse: Boolean) {
+    private fun submitAssistant(text: String, speakResponse: Boolean, pendingCommandId: String? = null) {
         val input = text.trim()
         if (input.isBlank()) return
         if (!stateRestored) {
@@ -393,7 +508,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         _state.update { current ->
             current.copy(
                 query = "",
-                destination = AuraDestination.ASSISTANT,
+                destination = if (speakResponse) current.destination else AuraDestination.ASSISTANT,
                 assistantText = when (language) {
                     az.simplesoft.aura.assistant.AssistantLanguage.RUSSIAN -> "Думаю…"
                     az.simplesoft.aura.assistant.AssistantLanguage.AZERBAIJANI -> "Düşünürəm…"
@@ -409,7 +524,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 )).takeLast(20)
             )
         }
-        viewModelScope.launch {
+        val commandJob = viewModelScope.launch {
             val current = state.value
             val track = current.nowTrack.takeIf { it.id != DemoCatalog.tracks.first().id }
             val answer = auraAi.respond(
@@ -419,30 +534,72 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     currentArtist = track?.artist,
                     isPlaying = current.isPlaying,
                     hourOfDay = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
-                    carMode = current.isCarMode
+                    carMode = current.isCarMode,
+                    queueSize = current.queue.size,
+                    playlists = current.playlists.map { it.name }
                 )
             )
+            val execution = executeAssistantReply(answer)
+            val responseText = when (execution) {
+                is ActionExecutionResult.Success -> answer.text
+                is ActionExecutionResult.Duplicate -> execution.message
+                is ActionExecutionResult.NeedsClarification -> execution.question
+                is ActionExecutionResult.NotFound -> execution.message
+                is ActionExecutionResult.PermissionRequired -> execution.message
+                is ActionExecutionResult.TemporaryFailure -> execution.message
+                is ActionExecutionResult.Unsupported -> execution.message
+            }
             val replyTimestamp = System.currentTimeMillis()
             _state.update { value ->
                 value.copy(
-                    assistantText = answer.text,
+                    assistantText = responseText,
                     isAssistantThinking = false,
                     assistantSource = answer.source,
                     assistantMessages = (value.assistantMessages + AssistantMessage(
                         id = "ui:aura:$replyTimestamp",
                         role = AssistantRole.AURA,
-                        text = answer.text,
+                        text = responseText,
                         language = answer.language,
                         createdAt = replyTimestamp
                     )).takeLast(20)
                 )
             }
-            if (speakResponse) speech.speak(answer.text, answer.language)
-            executeAssistantReply(answer)
+            pendingCommandId?.let { commandId ->
+                if (execution is ActionExecutionResult.Success) {
+                    assistantCommandCoordinator.complete(commandId)
+                } else if (execution !is ActionExecutionResult.Duplicate) {
+                    assistantCommandCoordinator.fail(commandId)
+                }
+            }
+            if (speakResponse) speech.speak(responseText, answer.language)
+        }
+        commandJob.invokeOnCompletion { cause ->
+            pendingCommandId?.let { commandId ->
+                claimedPendingCommands.remove(commandId)
+                when (cause) {
+                    is CancellationException -> viewModelScope.launch { assistantCommandCoordinator.requeue(commandId) }
+                    null -> Unit
+                    else -> viewModelScope.launch { assistantCommandCoordinator.fail(commandId) }
+                }
+            }
         }
     }
 
-    private fun executeAssistantReply(answer: AssistantReply) {
+    private suspend fun executeAssistantReply(answer: AssistantReply): ActionExecutionResult {
+        if (answer.intent is MusicIntent.PlayPlaylist) {
+            val requested = answer.intent.name
+            val exists = state.value.playlists.any {
+                it.name.equals(requested, ignoreCase = true) ||
+                    it.name.contains(requested, ignoreCase = true) ||
+                    requested.contains(it.name, ignoreCase = true)
+            }
+            if (!exists) return ActionExecutionResult.NotFound("Плейлист $requested не найден")
+        }
+        dispatchAssistantReply(answer)?.join()
+        return ActionExecutionResult.Success()
+    }
+
+    private fun dispatchAssistantReply(answer: AssistantReply): Job? {
         when (val intent = answer.intent) {
             MusicIntent.OpenPlaylists -> {
                 _state.update {
@@ -453,7 +610,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         assistantText = answer.text
                     )
                 }
-                return
+                return null
             }
             is MusicIntent.CreatePlaylist -> {
                 createPlaylist(intent.name, intent.includeQueue)
@@ -465,7 +622,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         assistantText = answer.text
                     )
                 }
-                return
+                return null
             }
             is MusicIntent.PlayPlaylist -> {
                 val playlist = state.value.playlists.firstOrNull {
@@ -484,32 +641,31 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         )
                     }
                 } else {
-                    playPlaylist(playlist, intent.shuffled)
+                    return playPlaylist(playlist, intent.shuffled)
                 }
-                return
+                return null
             }
             MusicIntent.OpenQueue -> {
                 _state.update { it.copy(isQueueOpen = true, isPlayerExpanded = false, assistantText = answer.text) }
-                return
+                return null
             }
             MusicIntent.OpenRadio -> {
                 openRadio()
                 _state.update { it.copy(assistantText = answer.text) }
-                return
+                return null
             }
             MusicIntent.ClearQueue -> {
                 clearQueue()
-                return
+                return null
             }
             is MusicIntent.QueueTrack -> {
-                searchAndQueue(intent.query, intent.playNext)
-                return
+                return searchAndQueue(intent.query, intent.playNext)
             }
             is MusicIntent.AutoContinue -> {
                 _state.update {
                     it.copy(autoContinueEnabled = intent.enabled, assistantText = answer.text).also(::persist)
                 }
-                return
+                return null
             }
             else -> Unit
         }
@@ -517,9 +673,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         if (requestedSearch != null) {
             requestedSearch.mood?.takeIf {
                 requestedSearch.artist.isNullOrBlank() && requestedSearch.query.isGenericMoodQuery(it)
-            }?.let {
-                playMoodMix(it)
-                return
+             }?.let {
+                 playMoodMix(it)
+                 return null
             }
             val query = requestedSearch.query
             _state.update { current ->
@@ -534,55 +690,54 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 )
             }
             persist(_state.value)
-            searchTracks(MusicSearchRequest(rawQuery = query, artist = requestedSearch.artist))
-            return
+            return searchTracks(MusicSearchRequest(rawQuery = query, artist = requestedSearch.artist))
         }
 
         if (answer.intent == MusicIntent.Similar) {
             playSimilarMix()
-            return
+            return null
         }
 
         if (answer.intent == MusicIntent.MyMix) {
             playMyMix()
-            return
+            return null
         }
 
         if (answer.intent == MusicIntent.ContinueListening) {
             continueListening()
-            return
+            return null
         }
 
         when (answer.intent) {
             MusicIntent.Play -> {
                 _state.update { it.copy(assistantText = answer.text) }
                 playCurrent()
-                return
+                return null
             }
             MusicIntent.Pause -> {
                 _state.update { it.copy(assistantText = answer.text) }
                 playback.pause()
-                return
+                return null
             }
             MusicIntent.Next -> {
                 _state.update { it.copy(assistantText = answer.text) }
                 next()
-                return
+                return null
             }
             MusicIntent.Previous -> {
                 _state.update { it.copy(assistantText = answer.text) }
                 previous()
-                return
+                return null
             }
             MusicIntent.Like -> {
                 if (!state.value.liked) toggleLike()
                 _state.update { it.copy(assistantText = answer.text) }
-                return
+                return null
             }
             MusicIntent.Unlike -> {
                 if (state.value.liked) toggleLike()
                 _state.update { it.copy(assistantText = answer.text) }
-                return
+                return null
             }
             else -> Unit
         }
@@ -645,6 +800,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 MusicIntent.Unknown -> current.copy(assistantText = answer.text)
             }
         }
+        return null
     }
 
     fun play(track: Track) {
@@ -901,8 +1057,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun playPlaylistFrom(playlist: AuraPlaylist, index: Int) =
         playPlaylistInternal(playlist, shuffled = false, startIndex = index)
 
-    private fun playPlaylistInternal(playlist: AuraPlaylist, shuffled: Boolean, startIndex: Int) {
-        if (playlist.tracks.isEmpty()) return
+    private fun playPlaylistInternal(playlist: AuraPlaylist, shuffled: Boolean, startIndex: Int): Job? {
+        if (playlist.tracks.isEmpty()) return null
         _state.update {
             it.copy(
                 isLoading = true,
@@ -910,7 +1066,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 searchPhase = SearchPhase.RESOLVING
             )
         }
-        viewModelScope.launch {
+        return viewModelScope.launch {
             val source = if (shuffled) playlist.tracks.shuffled() else playlist.tracks
             val requestedId = source.getOrNull(if (shuffled) 0 else startIndex)?.id
             val queue = preparePlaylistTracks(source)
@@ -1069,7 +1225,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
-    private fun searchAndQueue(query: String, playNext: Boolean) {
+    private fun searchAndQueue(query: String, playNext: Boolean): Job {
         _state.update {
             it.copy(
                 isLoading = true,
@@ -1077,7 +1233,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 assistantText = if (playNext) "Ищу трек, который сыграет следующим…" else "Ищу трек для очереди…"
             )
         }
-        viewModelScope.launch {
+        return viewModelScope.launch {
             when (val search = searchCandidates(MusicSearchRequest(rawQuery = query, autoPlay = false))) {
                 is ProviderResult.Success -> {
                     val candidate = search.value.firstOrNull()
@@ -1117,8 +1273,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
-    private fun searchTracks(request: MusicSearchRequest) {
-        viewModelScope.launch {
+    private fun searchTracks(request: MusicSearchRequest): Job {
+        return viewModelScope.launch {
             val startedAt = System.currentTimeMillis()
             when (val result = searchCandidates(request)) {
                 is ProviderResult.Success -> {
@@ -1145,7 +1301,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     }
                     val best = result.value.firstOrNull()
                     if (request.autoPlay && best != null && best.confidence >= AUTO_PLAY_CONFIDENCE) {
-                        resolveAndPlay(best)
+                        resolveAndPlay(best).join()
                     } else {
                         _state.update { it.copy(searchPhase = SearchPhase.IDLE, assistantText = "Выбери нужный трек.") }
                     }
@@ -1171,7 +1327,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         candidate: TrackCandidate,
         resumeTrackId: String? = null,
         resumePositionMs: Long = 0L
-    ) {
+    ): Job {
         _state.update {
             it.copy(
                 isLoading = true,
@@ -1179,7 +1335,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 assistantText = "Получаю источник ${candidate.artist} — ${candidate.title}…"
             )
         }
-        viewModelScope.launch {
+        return viewModelScope.launch {
             val resolveStartedAt = System.currentTimeMillis()
             val ordered = unifiedTrackSession.fallbackOrder(candidate, latestCandidates, 4)
             var lastError = "Подходящий источник не найден"

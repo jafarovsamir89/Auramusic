@@ -1,5 +1,3 @@
-import java.util.Properties
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -7,16 +5,6 @@ plugins {
     id("com.google.devtools.ksp")
     id("androidx.room")
 }
-
-val auraLocalProperties = Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.exists()) file.inputStream().use { load(it) }
-}
-
-fun auraConfig(name: String, fallback: String = ""): String =
-    providers.environmentVariable(name).orNull ?: auraLocalProperties.getProperty(name, fallback)
-
-fun String.asBuildConfigString(): String = "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 room {
     schemaDirectory("$projectDir/schemas")
@@ -37,12 +25,13 @@ android {
         targetSdk = 35
         versionCode = 3
         versionName = "0.3.0"
-        buildConfigField("String", "OPENROUTER_API_KEY", auraConfig("OPENROUTER_API_KEY").asBuildConfigString())
-        buildConfigField(
-            "String",
-            "OPENROUTER_MODEL",
-            auraConfig("OPENROUTER_MODEL", "~deepseek/deepseek-v4-flash-latest").asBuildConfigString()
-        )
+        ndk.abiFilters += "arm64-v8a"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-std=c++17")
+            }
+        }
     }
 
     buildFeatures {
@@ -50,9 +39,29 @@ android {
         buildConfig = true
     }
 
+    ndkVersion = "27.3.13750724"
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+}
+
+// Room 2.8 migration bundles are generated with serialization 1.8.x. Keep
+// the runtime aligned when Compose or another AndroidX BOM requests 1.7.x.
+configurations.configureEach {
+    resolutionStrategy.force(
+        "org.jetbrains.kotlinx:kotlinx-serialization-core:1.8.1",
+        "org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.8.1",
+        "org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1",
+        "org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.8.1"
+    )
 }
 
 dependencies {
@@ -74,11 +83,16 @@ dependencies {
     implementation("androidx.media3:media3-common:1.8.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.json:json:20260719")
+    implementation("org.pytorch:pytorch_android:2.1.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("androidx.room:room-runtime:2.8.4")
     implementation("androidx.room:room-ktx:2.8.4")
     ksp("androidx.room:room-compiler:2.8.4")
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.room:room-testing:2.8.4")
+    androidTestImplementation("androidx.sqlite:sqlite-framework:2.5.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

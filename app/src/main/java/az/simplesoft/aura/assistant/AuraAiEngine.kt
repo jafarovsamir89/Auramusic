@@ -5,45 +5,25 @@ data class AuraAiContext(
     val currentArtist: String? = null,
     val isPlaying: Boolean = false,
     val hourOfDay: Int,
-    val carMode: Boolean = false
+    val carMode: Boolean = false,
+    val queueSize: Int = 0,
+    val playlists: List<String> = emptyList()
 )
 
-interface RemoteAssistantAdapter {
-    val isAvailable: Boolean
-    suspend fun reason(
-        input: String,
-        context: AuraAiContext,
-        memory: AssistantMemorySnapshot,
-        language: AssistantLanguage
-    ): AssistantReply
-}
-
-/** The single seam used by UI: understand, remember and return one safe executable turn. */
+/** The single seam used by UI for local commands, dialogue, and memory. */
 class AuraAiEngine(
     private val local: LocalIntentEngine,
-    private val remote: RemoteAssistantAdapter,
-    private val memory: CompactAssistantMemory
+    private val companion: LocalCompanionEngine = LocalCompanionEngine(),
+    private val memory: CompactAssistantMemory,
+    private val dataBackedCompanion: DataBackedCompanionEngine? = null
 ) {
     suspend fun respond(input: String, context: AuraAiContext): AssistantReply {
+        val detectedLanguage = AssistantLanguage.detect(input)
         val localReply = local.understand(input)
-        val finalReply = if (localReply.route != AssistantRoute.NEEDS_REASONING) {
-            localReply
-        } else if (remote.isAvailable) {
-            runCatching {
-                remote.reason(input, context, memory.snapshot(), localReply.language)
-            }.getOrElse {
-                localReply.copy(
-                    text = fallbackText(localReply.language, unavailable = false),
-                    route = AssistantRoute.LOCAL_CONVERSATION,
-                    source = AssistantSource.FALLBACK
-                )
-            }
-        } else {
-            localReply.copy(
-                text = fallbackText(localReply.language, unavailable = true),
-                route = AssistantRoute.LOCAL_CONVERSATION,
-                source = AssistantSource.FALLBACK
-            )
+        val finalReply = if (localReply.intent != MusicIntent.Unknown) localReply else {
+            (dataBackedCompanion?.respond(input, detectedLanguage)
+                ?: companion.respond(input, context, memory.snapshot(), detectedLanguage))
+                .copy(memoryInsights = localReply.memoryInsights + companion.extractMemory(input))
         }
         memory.record(input, finalReply)
         return finalReply
@@ -51,16 +31,4 @@ class AuraAiEngine(
 
     suspend fun memorySnapshot(): AssistantMemorySnapshot = memory.snapshot()
     suspend fun clearMemory() = memory.clear()
-
-    private fun fallbackText(language: AssistantLanguage, unavailable: Boolean): String = when (language) {
-        AssistantLanguage.RUSSIAN -> if (unavailable) {
-            "Я поняла, что это не поиск музыки. Для свободного разговора осталось подключить мой AI-мозг."
-        } else "Сейчас не удалось связаться с моим AI-мозгом. Попробуем ещё раз?"
-        AssistantLanguage.AZERBAIJANI -> if (unavailable) {
-            "Bunun musiqi axtarışı olmadığını anladım. Sərbəst söhbət üçün AI beynimi qoşmaq qalıb."
-        } else "AI beynimlə indi əlaqə yaratmaq alınmadı. Bir daha yoxlayaq?"
-        AssistantLanguage.ENGLISH -> if (unavailable) {
-            "I understood that this isn't a music search. My AI brain still needs to be connected for open conversation."
-        } else "I couldn't reach my AI brain just now. Shall we try again?"
-    }
 }

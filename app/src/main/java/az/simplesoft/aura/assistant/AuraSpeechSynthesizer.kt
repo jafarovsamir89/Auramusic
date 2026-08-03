@@ -1,47 +1,35 @@
 package az.simplesoft.aura.assistant
 
 import android.content.Context
-import android.os.Bundle
-import android.speech.tts.TextToSpeech
-import java.util.Locale
-import java.util.UUID
+/**
+ * Small voice seam used by the UI. Russian uses the local female Silero voice
+ * (Kseniya); Azerbaijani uses its local Silero voice. Unsupported text or a
+ * download/load failure falls back to the best system voice on the phone.
+ */
+class AuraSpeechSynthesizer(context: Context) : VoiceEngine {
+    val voicePacks = VoicePackManager(context)
+    private val system = AndroidSystemVoiceEngine(context)
+    private val silero = SileroVoiceEngine(context)
+    private val russianSilero = SileroRussianVoiceEngine(context)
 
-class AuraSpeechSynthesizer(context: Context) : TextToSpeech.OnInitListener {
-    private val engine = TextToSpeech(context.applicationContext, this)
-    private var ready = false
-    private var pending: Pair<String, AssistantLanguage>? = null
-
-    override fun onInit(status: Int) {
-        ready = status == TextToSpeech.SUCCESS
-        if (ready) {
-            engine.setSpeechRate(0.96f)
-            engine.setPitch(1.04f)
-            pending?.also { (text, language) -> pending = null; speak(text, language) }
+    override fun speak(text: String, language: AssistantLanguage) {
+        stop()
+        when (language) {
+            AssistantLanguage.RUSSIAN -> russianSilero.speak(text) { system.speak(text, language) }
+            AssistantLanguage.AZERBAIJANI -> silero.speak(text) { system.speak(text, language) }
+            AssistantLanguage.ENGLISH -> system.speak(text, language)
         }
     }
 
-    fun speak(text: String, language: AssistantLanguage) {
-        val safeText = text.trim().take(TextToSpeech.getMaxSpeechInputLength())
-        if (safeText.isBlank()) return
-        if (!ready) {
-            pending = safeText to language
-            return
-        }
-        val requested = when (language) {
-            AssistantLanguage.RUSSIAN -> Locale("ru", "RU")
-            AssistantLanguage.AZERBAIJANI -> Locale("az", "AZ")
-            AssistantLanguage.ENGLISH -> Locale.US
-        }
-        val support = engine.isLanguageAvailable(requested)
-        if (support >= TextToSpeech.LANG_AVAILABLE) engine.language = requested
-        engine.speak(safeText, TextToSpeech.QUEUE_FLUSH, Bundle(), "aura:${UUID.randomUUID()}")
+    override fun stop() {
+        silero.stop()
+        russianSilero.stop()
+        system.stop()
     }
 
-    fun stop() = engine.stop()
-
-    fun shutdown() {
-        pending = null
-        engine.stop()
-        engine.shutdown()
+    override fun shutdown() {
+        silero.shutdown()
+        russianSilero.shutdown()
+        system.shutdown()
     }
 }
