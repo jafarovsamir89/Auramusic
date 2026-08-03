@@ -123,8 +123,20 @@ interface AuraStateDao {
     @Query("SELECT * FROM assistant_pending_commands WHERE status = 'PENDING' AND requiresUi = 1 ORDER BY createdAt")
     fun observePendingUiCommands(): Flow<List<AssistantPendingCommandEntity>>
 
-    @Query("UPDATE assistant_pending_commands SET status = :status, updatedAt = :updatedAt, attempts = attempts + 1 WHERE commandId = :commandId AND status = :expectedStatus")
+    @Query("UPDATE assistant_pending_commands SET status = :status, updatedAt = :updatedAt, attempts = CASE WHEN :status = 'IN_PROGRESS' THEN attempts + 1 ELSE attempts END WHERE commandId = :commandId AND status = :expectedStatus")
     suspend fun updateCommandStatus(commandId: String, expectedStatus: String, status: String, updatedAt: Long): Int
+
+    @Query("UPDATE assistant_pending_commands SET status = 'PENDING', updatedAt = :now WHERE commandId = :commandId AND status = 'IN_PROGRESS' AND requiresUi = 1")
+    suspend fun requeueUiCommand(commandId: String, now: Long): Int
+
+    @Query("UPDATE assistant_pending_commands SET status = 'PENDING', updatedAt = :now WHERE status = 'IN_PROGRESS' AND requiresUi = 1 AND updatedAt < :staleBefore AND attempts < :maxAttempts")
+    suspend fun recoverStaleUiCommands(staleBefore: Long, now: Long, maxAttempts: Int): Int
+
+    @Query("UPDATE assistant_pending_commands SET status = 'FAILED', updatedAt = :now WHERE status = 'IN_PROGRESS' AND requiresUi = 1 AND updatedAt < :staleBefore AND attempts >= :maxAttempts")
+    suspend fun failExhaustedUiCommands(staleBefore: Long, now: Long, maxAttempts: Int): Int
+
+    @Query("UPDATE assistant_pending_commands SET status = 'FAILED', updatedAt = :now WHERE status = 'IN_PROGRESS' AND requiresUi = 0 AND updatedAt < :staleBefore")
+    suspend fun failStaleBackgroundCommands(staleBefore: Long, now: Long): Int
 
     @Query("SELECT * FROM assistant_unknown_utterances WHERE normalizedText = :normalized LIMIT 1")
     suspend fun unknownUtterance(normalized: String): AssistantUnknownUtteranceEntity?

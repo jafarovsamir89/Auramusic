@@ -160,6 +160,7 @@ import az.simplesoft.aura.domain.music.AuraRepeatMode
 import coil.compose.AsyncImage
 import java.text.SimpleDateFormat
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import java.util.Date
 import java.util.Locale
 
@@ -643,6 +644,10 @@ private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Un
     val whisperProgress by whisper.progress.collectAsStateWithLifecycle()
     val voiceProgress by voices.progress.collectAsStateWithLifecycle()
     var packs by remember { mutableStateOf(voices.packs()) }
+    var whisperJob by remember { mutableStateOf<Job?>(null) }
+    var voiceJob by remember { mutableStateOf<Job?>(null) }
+    var activeVoiceId by remember { mutableStateOf<String?>(null) }
+    var deleteTarget by remember { mutableStateOf<String?>(null) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().statusBarsPadding(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
@@ -680,11 +685,18 @@ private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Un
                 title = "Whisper speech recognition",
                 status = whisperState.name,
                 detail = "${whisperProgress.percent}% - ${whisper.metadata.sizeBytes / 1_000_000} MB",
-                actionLabel = if (whisperState == OfflineModelState.READY) "Delete" else "Install",
+                actionLabel = when {
+                    whisperState == OfflineModelState.DOWNLOADING || whisperState == OfflineModelState.VERIFYING -> "Cancel"
+                    whisperState == OfflineModelState.READY -> "Delete"
+                    else -> "Install"
+                },
                 onAction = {
-                    scope.launch {
-                        runCatching {
-                            if (whisperState == OfflineModelState.READY) whisper.delete() else whisper.download()
+                    when {
+                        whisperState == OfflineModelState.DOWNLOADING || whisperState == OfflineModelState.VERIFYING -> whisperJob?.cancel()
+                        whisperState == OfflineModelState.READY -> deleteTarget = "whisper"
+                        else -> whisperJob = scope.launch {
+                            runCatching { whisper.download() }
+                            whisperJob = null
                         }
                     }
                 }
@@ -695,19 +707,44 @@ private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Un
                     title = "${pack.displayName} TTS (${pack.language.tag})",
                     status = pack.status.name,
                     detail = "${progress?.percent ?: 0}% - ${pack.sizeBytes / 1_000_000} MB - ${pack.sha256.take(12)}...",
-                    actionLabel = if (pack.status == VoicePackStatus.READY) "Delete" else "Install",
+                    actionLabel = if (activeVoiceId == pack.id) "Cancel" else if (pack.status == VoicePackStatus.READY) "Delete" else "Install",
                     onAction = {
-                        scope.launch {
-                            runCatching {
-                            if (pack.status == VoicePackStatus.READY) voices.delete(pack.id) else voices.install(pack.id)
-                        }.onSuccess {
-                            packs = voices.packs()
-                        }
+                        when {
+                            activeVoiceId == pack.id -> voiceJob?.cancel()
+                            pack.status == VoicePackStatus.READY -> deleteTarget = pack.id
+                            else -> {
+                                activeVoiceId = pack.id
+                                voiceJob = scope.launch {
+                                    runCatching { voices.install(pack.id) }
+                                    packs = voices.packs()
+                                    activeVoiceId = null
+                                    voiceJob = null
+                                }
+                            }
                         }
                     }
                 )
             }
         }
+    }
+    deleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete local voice resource?") },
+            text = { Text("Music, playlists, queue, history, and favorites will not be changed.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (target == "whisper") {
+                        scope.launch { whisper.delete() }
+                    } else {
+                        voices.delete(target)
+                        packs = voices.packs()
+                    }
+                    deleteTarget = null
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } }
+        )
     }
 }
 

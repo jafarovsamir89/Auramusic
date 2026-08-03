@@ -5,6 +5,7 @@ import android.media.AudioManager
 import az.simplesoft.aura.data.database.AssistantPendingCommandEntity
 import az.simplesoft.aura.data.database.AuraDatabase
 import az.simplesoft.aura.playback.PlaybackConnection
+import az.simplesoft.aura.domain.music.AuraRepeatMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -19,6 +20,7 @@ enum class ActionExecutionStatus { SUCCESS, NEEDS_CLARIFICATION, TEMPORARY_FAILU
 
 sealed interface ActionExecutionResult {
     data class Success(val message: String? = null) : ActionExecutionResult
+    data class Duplicate(val message: String) : ActionExecutionResult
     data class NeedsClarification(val question: String) : ActionExecutionResult
     data class NotFound(val message: String) : ActionExecutionResult
     data class PermissionRequired(val message: String) : ActionExecutionResult
@@ -48,6 +50,12 @@ class LocalCommandClassifier {
         if (text.contains(AssistantTextNormalizer.normalize("пауза")) && (negated || text.contains(AssistantTextNormalizer.normalize("ставь")))) {
             return CommandDecision(MusicIntent.Pause, if (negated) .99f else .96f, negated, negated, listOf("pause phrase"))
         }
+        if (matchesAny(text, "включи автопродолжение", "включи авто продолжение", "auto continue on", "enable auto continue")) {
+            return CommandDecision(MusicIntent.AutoContinue(true), .96f, negated, true, listOf("auto-continue preference"))
+        }
+        if (matchesAny(text, "выключи автопродолжение", "выключи авто продолжение", "auto continue off", "disable auto continue")) {
+            return CommandDecision(MusicIntent.AutoContinue(false), .96f, negated, true, listOf("auto-continue preference"))
+        }
         val rules = listOf(
             Rule(MusicIntent.Pause, listOf("пауза", "поставь на паузу", "останови музыку", "pause", "stop the music")),
             Rule(MusicIntent.Play, listOf("продолжи", "продолжить музыку", "возобнови", "resume", "continue playing")),
@@ -55,7 +63,12 @@ class LocalCommandClassifier {
             Rule(MusicIntent.Previous, listOf("предыдущий трек", "предыдущая песня", "previous track", "previous song")),
             Rule(MusicIntent.Louder, listOf("громче", "прибавь звук", "louder", "volume up")),
             Rule(MusicIntent.Quieter, listOf("тише", "убавь звук", "quieter", "volume down")),
-            Rule(MusicIntent.Mute, listOf("без звука", "выключи звук", "mute"))
+            Rule(MusicIntent.Mute, listOf("без звука", "выключи звук", "mute")),
+            Rule(MusicIntent.Like, listOf("поставь лайк", "лайкни", "like this")),
+            Rule(MusicIntent.Unlike, listOf("убери лайк", "дизлайк", "unlike")),
+            Rule(MusicIntent.Shuffle, listOf("перемешай очередь", "перемешай треки", "shuffle queue")),
+            Rule(MusicIntent.Repeat, listOf("повтори трек", "режим повтора", "repeat track", "repeat mode")),
+            Rule(MusicIntent.NowPlaying, listOf("что играет", "какой трек играет", "now playing", "what is playing"))
         )
         val matched = rules.firstOrNull { rule -> rule.phrases.any { phrase -> matchesPhrase(text, phrase) } }
         return if (matched == null) {
@@ -65,11 +78,14 @@ class LocalCommandClassifier {
                 intent = matched.intent,
                 confidence = if (negated) .99f else .96f,
                 negated = negated,
-                requiresUi = negated,
+                requiresUi = negated || matched.intent in setOf(MusicIntent.Like, MusicIntent.Unlike),
                 reasons = listOf("word boundary match", if (negated) "explicit negation" else "imperative phrase")
             )
         }
     }
+
+    private fun matchesAny(text: String, vararg phrases: String): Boolean =
+        phrases.any { matchesPhrase(text, it) }
 
     private fun matchesPhrase(text: String, phrase: String): Boolean =
         Regex("(?:^|\\s)${Regex.escape(AssistantTextNormalizer.normalize(phrase))}(?:$|\\s)").containsMatchIn(text)
@@ -113,13 +129,24 @@ object CommandDeduplicationPolicy {
         now - existing.createdAt in 0..WINDOW_MS
 }
 
-class PendingVoiceCommandRepository(context: Context) {
+interface PendingCommandRepository {
+    suspend fun enqueue(text: String, source: String, requiresUi: Boolean): CommandEnqueueResult
+    fun observePendingUiCommands(): Flow<List<AssistantPendingCommandEntity>>
+    suspend fun claim(commandId: String): AssistantPendingCommandEntity?
+    suspend fun complete(commandId: String)
+    suspend fun fail(commandId: String)
+    suspend fun requeue(commandId: String)
+    suspend fun recoverStale(now: Long = System.currentTimeMillis())
+}
+
+class PendingVoiceCommandRepository(context: Context) : PendingCommandRepository {
     private val dao = AuraDatabase.get(context).stateDao()
 
-    suspend fun enqueue(text: String, source: String, requiresUi: Boolean): CommandEnqueueResult = withContext(Dispatchers.IO) {
+    override suspend fun enqueue(text: String, source: String, requiresUi: Boolean): CommandEnqueueResult = withContext(Dispatchers.IO) {
         commandDedupMutex.withLock {
         val now = System.currentTimeMillis()
         val fingerprint = fingerprint(text)
+        val existing = dao.recentCommand(fingerprint, now - DEDUP_WINDOW_MS)
         val command = AssistantPendingCommandEntity(
             commandId = UUID.randomUUID().toString(),
             text = text.trim().take(500),
@@ -130,18 +157,16 @@ class PendingVoiceCommandRepository(context: Context) {
             updatedAt = now,
             requiresUi = requiresUi
         )
-        if (dao.recentCommand(fingerprint, now - DEDUP_WINDOW_MS) == null) {
+        if (existing == null || !CommandDeduplicationPolicy.shouldReuse(existing, fingerprint, now)) {
             dao.upsertPendingCommand(command)
             CommandEnqueueResult.Created(command)
         } else {
-            CommandEnqueueResult.Duplicate(
-                dao.recentCommand(fingerprint, now - DEDUP_WINDOW_MS) ?: command
-            )
+            CommandEnqueueResult.Duplicate(existing)
         }
         }
     }
 
-    fun observePendingUiCommands(): Flow<List<AssistantPendingCommandEntity>> = dao.observePendingUiCommands()
+    override fun observePendingUiCommands(): Flow<List<AssistantPendingCommandEntity>> = dao.observePendingUiCommands()
 
     suspend fun claimForUi(limit: Int = 20): List<AssistantPendingCommandEntity> = withContext(Dispatchers.IO) {
         dao.pendingUiCommands(limit).mapNotNull { command ->
@@ -151,7 +176,7 @@ class PendingVoiceCommandRepository(context: Context) {
         }
     }
 
-    suspend fun claim(commandId: String): AssistantPendingCommandEntity? = withContext(Dispatchers.IO) {
+    override suspend fun claim(commandId: String): AssistantPendingCommandEntity? = withContext(Dispatchers.IO) {
         val claimed = dao.updateCommandStatus(
             commandId,
             STATUS_PENDING,
@@ -161,12 +186,31 @@ class PendingVoiceCommandRepository(context: Context) {
         if (claimed != 1) null else dao.pendingCommand(commandId)
     }
 
-    suspend fun complete(commandId: String) = withContext(Dispatchers.IO) {
+    override suspend fun complete(commandId: String) {
+        withContext(Dispatchers.IO) {
         dao.updateCommandStatus(commandId, STATUS_IN_PROGRESS, STATUS_COMPLETED, System.currentTimeMillis())
+        }
     }
 
-    suspend fun fail(commandId: String) = withContext(Dispatchers.IO) {
+    override suspend fun fail(commandId: String) {
+        withContext(Dispatchers.IO) {
         dao.updateCommandStatus(commandId, STATUS_IN_PROGRESS, STATUS_FAILED, System.currentTimeMillis())
+        }
+    }
+
+    override suspend fun requeue(commandId: String) {
+        withContext(Dispatchers.IO) {
+        dao.requeueUiCommand(commandId, System.currentTimeMillis())
+        }
+    }
+
+    override suspend fun recoverStale(now: Long) {
+        withContext(Dispatchers.IO) {
+        val staleBefore = now - STALE_COMMAND_MS
+        dao.recoverStaleUiCommands(staleBefore, now, MAX_ATTEMPTS)
+        dao.failExhaustedUiCommands(staleBefore, now, MAX_ATTEMPTS)
+        dao.failStaleBackgroundCommands(staleBefore, now)
+        }
     }
 
     private fun fingerprint(text: String): String = MessageDigest.getInstance("SHA-256")
@@ -178,14 +222,18 @@ class PendingVoiceCommandRepository(context: Context) {
         const val STATUS_IN_PROGRESS = "IN_PROGRESS"
         const val STATUS_COMPLETED = "COMPLETED"
         const val STATUS_FAILED = "FAILED"
+        const val MAX_ATTEMPTS = 3
+        private const val STALE_COMMAND_MS = 2 * 60_000L
         private const val DEDUP_WINDOW_MS = CommandDeduplicationPolicy.WINDOW_MS
         private val commandDedupMutex = Mutex()
     }
 }
 
-class AssistantCommandCoordinator(context: Context) {
-    private val repository = PendingVoiceCommandRepository(context)
-    private val classifier = LocalCommandClassifier()
+class AssistantCommandCoordinator(
+    private val repository: PendingCommandRepository,
+    private val classifier: LocalCommandClassifier = LocalCommandClassifier()
+) {
+    constructor(context: Context) : this(PendingVoiceCommandRepository(context))
     private val mutableEvents = MutableSharedFlow<AssistantPendingCommandEntity>(extraBufferCapacity = 8)
     val events = mutableEvents.asSharedFlow()
 
@@ -198,13 +246,13 @@ class AssistantCommandCoordinator(context: Context) {
         val enqueue = repository.enqueue(text, source, requiresUi = decision.requiresUi || decision.intent == null || decision.negated)
         if (enqueue is CommandEnqueueResult.Duplicate) {
             return@withContext if (enqueue.command.status == PendingVoiceCommandRepository.STATUS_COMPLETED) {
-                ActionExecutionResult.Success("Команда уже выполнена")
+                ActionExecutionResult.Duplicate("Команда уже выполнена")
             } else {
-                ActionExecutionResult.Success("Команда уже обрабатывается")
+                ActionExecutionResult.Duplicate("Команда уже обрабатывается")
             }
         }
         val command = (enqueue as CommandEnqueueResult.Created).command
-        if (decision.intent == null || decision.negated || decision.confidence < .90f || executor == null) {
+        if (decision.intent == null || decision.requiresUi || decision.negated || decision.confidence < .90f || executor == null) {
             mutableEvents.tryEmit(command)
             return@withContext if (decision.negated) {
                 ActionExecutionResult.NeedsClarification("Команда отменена отрицанием: ${text.trim()}")
@@ -220,11 +268,12 @@ class AssistantCommandCoordinator(context: Context) {
         result
     }
 
-    suspend fun claimPendingForUi(limit: Int = 20): List<AssistantPendingCommandEntity> = repository.claimForUi(limit)
     fun observePendingUiCommands(): Flow<List<AssistantPendingCommandEntity>> = repository.observePendingUiCommands()
     suspend fun claim(commandId: String): AssistantPendingCommandEntity? = repository.claim(commandId)
     suspend fun complete(commandId: String) = repository.complete(commandId)
     suspend fun fail(commandId: String) = repository.fail(commandId)
+    suspend fun requeue(commandId: String) = repository.requeue(commandId)
+    suspend fun recoverStale(now: Long = System.currentTimeMillis()) = repository.recoverStale(now)
 }
 
 /** Executes only transport-safe player actions while the Activity is closed. */
@@ -235,6 +284,7 @@ class BackgroundMusicActionExecutor(context: Context) : AssistantActionExecutor 
         override fun onTrackChanged(trackId: String) = Unit
         override fun onPlaybackError(trackId: String?, message: String) = Unit
     })
+    private val preferences = context.getSharedPreferences("aura_background_actions", Context.MODE_PRIVATE)
 
     override suspend fun execute(intent: MusicIntent): ActionExecutionResult = runCatching {
         when (intent) {
@@ -245,6 +295,24 @@ class BackgroundMusicActionExecutor(context: Context) : AssistantActionExecutor 
             MusicIntent.Louder -> audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 0)
             MusicIntent.Quieter -> audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, 0)
             MusicIntent.Mute -> audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
+            MusicIntent.Shuffle -> {
+                val enabled = !preferences.getBoolean("shuffle", false)
+                preferences.edit().putBoolean("shuffle", enabled).apply()
+                playback.setShuffle(enabled)
+            }
+            MusicIntent.Repeat -> {
+                val next = when (preferences.getString("repeat", AuraRepeatMode.OFF.name)) {
+                    AuraRepeatMode.OFF.name -> AuraRepeatMode.ALL
+                    AuraRepeatMode.ALL.name -> AuraRepeatMode.ONE
+                    else -> AuraRepeatMode.OFF
+                }
+                preferences.edit().putString("repeat", next.name).apply()
+                playback.setRepeat(next)
+            }
+            MusicIntent.NowPlaying -> {
+                val label = playback.nowPlayingLabel() ?: return ActionExecutionResult.TemporaryFailure("Сейчас ничего не играет")
+                return ActionExecutionResult.Success(label)
+            }
             else -> return ActionExecutionResult.Unsupported("Команда требует интерфейс AURA")
         }
         ActionExecutionResult.Success()

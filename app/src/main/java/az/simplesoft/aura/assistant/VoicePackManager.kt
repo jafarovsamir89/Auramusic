@@ -6,6 +6,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -56,10 +58,16 @@ class VoicePackManager(
     private val root = File(context.applicationContext.filesDir, "voice")
     private val mutableProgress = MutableStateFlow<Map<String, VoicePackProgress>>(emptyMap())
     val progress: StateFlow<Map<String, VoicePackProgress>> = mutableProgress.asStateFlow()
+    private val installMutex = Mutex()
 
     fun packs(): List<VoicePackMetadata> = definitions().map { definition ->
         val file = File(File(root, definition.directory), definition.fileName)
         val sidecar = File(file.parentFile, "${definition.fileName}.sha256")
+        val validModel = file.isFile && file.length() == definition.sizeBytes &&
+            runCatching { file.sha256() == definition.sha256 }.getOrDefault(false)
+        if (validModel && (!sidecar.isFile || sidecar.readText().trim() != definition.sha256)) {
+            runCatching { writeSidecarAtomically(sidecar, definition.sha256) }
+        }
         val status = when {
             !file.exists() && !sidecar.exists() -> VoicePackStatus.NOT_INSTALLED
             file.isFile && file.length() == definition.sizeBytes &&
@@ -70,7 +78,9 @@ class VoicePackManager(
         definition.toMetadata(status)
     }
 
-    suspend fun install(id: String) = withContext(Dispatchers.IO) {
+    suspend fun install(id: String) = installMutex.withLock { installInternal(id) }
+
+    private suspend fun installInternal(id: String) = withContext(Dispatchers.IO) {
         val definition = definitions().firstOrNull { it.id == id } ?: error("Unknown voice pack: $id")
         val directory = File(root, definition.directory)
         require(directory.exists() || directory.mkdirs()) { "Unable to create voice directory" }
@@ -119,7 +129,7 @@ class VoicePackManager(
             check(partial.sha256() == definition.sha256) { "Voice pack checksum mismatch" }
             val model = File(directory, definition.fileName)
             Files.move(partial.toPath(), model.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-            File(directory, "${definition.fileName}.sha256").writeText(definition.sha256)
+            writeSidecarAtomically(File(directory, "${definition.fileName}.sha256"), definition.sha256)
             setProgress(id, VoicePackProgress(definition.sizeBytes, definition.sizeBytes))
         } catch (error: Throwable) {
             partial.delete()
@@ -135,6 +145,12 @@ class VoicePackManager(
 
     private fun setProgress(id: String, value: VoicePackProgress) {
         mutableProgress.value = mutableProgress.value + (id to value)
+    }
+
+    private fun writeSidecarAtomically(target: File, value: String) {
+        val partial = File(target.parentFile, "${target.name}.part")
+        partial.writeText(value)
+        Files.move(partial.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
     }
 
     private fun definitions() = listOf(

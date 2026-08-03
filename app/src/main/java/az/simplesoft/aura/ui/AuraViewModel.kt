@@ -63,6 +63,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import java.util.Calendar
 import kotlin.math.abs
@@ -258,6 +260,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 }
             }
             stateRestored = true
+            runCatching { assistantCommandCoordinator.recoverStale() }
             pendingCommand?.also { pendingCommand = null }?.let { submitAssistant(it, pendingCommandShouldSpeak) }
             watchPendingCommands()
         }
@@ -434,12 +437,14 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             _state.update { it.copy(assistantText = "Восстанавливаю твою музыку…") }
             return
         }
-        executeAssistantReply(
+        viewModelScope.launch {
+            executeAssistantReply(
             AssistantReply(
                 intent = MusicIntent.Search(query),
                 text = "Ищу песню: $query"
             )
-        )
+            )
+        }
     }
 
     private fun submitAssistant(text: String, speakResponse: Boolean, pendingCommandId: String? = null) {
@@ -472,7 +477,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 )).takeLast(20)
             )
         }
-        viewModelScope.launch {
+        val commandJob = viewModelScope.launch {
             val current = state.value
             val track = current.nowTrack.takeIf { it.id != DemoCatalog.tracks.first().id }
             val answer = auraAi.respond(
@@ -490,6 +495,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             val execution = executeAssistantReply(answer)
             val responseText = when (execution) {
                 is ActionExecutionResult.Success -> answer.text
+                is ActionExecutionResult.Duplicate -> execution.message
                 is ActionExecutionResult.NeedsClarification -> execution.question
                 is ActionExecutionResult.NotFound -> execution.message
                 is ActionExecutionResult.PermissionRequired -> execution.message
@@ -512,20 +518,27 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 )
             }
             pendingCommandId?.let { commandId ->
-                viewModelScope.launch {
-                    if (execution is ActionExecutionResult.Success) {
-                        assistantCommandCoordinator.complete(commandId)
-                    } else {
-                        assistantCommandCoordinator.fail(commandId)
-                    }
+                if (execution is ActionExecutionResult.Success) {
+                    assistantCommandCoordinator.complete(commandId)
+                } else if (execution !is ActionExecutionResult.Duplicate) {
+                    assistantCommandCoordinator.fail(commandId)
                 }
             }
             if (speakResponse) speech.speak(responseText, answer.language)
         }
+        commandJob.invokeOnCompletion { cause ->
+            pendingCommandId?.let { commandId ->
+                claimedPendingCommands.remove(commandId)
+                when (cause) {
+                    is CancellationException -> viewModelScope.launch { assistantCommandCoordinator.requeue(commandId) }
+                    null -> Unit
+                    else -> viewModelScope.launch { assistantCommandCoordinator.fail(commandId) }
+                }
+            }
+        }
     }
 
-    private fun executeAssistantReply(answer: AssistantReply): ActionExecutionResult {
-        dispatchAssistantReply(answer)
+    private suspend fun executeAssistantReply(answer: AssistantReply): ActionExecutionResult {
         if (answer.intent is MusicIntent.PlayPlaylist) {
             val requested = answer.intent.name
             val exists = state.value.playlists.any {
@@ -535,10 +548,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             if (!exists) return ActionExecutionResult.NotFound("Плейлист $requested не найден")
         }
+        dispatchAssistantReply(answer)?.join()
         return ActionExecutionResult.Success()
     }
 
-    private fun dispatchAssistantReply(answer: AssistantReply) {
+    private fun dispatchAssistantReply(answer: AssistantReply): Job? {
         when (val intent = answer.intent) {
             MusicIntent.OpenPlaylists -> {
                 _state.update {
@@ -549,7 +563,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         assistantText = answer.text
                     )
                 }
-                return
+                return null
             }
             is MusicIntent.CreatePlaylist -> {
                 createPlaylist(intent.name, intent.includeQueue)
@@ -561,7 +575,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         assistantText = answer.text
                     )
                 }
-                return
+                return null
             }
             is MusicIntent.PlayPlaylist -> {
                 val playlist = state.value.playlists.firstOrNull {
@@ -580,32 +594,31 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         )
                     }
                 } else {
-                    playPlaylist(playlist, intent.shuffled)
+                    return playPlaylist(playlist, intent.shuffled)
                 }
-                return
+                return null
             }
             MusicIntent.OpenQueue -> {
                 _state.update { it.copy(isQueueOpen = true, isPlayerExpanded = false, assistantText = answer.text) }
-                return
+                return null
             }
             MusicIntent.OpenRadio -> {
                 openRadio()
                 _state.update { it.copy(assistantText = answer.text) }
-                return
+                return null
             }
             MusicIntent.ClearQueue -> {
                 clearQueue()
-                return
+                return null
             }
             is MusicIntent.QueueTrack -> {
-                searchAndQueue(intent.query, intent.playNext)
-                return
+                return searchAndQueue(intent.query, intent.playNext)
             }
             is MusicIntent.AutoContinue -> {
                 _state.update {
                     it.copy(autoContinueEnabled = intent.enabled, assistantText = answer.text).also(::persist)
                 }
-                return
+                return null
             }
             else -> Unit
         }
@@ -613,9 +626,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         if (requestedSearch != null) {
             requestedSearch.mood?.takeIf {
                 requestedSearch.artist.isNullOrBlank() && requestedSearch.query.isGenericMoodQuery(it)
-            }?.let {
-                playMoodMix(it)
-                return
+             }?.let {
+                 playMoodMix(it)
+                 return null
             }
             val query = requestedSearch.query
             _state.update { current ->
@@ -630,55 +643,54 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 )
             }
             persist(_state.value)
-            searchTracks(MusicSearchRequest(rawQuery = query, artist = requestedSearch.artist))
-            return
+            return searchTracks(MusicSearchRequest(rawQuery = query, artist = requestedSearch.artist))
         }
 
         if (answer.intent == MusicIntent.Similar) {
             playSimilarMix()
-            return
+            return null
         }
 
         if (answer.intent == MusicIntent.MyMix) {
             playMyMix()
-            return
+            return null
         }
 
         if (answer.intent == MusicIntent.ContinueListening) {
             continueListening()
-            return
+            return null
         }
 
         when (answer.intent) {
             MusicIntent.Play -> {
                 _state.update { it.copy(assistantText = answer.text) }
                 playCurrent()
-                return
+                return null
             }
             MusicIntent.Pause -> {
                 _state.update { it.copy(assistantText = answer.text) }
                 playback.pause()
-                return
+                return null
             }
             MusicIntent.Next -> {
                 _state.update { it.copy(assistantText = answer.text) }
                 next()
-                return
+                return null
             }
             MusicIntent.Previous -> {
                 _state.update { it.copy(assistantText = answer.text) }
                 previous()
-                return
+                return null
             }
             MusicIntent.Like -> {
                 if (!state.value.liked) toggleLike()
                 _state.update { it.copy(assistantText = answer.text) }
-                return
+                return null
             }
             MusicIntent.Unlike -> {
                 if (state.value.liked) toggleLike()
                 _state.update { it.copy(assistantText = answer.text) }
-                return
+                return null
             }
             else -> Unit
         }
@@ -741,6 +753,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 MusicIntent.Unknown -> current.copy(assistantText = answer.text)
             }
         }
+        return null
     }
 
     fun play(track: Track) {
@@ -997,8 +1010,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun playPlaylistFrom(playlist: AuraPlaylist, index: Int) =
         playPlaylistInternal(playlist, shuffled = false, startIndex = index)
 
-    private fun playPlaylistInternal(playlist: AuraPlaylist, shuffled: Boolean, startIndex: Int) {
-        if (playlist.tracks.isEmpty()) return
+    private fun playPlaylistInternal(playlist: AuraPlaylist, shuffled: Boolean, startIndex: Int): Job? {
+        if (playlist.tracks.isEmpty()) return null
         _state.update {
             it.copy(
                 isLoading = true,
@@ -1006,7 +1019,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 searchPhase = SearchPhase.RESOLVING
             )
         }
-        viewModelScope.launch {
+        return viewModelScope.launch {
             val source = if (shuffled) playlist.tracks.shuffled() else playlist.tracks
             val requestedId = source.getOrNull(if (shuffled) 0 else startIndex)?.id
             val queue = preparePlaylistTracks(source)
@@ -1165,7 +1178,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
-    private fun searchAndQueue(query: String, playNext: Boolean) {
+    private fun searchAndQueue(query: String, playNext: Boolean): Job {
         _state.update {
             it.copy(
                 isLoading = true,
@@ -1173,7 +1186,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 assistantText = if (playNext) "Ищу трек, который сыграет следующим…" else "Ищу трек для очереди…"
             )
         }
-        viewModelScope.launch {
+        return viewModelScope.launch {
             when (val search = searchCandidates(MusicSearchRequest(rawQuery = query, autoPlay = false))) {
                 is ProviderResult.Success -> {
                     val candidate = search.value.firstOrNull()
@@ -1213,8 +1226,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
-    private fun searchTracks(request: MusicSearchRequest) {
-        viewModelScope.launch {
+    private fun searchTracks(request: MusicSearchRequest): Job {
+        return viewModelScope.launch {
             val startedAt = System.currentTimeMillis()
             when (val result = searchCandidates(request)) {
                 is ProviderResult.Success -> {
@@ -1241,7 +1254,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     }
                     val best = result.value.firstOrNull()
                     if (request.autoPlay && best != null && best.confidence >= AUTO_PLAY_CONFIDENCE) {
-                        resolveAndPlay(best)
+                        resolveAndPlay(best).join()
                     } else {
                         _state.update { it.copy(searchPhase = SearchPhase.IDLE, assistantText = "Выбери нужный трек.") }
                     }
@@ -1267,7 +1280,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         candidate: TrackCandidate,
         resumeTrackId: String? = null,
         resumePositionMs: Long = 0L
-    ) {
+    ): Job {
         _state.update {
             it.copy(
                 isLoading = true,
@@ -1275,7 +1288,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 assistantText = "Получаю источник ${candidate.artist} — ${candidate.title}…"
             )
         }
-        viewModelScope.launch {
+        return viewModelScope.launch {
             val resolveStartedAt = System.currentTimeMillis()
             val ordered = unifiedTrackSession.fallbackOrder(candidate, latestCandidates, 4)
             var lastError = "Подходящий источник не найден"

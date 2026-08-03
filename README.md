@@ -2,20 +2,32 @@
 
 AURA is a native Android personal music assistant. Online catalog search and playback use YouTube; local files and internet radio remain separate device features rather than fallback music providers.
 
-## AURA AI
+## Local Assistant Boundary
 
-AURA AI is fully local and deterministic:
+AURA's assistant is fully local and deterministic. There is no remote text service, server, account, token billing, or hidden model download:
 
 ```text
 voice or text
   -> local intent and dialogue library
   -> Music Brain / PlaybackService / Android API
-  -> concise reply + Silero AZ or Android system TTS
-
-  -> local reply + Silero AZ or Android system TTS
+  -> concise reply + local Silero TTS or Android system TTS
 ```
 
-Commands, dialogue branches, memory, and reply variants work without a network, server, account, or API key. Russian, Azerbaijani and English are supported by the local speech and dialogue layers. Durable user facts and recent messages are stored in a bounded Room record; complete transcripts are not retained.
+Commands, dialogue branches, memory, and reply variants work without a network. Russian, Azerbaijani, and English are supported by the local dialogue layer. Durable user facts and recent messages are stored in bounded Room records; complete transcripts are not retained.
+
+Music catalog search, YouTube playback, and Radio Browser station catalogs are network features. Local files, playlists, favorites, queue, history, and assistant memory remain usable without them. Android's system `SpeechRecognizer` only receives `EXTRA_PREFER_OFFLINE`; that flag is a preference and does not guarantee that the vendor recognizer stays off the network. Install the bundled Whisper resource for a fully local speech path.
+
+## Voice Resources
+
+Downloads are explicit and visible in the debug Diagnostics storage screen. No speech request starts a download.
+
+| Resource | Exact size | Languages | Install behavior |
+| --- | ---: | --- | --- |
+| Whisper `ggml-base-q5_1.bin` | 59,707,625 bytes | RU/AZ/EN | Manual install, SHA-256 verified |
+| Silero Kseniya `v1_kseniya_16000.jit` | 142,264,026 bytes | RU | Manual install, SHA-256 verified |
+| Silero `v5_cis_base_nostress.jit` | 91,695,221 bytes | AZ | Manual install, SHA-256 verified |
+
+Each download uses a `.part` file, validates HTTP size and SHA-256, atomically moves the model first, then creates an atomic `.sha256` sidecar. Cancelled or failed downloads remove only the partial resource. On restart, stale `IN_PROGRESS` assistant commands are requeued up to three attempts for UI work or failed for background work.
 
 ## Playback flow
 
@@ -45,7 +57,7 @@ Signed `googlevideo` URLs are not stored in the queue or Room. They are resolved
 - AURA Visual System 2.1: reference-led compact cinematic UI, violet/magenta energy accents, central AURA character and 48 dp interaction targets.
 - Free Radio Browser catalog by country with secure station streams, retry states, playback and playlist persistence.
 - Local-device music, voice intents and automotive UI.
-- AURA AI Core: local intent recognition, dialogue branches, compact memory and spoken replies without a generative model.
+- AURA assistant core: local intent recognition, dialogue branches, compact memory and spoken replies.
 - Optional local Silero voice packs for Russian and Azerbaijani with pinned size/SHA-256 metadata. Packs are installed explicitly from storage settings; normal replies never start a hidden download and fall back to Android TTS when a pack is absent.
 
 The source review and the architecture derived from NewPipe, InnerTune, ViMusic and Harmony Music are recorded in [`docs/YOUTUBE_ARCHITECTURE_RESEARCH.md`](docs/YOUTUBE_ARCHITECTURE_RESEARCH.md).

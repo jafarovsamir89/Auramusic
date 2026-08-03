@@ -20,5 +20,7 @@
     {"id":"az_memory","topic":"memory","priority":50,"variants":[
       {"id":"az_memory_1","tone":"clear","text":"Yaddaşımda yalnız sənin paylaşdığın və silə bildiyin məlumatlar olur.","weight":2,"cooldownKey":"memory"}],"patterns":[
       {"id":"az_memory_p1","intent":"MEMORY","pattern":"nə xatırlayırsan","priority":20}]}
+    ,{"id":"az_unknown","topic":"fallback","priority":-100,"variants":[
+      {"id":"az_unknown_1","tone":"calm","text":"Seni tam anlaya bilm\u0259dim. Musiqi, n\u00f6vb\u0259 v\u0259 ya s\u00f6hb\u0259t bar\u0259d\u0259 k\u00f6m\u0259k ed\u0259 bil\u0259r\u0259m.","weight":1,"cooldownKey":"unknown"}]}
   ]
 }

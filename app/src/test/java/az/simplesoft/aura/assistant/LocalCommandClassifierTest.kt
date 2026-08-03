@@ -38,4 +38,19 @@ class LocalCommandClassifierTest {
         assertTrue(result.intent == null)
         assertTrue(result.requiresUi)
     }
+
+    @Test
+    fun `safe playback controls are classified without the UI`() {
+        assertEquals(MusicIntent.Shuffle, classifier.classify("shuffle queue").intent)
+        assertEquals(MusicIntent.Repeat, classifier.classify("repeat track").intent)
+        assertEquals(MusicIntent.NowPlaying, classifier.classify("now playing").intent)
+    }
+
+    @Test
+    fun `user state controls are durable UI commands`() {
+        val like = classifier.classify("like this")
+        assertEquals(MusicIntent.Like, like.intent)
+        assertTrue(like.requiresUi)
+        assertEquals(MusicIntent.AutoContinue(true), classifier.classify("enable auto continue").intent)
+    }
 }

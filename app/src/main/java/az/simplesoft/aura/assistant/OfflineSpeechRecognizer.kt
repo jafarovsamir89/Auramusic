@@ -10,8 +10,9 @@ import android.speech.SpeechRecognizer
 import java.util.Locale
 
 /**
- * Использует системный Android SpeechRecognizer с EXTRA_PREFER_OFFLINE.
- * На телефонах с установленным офлайн-языковым пакетом работает без сети.
+ * Uses the system Android SpeechRecognizer with EXTRA_PREFER_OFFLINE. The flag
+ * is only a preference: the installed recognizer may still use its own network
+ * service. WhisperSpeechRecognizer is the truthful fully-local path.
  *
  * Для гарантированно автономной работы интерфейс можно заменить VoskRecognizer,
  * не меняя LocalIntentEngine.

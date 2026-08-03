@@ -21,5 +21,7 @@
     {"id":"en_memory","topic":"memory","priority":50,"variants":[
       {"id":"en_memory_1","tone":"clear","text":"I only keep things you choose to share, and you can delete them locally.","weight":2,"cooldownKey":"memory"}],"patterns":[
       {"id":"en_memory_p1","intent":"MEMORY","pattern":"what do you remember","priority":20}]}
+    ,{"id":"en_unknown","topic":"fallback","priority":-100,"variants":[
+      {"id":"en_unknown_1","tone":"calm","text":"I did not quite understand. I can help with music, queues, playlists, or a short chat.","weight":1,"cooldownKey":"unknown"}]}
   ]
 }

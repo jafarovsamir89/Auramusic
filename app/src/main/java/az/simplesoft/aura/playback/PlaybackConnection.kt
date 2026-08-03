@@ -154,6 +154,11 @@ class PlaybackConnection(
     fun seekTo(positionMs: Long) = withController { it.seekTo(positionMs.coerceAtLeast(0L)) }
     fun currentPositionMs(): Long = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
     fun durationMs(): Long = controller?.duration?.takeIf { it > 0L } ?: 0L
+    fun nowPlayingLabel(): String? = controller?.currentMediaItem?.mediaMetadata?.let { metadata ->
+        listOfNotNull(metadata.title?.toString(), metadata.artist?.toString())
+            .joinToString(" — ")
+            .takeIf(String::isNotBlank)
+    }
 
     fun release() {
         controller?.removeListener(playerListener)

@@ -7,6 +7,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -48,8 +50,11 @@ class OfflineModelManager(
     val state: StateFlow<OfflineModelState> = mutableState.asStateFlow()
     private val mutableProgress = MutableStateFlow(OfflineModelProgress(totalBytes = metadata.sizeBytes))
     val progress: StateFlow<OfflineModelProgress> = mutableProgress.asStateFlow()
+    private val installMutex = Mutex()
 
-    suspend fun download() = withContext(Dispatchers.IO) {
+    suspend fun download() = installMutex.withLock { downloadInternal() }
+
+    private suspend fun downloadInternal() = withContext(Dispatchers.IO) {
         if (isReady()) {
             mutableState.value = OfflineModelState.READY
             return@withContext
@@ -103,6 +108,7 @@ class OfflineModelManager(
             check(partial.length() == metadata.sizeBytes) { "Unexpected Whisper size ${partial.length()}" }
             check(partial.sha256() == metadata.sha256) { "Whisper checksum mismatch" }
             Files.move(partial.toPath(), modelFile().toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            writeSidecarAtomically()
             mutableProgress.value = OfflineModelProgress(metadata.sizeBytes, metadata.sizeBytes)
             mutableState.value = OfflineModelState.READY
         } catch (error: Throwable) {
@@ -115,13 +121,19 @@ class OfflineModelManager(
     suspend fun delete() = withContext(Dispatchers.IO) {
         mutableState.value = OfflineModelState.DELETING
         modelFile().delete()
+        sidecarFile().delete()
+        File(directory(), "${metadata.fileName}.sha256.part").delete()
         File(directory(), "${metadata.fileName}.part").delete()
         mutableProgress.value = OfflineModelProgress(totalBytes = metadata.sizeBytes)
         mutableState.value = OfflineModelState.NOT_INSTALLED
     }
 
-    fun isReady(): Boolean = modelFile().let {
-        it.isFile && it.length() == metadata.sizeBytes && runCatching { it.sha256() == metadata.sha256 }.getOrDefault(false)
+    fun isReady(): Boolean {
+        val model = modelFile()
+        val valid = model.isFile && model.length() == metadata.sizeBytes &&
+            runCatching { model.sha256() == metadata.sha256 }.getOrDefault(false)
+        if (valid) runCatching { writeSidecarAtomically() }
+        return valid
     }
 
     fun requireReady(): File = modelFile().takeIf { isReady() }
@@ -130,6 +142,14 @@ class OfflineModelManager(
     private fun initialState(): OfflineModelState = if (isReady()) OfflineModelState.READY else OfflineModelState.NOT_INSTALLED
     private fun directory() = File(appContext.filesDir, "models/whisper")
     private fun modelFile() = File(directory(), metadata.fileName)
+    private fun sidecarFile() = File(directory(), "${metadata.fileName}.sha256")
+
+    private fun writeSidecarAtomically() {
+        val sidecar = sidecarFile()
+        val partial = File(directory(), "${metadata.fileName}.sha256.part")
+        partial.writeText(metadata.sha256)
+        Files.move(partial.toPath(), sidecar.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    }
 
     private fun File.sha256(): String {
         val digest = MessageDigest.getInstance("SHA-256")

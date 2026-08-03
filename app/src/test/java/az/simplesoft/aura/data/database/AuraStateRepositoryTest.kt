@@ -262,6 +262,10 @@ private class FakeAuraStateDao : AuraStateDao {
     override fun observePendingUiCommands(): Flow<List<AssistantPendingCommandEntity>> = emptyFlow()
     override suspend fun recentCommand(fingerprint: String, after: Long): AssistantPendingCommandEntity? = null
     override suspend fun updateCommandStatus(commandId: String, expectedStatus: String, status: String, updatedAt: Long): Int = 0
+    override suspend fun requeueUiCommand(commandId: String, now: Long): Int = 0
+    override suspend fun recoverStaleUiCommands(staleBefore: Long, now: Long, maxAttempts: Int): Int = 0
+    override suspend fun failExhaustedUiCommands(staleBefore: Long, now: Long, maxAttempts: Int): Int = 0
+    override suspend fun failStaleBackgroundCommands(staleBefore: Long, now: Long): Int = 0
     override suspend fun unknownUtterance(normalized: String): AssistantUnknownUtteranceEntity? = null
     override suspend fun userMemory(): List<AssistantUserMemoryEntity> = emptyList()
     override suspend fun deleteUserMemory(key: String) = Unit

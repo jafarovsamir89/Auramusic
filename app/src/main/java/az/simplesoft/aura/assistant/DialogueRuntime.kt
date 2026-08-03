@@ -284,6 +284,18 @@ class ResponseVariantSelector(
     }
 }
 
+object DialogueFallbackPolicy {
+    fun select(
+        nodes: List<AssistantDialogueNodeEntity>,
+        language: AssistantLanguage,
+        intent: AssistantIntent
+    ): AssistantDialogueNodeEntity? {
+        if (intent != AssistantIntent.UNKNOWN) return null
+        val fallbackId = "${language.tag.substringBefore('-')}_unknown"
+        return nodes.firstOrNull { it.topic == "fallback" } ?: nodes.firstOrNull { it.id == fallbackId }
+    }
+}
+
 class DataBackedCompanionEngine(context: Context) {
     private val repository = DialogueRepository(context)
     private val importer = DialogueSeedImporter(context, repository)
@@ -303,21 +315,13 @@ class DataBackedCompanionEngine(context: Context) {
             null
         }
         val previousNode = nodes.firstOrNull { it.id == state.nodeId }
-        var node = when {
+        val node = when {
+            match.intent == AssistantIntent.UNKNOWN -> DialogueFallbackPolicy.select(nodes, language, match.intent)
             matchedNode != null -> matchedNode
             match.intent in setOf(AssistantIntent.CONFIRMATION, AssistantIntent.REFUSAL, AssistantIntent.CONTINUATION) ->
                 previousNode?.nextNodeId?.let { next -> nodes.firstOrNull { it.id == next } } ?: previousNode
             else -> null
         }
-        if (node == null) {
-            for (candidate in nodes) {
-                if (repository.variants(candidate.id, language).isNotEmpty()) {
-                    node = candidate
-                    break
-                }
-            }
-        }
-        node = node ?: nodes.firstOrNull()
         val variant = node?.let { selector.choose(repository.variants(it.id, language), language) }
         stateMachine.advance(match, node?.topic, node?.nextNodeId ?: node?.id, state)
         if (match.intent == AssistantIntent.UNKNOWN || variant == null) repository.recordUnknown(input, language, state.topic, "unknown")
