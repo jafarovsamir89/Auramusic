@@ -9,13 +9,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.security.MessageDigest
 import java.util.UUID
 
 enum class ActionExecutionStatus { SUCCESS, NEEDS_CLARIFICATION, TEMPORARY_FAILURE, UNSUPPORTED }
 
 sealed interface ActionExecutionResult {
-    data object Success : ActionExecutionResult
+    data class Success(val message: String? = null) : ActionExecutionResult
     data class NeedsClarification(val question: String) : ActionExecutionResult
     data class NotFound(val message: String) : ActionExecutionResult
     data class PermissionRequired(val message: String) : ActionExecutionResult
@@ -92,13 +95,31 @@ class LocalCommandClassifier {
     private data class Rule(val intent: MusicIntent, val phrases: List<String>)
 }
 
+sealed interface CommandEnqueueResult {
+    data class Created(val command: AssistantPendingCommandEntity) : CommandEnqueueResult
+    data class Duplicate(val command: AssistantPendingCommandEntity) : CommandEnqueueResult
+}
+
+object CommandDeduplicationPolicy {
+    const val WINDOW_MS = 8_000L
+
+    /** Source does not split the idempotency key: wake-word and UI retries are the same command. */
+    fun shouldReuse(
+        existing: AssistantPendingCommandEntity,
+        fingerprint: String,
+        now: Long
+    ): Boolean = existing.fingerprint == fingerprint &&
+        existing.status != PendingVoiceCommandRepository.STATUS_FAILED &&
+        now - existing.createdAt in 0..WINDOW_MS
+}
+
 class PendingVoiceCommandRepository(context: Context) {
     private val dao = AuraDatabase.get(context).stateDao()
 
-    suspend fun enqueue(text: String, source: String, requiresUi: Boolean): AssistantPendingCommandEntity = withContext(Dispatchers.IO) {
+    suspend fun enqueue(text: String, source: String, requiresUi: Boolean): CommandEnqueueResult = withContext(Dispatchers.IO) {
+        commandDedupMutex.withLock {
         val now = System.currentTimeMillis()
         val fingerprint = fingerprint(text)
-        dao.recentCommand(fingerprint, now - DEDUP_WINDOW_MS)?.let { return@withContext it }
         val command = AssistantPendingCommandEntity(
             commandId = UUID.randomUUID().toString(),
             text = text.trim().take(500),
@@ -109,9 +130,18 @@ class PendingVoiceCommandRepository(context: Context) {
             updatedAt = now,
             requiresUi = requiresUi
         )
-        dao.upsertPendingCommand(command)
-        command
+        if (dao.recentCommand(fingerprint, now - DEDUP_WINDOW_MS) == null) {
+            dao.upsertPendingCommand(command)
+            CommandEnqueueResult.Created(command)
+        } else {
+            CommandEnqueueResult.Duplicate(
+                dao.recentCommand(fingerprint, now - DEDUP_WINDOW_MS) ?: command
+            )
+        }
+        }
     }
+
+    fun observePendingUiCommands(): Flow<List<AssistantPendingCommandEntity>> = dao.observePendingUiCommands()
 
     suspend fun claimForUi(limit: Int = 20): List<AssistantPendingCommandEntity> = withContext(Dispatchers.IO) {
         dao.pendingUiCommands(limit).mapNotNull { command ->
@@ -119,6 +149,16 @@ class PendingVoiceCommandRepository(context: Context) {
                 dao.updateCommandStatus(it.commandId, STATUS_PENDING, STATUS_IN_PROGRESS, System.currentTimeMillis()) == 1
             }?.copy(status = STATUS_IN_PROGRESS, attempts = command.attempts + 1)
         }
+    }
+
+    suspend fun claim(commandId: String): AssistantPendingCommandEntity? = withContext(Dispatchers.IO) {
+        val claimed = dao.updateCommandStatus(
+            commandId,
+            STATUS_PENDING,
+            STATUS_IN_PROGRESS,
+            System.currentTimeMillis()
+        )
+        if (claimed != 1) null else dao.pendingCommand(commandId)
     }
 
     suspend fun complete(commandId: String) = withContext(Dispatchers.IO) {
@@ -138,7 +178,8 @@ class PendingVoiceCommandRepository(context: Context) {
         const val STATUS_IN_PROGRESS = "IN_PROGRESS"
         const val STATUS_COMPLETED = "COMPLETED"
         const val STATUS_FAILED = "FAILED"
-        private const val DEDUP_WINDOW_MS = 8_000L
+        private const val DEDUP_WINDOW_MS = CommandDeduplicationPolicy.WINDOW_MS
+        private val commandDedupMutex = Mutex()
     }
 }
 
@@ -154,7 +195,15 @@ class AssistantCommandCoordinator(context: Context) {
         executor: AssistantActionExecutor? = null
     ): ActionExecutionResult = withContext(Dispatchers.IO) {
         val decision = classifier.classify(text)
-        val command = repository.enqueue(text, source, requiresUi = decision.requiresUi || decision.intent == null || decision.negated)
+        val enqueue = repository.enqueue(text, source, requiresUi = decision.requiresUi || decision.intent == null || decision.negated)
+        if (enqueue is CommandEnqueueResult.Duplicate) {
+            return@withContext if (enqueue.command.status == PendingVoiceCommandRepository.STATUS_COMPLETED) {
+                ActionExecutionResult.Success("Команда уже выполнена")
+            } else {
+                ActionExecutionResult.Success("Команда уже обрабатывается")
+            }
+        }
+        val command = (enqueue as CommandEnqueueResult.Created).command
         if (decision.intent == null || decision.negated || decision.confidence < .90f || executor == null) {
             mutableEvents.tryEmit(command)
             return@withContext if (decision.negated) {
@@ -172,6 +221,8 @@ class AssistantCommandCoordinator(context: Context) {
     }
 
     suspend fun claimPendingForUi(limit: Int = 20): List<AssistantPendingCommandEntity> = repository.claimForUi(limit)
+    fun observePendingUiCommands(): Flow<List<AssistantPendingCommandEntity>> = repository.observePendingUiCommands()
+    suspend fun claim(commandId: String): AssistantPendingCommandEntity? = repository.claim(commandId)
     suspend fun complete(commandId: String) = repository.complete(commandId)
     suspend fun fail(commandId: String) = repository.fail(commandId)
 }
@@ -196,7 +247,7 @@ class BackgroundMusicActionExecutor(context: Context) : AssistantActionExecutor 
             MusicIntent.Mute -> audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
             else -> return ActionExecutionResult.Unsupported("Команда требует интерфейс AURA")
         }
-        ActionExecutionResult.Success
+        ActionExecutionResult.Success()
     }.getOrElse { ActionExecutionResult.TemporaryFailure(it.message ?: "Плеер временно недоступен") }
 
     fun release() = playback.release()

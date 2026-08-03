@@ -20,9 +20,17 @@ This file is an engineering inventory, not legal advice. Full license texts and 
 
 | Model | Purpose | Distribution | License | Source |
 |---|---|---|---|---|
-| Silero `v5_cis_base_nostress` / `aze_gamat` | Local Azerbaijani text-to-speech | Downloaded on first Azerbaijani voice response; SHA-256 pinned in the app | MIT for CIS Base models | https://github.com/snakers4/silero-models |
+| Silero `v1_kseniya_16000` | Optional local Russian text-to-speech | Explicit HTTPS install; SHA-256 pinned in the app | MIT | https://github.com/snakers4/silero-models |
+| Silero `v5_cis_base_nostress` | Optional local Azerbaijani text-to-speech | Explicit HTTPS install; SHA-256 pinned in the app | MIT for CIS Base models | https://github.com/snakers4/silero-models |
 
-The Silero model is not bundled into the base APK. AURA downloads the official 91,695,221-byte artifact over HTTPS, verifies SHA-256 `d7d361caf78b8480bcd65a0c367af665a2bf6f06c8507306e3781dc7c6ce781b`, and stores it in private application storage.
+The Silero models are not bundled into the base APK. AURA installs official artifacts only after an explicit user action, verifies the exact size and SHA-256, writes a sidecar checksum, and publishes the model through an atomic rename into private application storage.
+
+| Artifact | Bytes | SHA-256 | URL |
+|---|---:|---|---|
+| `v1_kseniya_16000.jit` | 142264026 | `3d5359561e10dc27e9fe031197872f35857085fcfd1d1e36aaa624b01b3aa74f` | https://models.silero.ai/models/tts/ru/v1_kseniya_16000.jit |
+| `v5_cis_base_nostress.jit` | 91695221 | `d7d361caf78b8480bcd65a0c367af665a2bf6f06c8507306e3781dc7c6ce781b` | https://models.silero.ai/models/tts/ru/v5_cis_base_nostress.jit |
+
+Whisper `ggml-base-q5_1.bin` is also optional and is never downloaded by recognition implicitly. Its exact metadata is kept in `OfflineModelManager`; the same explicit-install, temporary-file, size, checksum, cancellation, and retry rules apply.
 
 Transitive dependencies must be captured from the final release dependency graph before distribution.
 

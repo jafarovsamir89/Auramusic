@@ -226,14 +226,20 @@ class LocalDialogueMatcher(private val repository: DialogueRepository) {
 }
 
 class DialogueStateMachine(private val repository: DialogueRepository) {
-    suspend fun advance(match: IntentMatch, topic: String?, nodeId: String?) {
+    suspend fun advance(match: IntentMatch, topic: String?, nodeId: String?, previous: DialogueState = DialogueState()) {
+        val failureCount = if (match.confidence >= .65f) 0 else previous.failureCount + 1
         repository.saveState(
             DialogueState(
                 nodeId = nodeId,
                 topic = topic,
                 emotion = match.intent.name,
-                expectedIntent = if (match.intent == AssistantIntent.CLARIFICATION) AssistantIntent.CONFIRMATION else null,
-                failureCount = if (match.confidence >= .65f) 0 else 1,
+                expectedIntent = when {
+                    match.intent == AssistantIntent.CLARIFICATION -> AssistantIntent.CONFIRMATION
+                    failureCount >= 3 -> null
+                    match.intent == AssistantIntent.UNKNOWN -> previous.expectedIntent
+                    else -> null
+                },
+                failureCount = failureCount,
                 lastBranch = match.matchedPatternId
             )
         )
@@ -250,15 +256,28 @@ class DialogueCooldownManager {
 
 class ResponseVariantSelector(
     private val repository: DialogueRepository,
-    private val cooldowns: DialogueCooldownManager = DialogueCooldownManager()
+    private val cooldowns: DialogueCooldownManager = DialogueCooldownManager(),
+    private val randomIndex: (Int) -> Int = { Random.nextInt(it) }
 ) {
+    private var lastVariantId: String? = null
+
     suspend fun choose(variants: List<AssistantDialogueVariantEntity>, language: AssistantLanguage): AssistantDialogueVariantEntity? {
         if (variants.isEmpty()) return null
         val stats = repository.stats(variants.map { it.id })
-        val candidates = variants.filter { cooldowns.available(it.cooldownKey) }
-        val pool = if (candidates.isNotEmpty()) candidates else variants
-        val weighted = pool.flatMap { variant -> List(max(1, variant.weight)) { variant } }
-        val choice = weighted[Random.nextInt(weighted.size)]
+        val available = variants.filter { cooldowns.available(it.cooldownKey) }
+        val withoutImmediateRepeat = available.filterNot { it.id == lastVariantId }
+        val pool = when {
+            withoutImmediateRepeat.isNotEmpty() -> withoutImmediateRepeat
+            available.isNotEmpty() -> available
+            else -> variants.filterNot { it.id == lastVariantId }.ifEmpty { variants }
+        }
+        val weighted = pool.flatMap { variant ->
+            val used = stats[variant.id]?.usedCount ?: 0
+            val adjustedWeight = (max(1, variant.weight) / (1f + used * 0.25f)).toInt().coerceAtLeast(1)
+            List(adjustedWeight) { variant }
+        }
+        val choice = weighted[randomIndex(weighted.size)]
+        lastVariantId = choice.id
         cooldowns.mark(choice.cooldownKey)
         repository.recordVariant(choice)
         return choice
@@ -278,12 +297,18 @@ class DataBackedCompanionEngine(context: Context) {
         val state = repository.state()
         val match = matcher.match(input, language, state)
         val nodes = repository.nodes(language)
-        var node = if (match.matchedPatternId != null) {
+        val matchedNode = if (match.matchedPatternId != null) {
             repository.nodeForPattern(match.matchedPatternId)
         } else {
             null
         }
-        node = node ?: nodes.firstOrNull { it.id == state.nodeId }
+        val previousNode = nodes.firstOrNull { it.id == state.nodeId }
+        var node = when {
+            matchedNode != null -> matchedNode
+            match.intent in setOf(AssistantIntent.CONFIRMATION, AssistantIntent.REFUSAL, AssistantIntent.CONTINUATION) ->
+                previousNode?.nextNodeId?.let { next -> nodes.firstOrNull { it.id == next } } ?: previousNode
+            else -> null
+        }
         if (node == null) {
             for (candidate in nodes) {
                 if (repository.variants(candidate.id, language).isNotEmpty()) {
@@ -294,7 +319,7 @@ class DataBackedCompanionEngine(context: Context) {
         }
         node = node ?: nodes.firstOrNull()
         val variant = node?.let { selector.choose(repository.variants(it.id, language), language) }
-        stateMachine.advance(match, node?.topic, node?.id)
+        stateMachine.advance(match, node?.topic, node?.nextNodeId ?: node?.id, state)
         if (match.intent == AssistantIntent.UNKNOWN || variant == null) repository.recordUnknown(input, language, state.topic, "unknown")
         return AssistantReply(MusicIntent.Unknown, variant?.text ?: fallback(language), language, AssistantRoute.LOCAL_CONVERSATION)
     }

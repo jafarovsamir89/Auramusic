@@ -110,6 +110,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -144,6 +145,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import az.simplesoft.aura.assistant.WhisperSpeechRecognizer
+import az.simplesoft.aura.assistant.OfflineModelManager
+import az.simplesoft.aura.assistant.OfflineModelState
+import az.simplesoft.aura.assistant.VoicePackManager
+import az.simplesoft.aura.assistant.VoicePackStatus
 import az.simplesoft.aura.assistant.AssistantRole
 import az.simplesoft.aura.assistant.AuraWakeWordBus
 import az.simplesoft.aura.data.DemoCatalog
@@ -154,6 +159,7 @@ import az.simplesoft.aura.data.database.AuraQueueSnapshot
 import az.simplesoft.aura.domain.music.AuraRepeatMode
 import coil.compose.AsyncImage
 import java.text.SimpleDateFormat
+import kotlinx.coroutines.launch
 import java.util.Date
 import java.util.Locale
 
@@ -629,6 +635,14 @@ private fun HeroAction(label: String, icon: ImageVector, onClick: () -> Unit) {
 
 @Composable
 private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val whisper = remember(context) { OfflineModelManager(context) }
+    val voices = remember(context) { VoicePackManager(context) }
+    val whisperState by whisper.state.collectAsStateWithLifecycle()
+    val whisperProgress by whisper.progress.collectAsStateWithLifecycle()
+    val voiceProgress by voices.progress.collectAsStateWithLifecycle()
+    var packs by remember { mutableStateOf(voices.packs()) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().statusBarsPadding(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
@@ -658,6 +672,60 @@ private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Un
             diagnostics.candidates.forEach { candidate ->
                 Text(candidate, Modifier.padding(vertical = 5.dp), color = AccentSilver)
             }
+        }
+        item {
+            Text("Offline storage", color = SecondaryText, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            ResourceCard(
+                title = "Whisper speech recognition",
+                status = whisperState.name,
+                detail = "${whisperProgress.percent}% - ${whisper.metadata.sizeBytes / 1_000_000} MB",
+                actionLabel = if (whisperState == OfflineModelState.READY) "Delete" else "Install",
+                onAction = {
+                    scope.launch {
+                        runCatching {
+                            if (whisperState == OfflineModelState.READY) whisper.delete() else whisper.download()
+                        }
+                    }
+                }
+            )
+            packs.forEach { pack ->
+                val progress = voiceProgress[pack.id]
+                ResourceCard(
+                    title = "${pack.displayName} TTS (${pack.language.tag})",
+                    status = pack.status.name,
+                    detail = "${progress?.percent ?: 0}% - ${pack.sizeBytes / 1_000_000} MB - ${pack.sha256.take(12)}...",
+                    actionLabel = if (pack.status == VoicePackStatus.READY) "Delete" else "Install",
+                    onAction = {
+                        scope.launch {
+                            runCatching {
+                            if (pack.status == VoicePackStatus.READY) voices.delete(pack.id) else voices.install(pack.id)
+                        }.onSuccess {
+                            packs = voices.packs()
+                        }
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ResourceCard(
+    title: String,
+    status: String,
+    detail: String,
+    actionLabel: String,
+    onAction: () -> Unit
+) {
+    Surface(color = ElevatedSurface, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 13.sp)
+                Text("$status - $detail", color = SecondaryText, fontSize = 11.sp)
+            }
+            TextButton(onClick = onAction) { Text(actionLabel) }
         }
     }
 }

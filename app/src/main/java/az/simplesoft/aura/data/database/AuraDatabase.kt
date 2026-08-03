@@ -95,15 +95,22 @@ abstract class AuraDatabase : RoomDatabase() {
                 db.execSQL("CREATE TABLE IF NOT EXISTS assistant_intent_patterns (id TEXT NOT NULL PRIMARY KEY, intent TEXT NOT NULL, language TEXT NOT NULL, pattern TEXT NOT NULL, emotion TEXT, priority INTEGER NOT NULL)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_intent_patterns_intent ON assistant_intent_patterns(intent)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_intent_patterns_language ON assistant_intent_patterns(language)")
-                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_conversation_state (id TEXT NOT NULL PRIMARY KEY, nodeId TEXT, topic TEXT, emotion TEXT, expectedIntent TEXT, failureCount INTEGER NOT NULL DEFAULT 0, lastBranch TEXT, updatedAt INTEGER NOT NULL)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_conversation_state (id TEXT NOT NULL PRIMARY KEY, nodeId TEXT, topic TEXT, emotion TEXT, updatedAt INTEGER NOT NULL)")
             }
         }
 
         internal val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE assistant_conversation_state ADD COLUMN expectedIntent TEXT")
-                db.execSQL("ALTER TABLE assistant_conversation_state ADD COLUMN failureCount INTEGER NOT NULL DEFAULT 0")
-                db.execSQL("ALTER TABLE assistant_conversation_state ADD COLUMN lastBranch TEXT")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_conversation_state (id TEXT NOT NULL PRIMARY KEY, nodeId TEXT, topic TEXT, emotion TEXT, updatedAt INTEGER NOT NULL)")
+                if (!hasColumn(db, "assistant_conversation_state", "expectedIntent")) {
+                    db.execSQL("ALTER TABLE assistant_conversation_state ADD COLUMN expectedIntent TEXT")
+                }
+                if (!hasColumn(db, "assistant_conversation_state", "failureCount")) {
+                    db.execSQL("ALTER TABLE assistant_conversation_state ADD COLUMN failureCount INTEGER NOT NULL DEFAULT 0")
+                }
+                if (!hasColumn(db, "assistant_conversation_state", "lastBranch")) {
+                    db.execSQL("ALTER TABLE assistant_conversation_state ADD COLUMN lastBranch TEXT")
+                }
                 db.execSQL("CREATE TABLE IF NOT EXISTS assistant_pending_commands (commandId TEXT NOT NULL PRIMARY KEY, text TEXT NOT NULL, fingerprint TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, requiresUi INTEGER NOT NULL DEFAULT 1)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_pending_commands_status ON assistant_pending_commands(status)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_pending_commands_fingerprint ON assistant_pending_commands(fingerprint)")
@@ -124,8 +131,20 @@ abstract class AuraDatabase : RoomDatabase() {
 
         internal val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE assistant_intent_patterns ADD COLUMN nodeId TEXT NOT NULL DEFAULT ''")
+                if (!hasColumn(db, "assistant_intent_patterns", "nodeId")) {
+                    db.execSQL("ALTER TABLE assistant_intent_patterns ADD COLUMN nodeId TEXT NOT NULL DEFAULT ''")
+                }
             }
+        }
+
+        private fun hasColumn(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
+            db.query("PRAGMA table_info(`$table`)").use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                while (cursor.moveToNext()) {
+                    if (nameIndex >= 0 && cursor.getString(nameIndex) == column) return true
+                }
+            }
+            return false
         }
     }
 }

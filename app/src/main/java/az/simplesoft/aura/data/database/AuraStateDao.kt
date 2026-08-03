@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface AuraStateDao {
@@ -113,8 +114,14 @@ interface AuraStateDao {
     @Query("SELECT * FROM assistant_pending_commands WHERE status = 'PENDING' AND requiresUi = 1 ORDER BY createdAt LIMIT :limit")
     suspend fun pendingUiCommands(limit: Int = 20): List<AssistantPendingCommandEntity>
 
-    @Query("SELECT * FROM assistant_pending_commands WHERE fingerprint = :fingerprint AND createdAt > :after LIMIT 1")
+    @Query("SELECT * FROM assistant_pending_commands WHERE commandId = :commandId LIMIT 1")
+    suspend fun pendingCommand(commandId: String): AssistantPendingCommandEntity?
+
+    @Query("SELECT * FROM assistant_pending_commands WHERE fingerprint = :fingerprint AND createdAt > :after AND status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED') ORDER BY createdAt DESC LIMIT 1")
     suspend fun recentCommand(fingerprint: String, after: Long): AssistantPendingCommandEntity?
+
+    @Query("SELECT * FROM assistant_pending_commands WHERE status = 'PENDING' AND requiresUi = 1 ORDER BY createdAt")
+    fun observePendingUiCommands(): Flow<List<AssistantPendingCommandEntity>>
 
     @Query("UPDATE assistant_pending_commands SET status = :status, updatedAt = :updatedAt, attempts = attempts + 1 WHERE commandId = :commandId AND status = :expectedStatus")
     suspend fun updateCommandStatus(commandId: String, expectedStatus: String, status: String, updatedAt: Long): Int

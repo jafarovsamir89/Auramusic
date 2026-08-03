@@ -14,9 +14,21 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon --console=plain
+      - name: Migration and instrumentation tests
+        run: ./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin --no-daemon --console=plain
       - name: Lint
         run: ./gradlew :app:lintDebug --no-daemon --console=plain
+      - name: Native build
+        run: ./gradlew :app:externalNativeBuildDebug --no-daemon --console=plain
       - name: Debug APK
         run: ./gradlew :app:assembleDebug --no-daemon --console=plain

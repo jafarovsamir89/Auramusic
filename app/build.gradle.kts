@@ -26,6 +26,7 @@ android {
         versionCode = 3
         versionName = "0.3.0"
         ndk.abiFilters += "arm64-v8a"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
             cmake {
                 cppFlags += listOf("-std=c++17")
@@ -78,5 +79,9 @@ dependencies {
     ksp("androidx.room:room-compiler:2.8.4")
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.room:room-testing:2.8.4")
+    androidTestImplementation("androidx.sqlite:sqlite-framework:2.5.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

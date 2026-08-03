@@ -17,6 +17,7 @@ import az.simplesoft.aura.assistant.AuraWakeWordService
 import az.simplesoft.aura.assistant.CompactAssistantMemory
 import az.simplesoft.aura.assistant.DataBackedCompanionEngine
 import az.simplesoft.aura.assistant.AssistantCommandCoordinator
+import az.simplesoft.aura.assistant.ActionExecutionResult
 import az.simplesoft.aura.assistant.LocalIntentEngine
 import az.simplesoft.aura.assistant.MusicIntent
 import az.simplesoft.aura.assistant.Mood
@@ -57,6 +58,7 @@ import az.simplesoft.aura.playback.PlaybackConnection
 import az.simplesoft.aura.playback.PlaybackConnectionCoordinator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -186,6 +188,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private var stateRestored = false
     private var pendingCommand: String? = null
     private var pendingCommandShouldSpeak = false
+    private val claimedPendingCommands = mutableSetOf<String>()
 
     private val initialLiked = preferences.getStringSet("liked", emptySet()).orEmpty().toSet()
     private val initialHistory = preferences.getString("history", "")
@@ -256,9 +259,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             stateRestored = true
             pendingCommand?.also { pendingCommand = null }?.let { submitAssistant(it, pendingCommandShouldSpeak) }
-            assistantCommandCoordinator.claimPendingForUi().forEach { pending ->
-                submitAssistant(pending.text, speakResponse = true, pendingCommandId = pending.commandId)
-            }
+            watchPendingCommands()
         }
         viewModelScope.launch {
             for (snapshot in persistenceQueue) runCatching { stateRepository.save(snapshot) }
@@ -276,6 +277,22 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 }
                 positionPersistenceTick = (positionPersistenceTick + 1) % 10
                 if (positionPersistenceTick == 0) persist(_state.value)
+            }
+        }
+    }
+
+    private fun watchPendingCommands() {
+        viewModelScope.launch {
+            assistantCommandCoordinator.observePendingUiCommands().collect { commands ->
+                commands.forEach { pending ->
+                    if (!claimedPendingCommands.add(pending.commandId)) return@forEach
+                    val claimed = assistantCommandCoordinator.claim(pending.commandId)
+                    if (claimed == null) {
+                        claimedPendingCommands.remove(pending.commandId)
+                    } else {
+                        submitAssistant(claimed.text, speakResponse = true, pendingCommandId = claimed.commandId)
+                    }
+                }
             }
         }
     }
@@ -470,30 +487,58 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     playlists = current.playlists.map { it.name }
                 )
             )
+            val execution = executeAssistantReply(answer)
+            val responseText = when (execution) {
+                is ActionExecutionResult.Success -> answer.text
+                is ActionExecutionResult.NeedsClarification -> execution.question
+                is ActionExecutionResult.NotFound -> execution.message
+                is ActionExecutionResult.PermissionRequired -> execution.message
+                is ActionExecutionResult.TemporaryFailure -> execution.message
+                is ActionExecutionResult.Unsupported -> execution.message
+            }
             val replyTimestamp = System.currentTimeMillis()
             _state.update { value ->
                 value.copy(
-                    assistantText = answer.text,
+                    assistantText = responseText,
                     isAssistantThinking = false,
                     assistantSource = answer.source,
                     assistantMessages = (value.assistantMessages + AssistantMessage(
                         id = "ui:aura:$replyTimestamp",
                         role = AssistantRole.AURA,
-                        text = answer.text,
+                        text = responseText,
                         language = answer.language,
                         createdAt = replyTimestamp
                     )).takeLast(20)
                 )
             }
-            if (speakResponse) speech.speak(answer.text, answer.language)
-            executeAssistantReply(answer)
             pendingCommandId?.let { commandId ->
-                viewModelScope.launch { assistantCommandCoordinator.complete(commandId) }
+                viewModelScope.launch {
+                    if (execution is ActionExecutionResult.Success) {
+                        assistantCommandCoordinator.complete(commandId)
+                    } else {
+                        assistantCommandCoordinator.fail(commandId)
+                    }
+                }
             }
+            if (speakResponse) speech.speak(responseText, answer.language)
         }
     }
 
-    private fun executeAssistantReply(answer: AssistantReply) {
+    private fun executeAssistantReply(answer: AssistantReply): ActionExecutionResult {
+        dispatchAssistantReply(answer)
+        if (answer.intent is MusicIntent.PlayPlaylist) {
+            val requested = answer.intent.name
+            val exists = state.value.playlists.any {
+                it.name.equals(requested, ignoreCase = true) ||
+                    it.name.contains(requested, ignoreCase = true) ||
+                    requested.contains(it.name, ignoreCase = true)
+            }
+            if (!exists) return ActionExecutionResult.NotFound("Плейлист $requested не найден")
+        }
+        return ActionExecutionResult.Success()
+    }
+
+    private fun dispatchAssistantReply(answer: AssistantReply) {
         when (val intent = answer.intent) {
             MusicIntent.OpenPlaylists -> {
                 _state.update {

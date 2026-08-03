@@ -2,6 +2,7 @@ package az.simplesoft.aura.assistant
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,6 +15,7 @@ import java.io.FileInputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 
 enum class OfflineModelState { NOT_INSTALLED, DOWNLOADING, VERIFYING, READY, FAILED, DELETING }
 
@@ -27,45 +29,81 @@ data class OfflineModelMetadata(
     val url: String
 )
 
+data class OfflineModelProgress(val downloadedBytes: Long = 0L, val totalBytes: Long = 0L) {
+    val percent: Int get() = if (totalBytes <= 0L) 0 else ((downloadedBytes * 100L) / totalBytes).toInt().coerceIn(0, 100)
+}
+
 /** Explicit model lifecycle. Recognition never starts a hidden network download. */
 class OfflineModelManager(
     context: Context,
-    private val client: OkHttpClient = OkHttpClient()
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.MINUTES)
+        .callTimeout(3, TimeUnit.MINUTES)
+        .build()
 ) {
     private val appContext = context.applicationContext
     val metadata: OfflineModelMetadata = WHISPER_BASE_Q5
     private val mutableState = MutableStateFlow(initialState())
     val state: StateFlow<OfflineModelState> = mutableState.asStateFlow()
+    private val mutableProgress = MutableStateFlow(OfflineModelProgress(totalBytes = metadata.sizeBytes))
+    val progress: StateFlow<OfflineModelProgress> = mutableProgress.asStateFlow()
 
     suspend fun download() = withContext(Dispatchers.IO) {
         if (isReady()) {
             mutableState.value = OfflineModelState.READY
             return@withContext
         }
-        require(directory().usableSpace >= metadata.sizeBytes) { "Not enough free space for Whisper" }
+        require(directory().exists() || directory().mkdirs()) { "Unable to create Whisper directory" }
+        val requiredSpace = (metadata.sizeBytes * 1.20).toLong()
+        require(directory().usableSpace >= requiredSpace) { "Not enough free space for Whisper download" }
         mutableState.value = OfflineModelState.DOWNLOADING
         val partial = File(directory(), "${metadata.fileName}.part")
         try {
-            directory().mkdirs()
-            client.newCall(Request.Builder().url(metadata.url).build()).execute().use { response ->
-                check(response.isSuccessful) { "Whisper HTTP ${response.code}" }
-                val body = checkNotNull(response.body) { "Whisper response is empty" }
-                partial.outputStream().buffered().use { output ->
-                    body.byteStream().use { input ->
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        while (true) {
-                            coroutineContext.ensureActive()
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            output.write(buffer, 0, count)
+            var lastError: Throwable? = null
+            for (attempt in 0 until MAX_RETRIES) {
+                if (attempt > 0) partial.delete()
+                try {
+                    client.newCall(Request.Builder().url(metadata.url).build()).execute().use { response ->
+                        check(response.isSuccessful) { "Whisper HTTP ${response.code}" }
+                        val body = checkNotNull(response.body) { "Whisper response is empty" }
+                        val contentLength = body.contentLength()
+                        check(contentLength <= 0L || contentLength == metadata.sizeBytes) {
+                            "Unexpected Whisper Content-Length $contentLength"
+                        }
+                        mutableProgress.value = OfflineModelProgress(0L, contentLength.takeIf { it > 0 } ?: metadata.sizeBytes)
+                        partial.outputStream().buffered().use { output ->
+                            body.byteStream().use { input ->
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                var downloaded = 0L
+                                while (true) {
+                                    coroutineContext.ensureActive()
+                                    val count = input.read(buffer)
+                                    if (count < 0) break
+                                    output.write(buffer, 0, count)
+                                    downloaded += count
+                                    mutableProgress.value = OfflineModelProgress(
+                                        downloaded,
+                                        contentLength.takeIf { it > 0 } ?: metadata.sizeBytes
+                                    )
+                                }
+                            }
                         }
                     }
+                    lastError = null
+                    break
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    lastError = error
                 }
             }
+            lastError?.let { throw it }
             mutableState.value = OfflineModelState.VERIFYING
             check(partial.length() == metadata.sizeBytes) { "Unexpected Whisper size ${partial.length()}" }
             check(partial.sha256() == metadata.sha256) { "Whisper checksum mismatch" }
             Files.move(partial.toPath(), modelFile().toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            mutableProgress.value = OfflineModelProgress(metadata.sizeBytes, metadata.sizeBytes)
             mutableState.value = OfflineModelState.READY
         } catch (error: Throwable) {
             partial.delete()
@@ -78,6 +116,7 @@ class OfflineModelManager(
         mutableState.value = OfflineModelState.DELETING
         modelFile().delete()
         File(directory(), "${metadata.fileName}.part").delete()
+        mutableProgress.value = OfflineModelProgress(totalBytes = metadata.sizeBytes)
         mutableState.value = OfflineModelState.NOT_INSTALLED
     }
 
@@ -115,5 +154,6 @@ class OfflineModelManager(
             purpose = "offline speech recognition",
             url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
         )
+        private const val MAX_RETRIES = 3
     }
 }

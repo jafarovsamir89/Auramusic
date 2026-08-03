@@ -9,4 +9,3 @@ local.properties
 .externalNativeBuild/
 .cxx/
 captures/
-third_party/llama.cpp/

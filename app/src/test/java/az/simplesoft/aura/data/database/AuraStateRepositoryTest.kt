@@ -4,6 +4,8 @@ import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.domain.music.AuraRepeatMode
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -256,6 +258,8 @@ private class FakeAuraStateDao : AuraStateDao {
     override suspend fun dialogueNodes(language: String): List<AssistantDialogueNodeEntity> = emptyList()
     override suspend fun dialogueNodeForPattern(patternId: String): AssistantDialogueNodeEntity? = null
     override suspend fun pendingUiCommands(limit: Int): List<AssistantPendingCommandEntity> = emptyList()
+    override suspend fun pendingCommand(commandId: String): AssistantPendingCommandEntity? = null
+    override fun observePendingUiCommands(): Flow<List<AssistantPendingCommandEntity>> = emptyFlow()
     override suspend fun recentCommand(fingerprint: String, after: Long): AssistantPendingCommandEntity? = null
     override suspend fun updateCommandStatus(commandId: String, expectedStatus: String, status: String, updatedAt: Long): Int = 0
     override suspend fun unknownUtterance(normalized: String): AssistantUnknownUtteranceEntity? = null
