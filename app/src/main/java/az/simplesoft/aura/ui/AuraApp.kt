@@ -1216,7 +1216,7 @@ private fun AssistantScreen(
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("A U R A", textAlign = TextAlign.Center, letterSpacing = 3.sp, fontSize = 14.sp)
                 Text(
-                    if (state.isCloudAiConfigured) "DeepSeek · память включена" else "Локальный режим · ожидается AI-ключ",
+                    if (state.isCloudAiConfigured) "Удалённый reasoning включён" else "Локальный режим · память включена",
                     color = if (state.isCloudAiConfigured) AuraMint else SecondaryText,
                     fontSize = 9.sp
                 )

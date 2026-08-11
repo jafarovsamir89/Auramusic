@@ -16,11 +16,17 @@ import java.util.Locale
  * Для гарантированно автономной работы интерфейс можно заменить VoskRecognizer,
  * не меняя LocalIntentEngine.
  */
+interface AuraSpeechRecognizer {
+    fun start()
+    fun stop()
+    fun destroy()
+}
+
 class OfflineSpeechRecognizer(
     context: Context,
     private val onText: (String) -> Unit,
     private val onState: (Boolean) -> Unit
-) {
+) : AuraSpeechRecognizer {
     private val recognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
         setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) = onState(true)
@@ -43,7 +49,7 @@ class OfflineSpeechRecognizer(
         })
     }
 
-    fun start() {
+    override fun start() {
         recognizer.startListening(
             Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(
@@ -66,6 +72,6 @@ class OfflineSpeechRecognizer(
         )
     }
 
-    fun stop() = recognizer.stopListening()
-    fun destroy() = recognizer.destroy()
+    override fun stop() = recognizer.stopListening()
+    override fun destroy() = recognizer.destroy()
 }

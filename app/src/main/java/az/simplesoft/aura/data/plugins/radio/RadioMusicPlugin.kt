@@ -20,7 +20,10 @@ class RadioMusicPlugin(
     private val searchStations: suspend (String, Int) -> List<Track>,
     private val popularStations: suspend (Int) -> List<Track>
 ) : MusicPlugin {
-    constructor(provider: RadioBrowserProvider) : this(provider::search, provider::popular)
+    constructor(provider: RadioBrowserProvider) : this(
+        searchStations = { query, limit -> provider.search(query, limit = limit) },
+        popularStations = provider::popular
+    )
 
     override val id: String = ID
     override val displayName: String = "Radio Browser"
