@@ -515,11 +515,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             current.copy(
                 query = "",
                 destination = if (speakResponse) current.destination else AuraDestination.ASSISTANT,
-                assistantText = when (language) {
-                    az.simplesoft.aura.assistant.AssistantLanguage.RUSSIAN -> "Думаю…"
-                    az.simplesoft.aura.assistant.AssistantLanguage.AZERBAIJANI -> "Düşünürəm…"
-                    az.simplesoft.aura.assistant.AssistantLanguage.ENGLISH -> "Thinking…"
-                },
+                // Keep the existing answer visible while work runs; a synthetic
+                // “thinking” phrase must never be presented as an assistant reply.
+                assistantText = current.assistantText,
                 isAssistantThinking = true,
                 assistantMessages = (current.assistantMessages + AssistantMessage(
                     id = "ui:user:$timestamp",

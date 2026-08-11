@@ -14,7 +14,8 @@ data class RegistryIntentMatch(
     val intentId: String,
     val confidence: Double,
     val matchedPattern: String,
-    val reason: String
+    val reason: String,
+    val priority: Int = 0
 )
 
 /** Registry for compact, high-value commands. Long music queries remain with the legacy parser. */
@@ -23,8 +24,7 @@ class IntentRegistry(
 ) {
     private val patterns = patterns.toList()
 
-    fun match(input: NormalizedAssistantInput): RegistryIntentMatch? {
-        val best = patterns.asSequence()
+    fun candidates(input: NormalizedAssistantInput, limit: Int = 3): List<RegistryIntentMatch> = patterns.asSequence()
             .filter { it.language == null || it.language == input.detectedLanguage }
             .mapNotNull { pattern ->
                 val score = pattern.examples.maxOfOrNull { example ->
@@ -39,13 +39,18 @@ class IntentRegistry(
                     pattern.intentId,
                     confidence,
                     pattern.examples.maxBy { FuzzyMatching.combined(input.normalizedText, it) },
-                    "pattern=${pattern.intentId};score=${"%.3f".format(confidence)}"
+                    "pattern=${pattern.intentId};score=${"%.3f".format(confidence)}",
+                    pattern.priority
                 )
             }
-            .sortedWith(compareByDescending<RegistryIntentMatch> { it.confidence })
-            .firstOrNull()
-        return best
-    }
+            .sortedWith(
+                compareByDescending<RegistryIntentMatch> { it.confidence }
+                    .thenByDescending { it.priority }
+            )
+            .take(limit.coerceAtLeast(1))
+            .toList()
+
+    fun match(input: NormalizedAssistantInput): RegistryIntentMatch? = candidates(input, 1).firstOrNull()
 
     companion object {
         private fun defaultPatterns() = listOf(

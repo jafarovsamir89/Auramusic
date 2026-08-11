@@ -433,6 +433,7 @@ private fun MainShell(
                     voiceState = state.voiceInputState,
                     voiceBackend = state.recognitionBackend,
                     voiceDiagnostics = state.voiceDiagnostics,
+                    assistantDiagnostics = state.assistantDiagnostics,
                     onTestVoice = onVoice
                 )
             }
@@ -692,6 +693,7 @@ private fun DiagnosticsScreen(
     voiceState: VoiceInputState,
     voiceBackend: az.simplesoft.aura.assistant.RecognitionBackend,
     voiceDiagnostics: az.simplesoft.aura.assistant.VoiceCaptureDiagnostics?,
+    assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics?,
     onTestVoice: () -> Unit
 ) {
     val context = LocalContext.current
@@ -740,6 +742,21 @@ private fun DiagnosticsScreen(
                 DiagnosticRow("Transcription", capture.transcriptionDurationMs?.let { "$it ms" } ?: "-")
             }
             TextButton(onClick = onTestVoice) { Text("Test microphone") }
+        }
+        assistantDiagnostics?.let { decision ->
+            item {
+                Text("Assistant decision", color = SecondaryText, fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                DiagnosticRow("Raw transcript", decision.originalText)
+                DiagnosticRow("Normalized", decision.normalizedText)
+                DiagnosticRow("Language", decision.language.tag)
+                DiagnosticRow("Top intents", decision.topIntents.joinToString(" · ").ifBlank { "—" })
+                DiagnosticRow("Selected", decision.selectedIntent ?: "—")
+                DiagnosticRow("Confidence", "${"%.2f".format(decision.confidence)}")
+                DiagnosticRow("Entities", decision.entities.joinToString { "${it.type}:${it.value}" }.ifBlank { "—" })
+                DiagnosticRow("Context", decision.contextReferences.joinToString().ifBlank { "—" })
+                DiagnosticRow("Assistant latency", "${decision.processingTimeMs} ms")
+            }
         }
         item { DiagnosticRow("Страница", diagnostics.selectedPage) }
         item {
@@ -1527,8 +1544,6 @@ private fun AssistantScreen(
                         Surface(shape = RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp), color = Color(0xFF202631)) {
                             Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = AuraAccentSoft)
-                                Spacer(Modifier.width(8.dp))
-                                Text(state.assistantText, color = SecondaryText, fontSize = 12.sp)
                             }
                         }
                     }

@@ -80,9 +80,10 @@ class LocalAssistantEngine(
         conversationDecision(input, context)?.let { return remember(it, startedAt) }
         azTransliterationDecision(input)?.let { return remember(it, startedAt) }
 
-        val match = registry.match(input)
+        val registryCandidates = registry.candidates(input)
+        val match = registryCandidates.firstOrNull()
         val registryReply = match?.let { registryAction(it, input.detectedLanguage) }
-        if (registryReply != null) return remember(decisionFromReply(registryReply, input, match), startedAt)
+        if (registryReply != null) return remember(decisionFromReply(registryReply, input, match, registryCandidates), startedAt)
 
         val corrected = CommonSpeechCorrections.apply(input.normalizedText)
         val legacyReply = legacy.understand(if (corrected == input.normalizedText) input.searchSafeText else corrected)
@@ -322,7 +323,12 @@ class LocalAssistantEngine(
         else -> null
     }
 
-    private fun decisionFromReply(reply: AssistantReply, input: NormalizedAssistantInput, match: RegistryIntentMatch?): AssistantDecision {
+    private fun decisionFromReply(
+        reply: AssistantReply,
+        input: NormalizedAssistantInput,
+        match: RegistryIntentMatch?,
+        candidates: List<RegistryIntentMatch> = emptyList()
+    ): AssistantDecision {
         val entities = entitiesFor(reply.intent)
         val confidence = when {
             match != null -> match.confidence
@@ -342,7 +348,7 @@ class LocalAssistantEngine(
                 originalText = input.originalText,
                 normalizedText = input.normalizedText,
                 language = input.detectedLanguage,
-                topIntents = listOfNotNull(match?.intentId),
+                topIntents = candidates.map { "${it.intentId} ${"%.2f".format(it.confidence)}" },
                 selectedIntent = match?.intentId,
                 confidence = confidence,
                 entities = entities,

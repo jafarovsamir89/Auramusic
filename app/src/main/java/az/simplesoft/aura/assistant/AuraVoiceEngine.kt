@@ -46,7 +46,8 @@ class SpeechTextProcessor(
     fun process(text: String, language: AssistantLanguage): String {
         val withoutUrls = text.replace(Regex("https?://\\S+|www\\.\\S+"), " ссылку ")
         val withoutEmoji = withoutUrls.replace(Regex("[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[\\u2600-\\u27BF]"), "")
-        val safe = withoutEmoji
+        val spokenPercentages = withoutEmoji.replace(Regex("(\\d+)\\s*%"), "$1 процентов")
+        val safe = spokenPercentages
             .replace(Regex("[{}\\[\\]<>*_#@~|^=]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
@@ -63,11 +64,16 @@ class PronunciationDictionary {
     private val russian = linkedMapOf(
         "Aygün Kazımova" to "Айгюн Кязимова",
         "Aygun Kazimova" to "Айгюн Кязимова",
+        "Eyyub Yaqubov" to "Эйюб Ягубов",
+        "Brilliant Dadaşova" to "Бриллиант Дадашова",
+        "Brilliant Dadasova" to "Бриллиант Дадашова",
         "Röya" to "Ройя",
         "Roya" to "Ройя",
         "Miri Yusif" to "Мири Юсиф",
         "Linkin Park" to "Линкин Парк",
         "The Weeknd" to "Зе Уикенд",
+        "AC/DC" to "эй си ди си",
+        "R.E.M." to "ар и эм",
         "МакSим" to "Максим",
         "Rammstein" to "Рамштайн"
     )
