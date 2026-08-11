@@ -166,18 +166,7 @@ class VoicePackManager(
             directory = "silero-ru-kseniya",
             fileName = "v1_kseniya_16000.jit"
         ),
-        Definition(
-            id = "silero-az-local",
-            language = AssistantLanguage.AZERBAIJANI,
-            displayName = "Silero Azerbaijani",
-            sizeBytes = 91_695_221L,
-            version = "v5",
-            license = "MIT",
-            url = "https://models.silero.ai/models/tts/ru/v5_cis_base_nostress.jit",
-            sha256 = "d7d361caf78b8480bcd65a0c367af665a2bf6f06c8507306e3781dc7c6ce781b",
-            directory = "silero-v5-cis-base",
-            fileName = "v5_cis_base_nostress.jit"
-        )
+        // No bundled AZ model is advertised: the available Silero pack is Russian.
     )
 
     private data class Definition(

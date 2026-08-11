@@ -21,6 +21,17 @@ import java.util.concurrent.TimeUnit
 
 enum class OfflineModelState { NOT_INSTALLED, DOWNLOADING, VERIFYING, READY, FAILED, DELETING }
 
+enum class WhisperModelProfile { LIGHT, BALANCED, QUALITY }
+
+object WhisperModelPolicy {
+    /** Selection is deterministic and does not download a heavier model implicitly. */
+    fun recommend(totalMemoryMb: Int, cpuCores: Int): WhisperModelProfile = when {
+        totalMemoryMb < 3_000 || cpuCores <= 4 -> WhisperModelProfile.LIGHT
+        totalMemoryMb >= 6_000 && cpuCores >= 8 -> WhisperModelProfile.QUALITY
+        else -> WhisperModelProfile.BALANCED
+    }
+}
+
 data class OfflineModelMetadata(
     val id: String,
     val fileName: String,

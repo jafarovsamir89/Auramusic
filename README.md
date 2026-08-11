@@ -25,7 +25,7 @@ Downloads are explicit and visible in the debug Diagnostics storage screen. No s
 | --- | ---: | --- | --- |
 | Whisper `ggml-base-q5_1.bin` | 59,707,625 bytes | RU/AZ/EN | Manual install, SHA-256 verified |
 | Silero Kseniya `v1_kseniya_16000.jit` | 142,264,026 bytes | RU | Manual install, SHA-256 verified |
-| Silero `v5_cis_base_nostress.jit` | 91,695,221 bytes | AZ | Manual install, SHA-256 verified |
+| Android system `az-AZ` voice | Device-provided | AZ | Runtime fallback; no pseudo-AZ Silero model |
 
 Each download uses a `.part` file, validates HTTP size and SHA-256, atomically moves the model first, then creates an atomic `.sha256` sidecar. Cancelled or failed downloads remove only the partial resource. On restart, stale `IN_PROGRESS` assistant commands are requeued up to three attempts for UI work or failed for background work.
 
@@ -58,7 +58,7 @@ Signed `googlevideo` URLs are not stored in the queue or Room. They are resolved
 - Free Radio Browser catalog by country with secure station streams, retry states, playback and playlist persistence.
 - Local-device music, voice intents and automotive UI.
 - AURA assistant core: local intent recognition, dialogue branches, compact memory and spoken replies.
-- Optional local Silero voice packs for Russian and Azerbaijani with pinned size/SHA-256 metadata. Packs are installed explicitly from storage settings; normal replies never start a hidden download and fall back to Android TTS when a pack is absent.
+- Optional local Silero voice pack for Russian with pinned size/SHA-256 metadata. Azerbaijani uses the best available real system `az-AZ` voice until a properly trained local pack is validated; normal replies never start a hidden download.
 
 The source review and the architecture derived from NewPipe, InnerTune, ViMusic and Harmony Music are recorded in [`docs/YOUTUBE_ARCHITECTURE_RESEARCH.md`](docs/YOUTUBE_ARCHITECTURE_RESEARCH.md).
 

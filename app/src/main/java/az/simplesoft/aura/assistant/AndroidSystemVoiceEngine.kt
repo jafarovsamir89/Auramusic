@@ -23,6 +23,8 @@ internal class AndroidSystemVoiceEngine(context: Context) : TextToSpeech.OnInitL
         }
     }
 
+    val isReady: Boolean get() = ready
+
     fun speak(text: String, language: AssistantLanguage) {
         val safeText = text.trim().take(TextToSpeech.getMaxSpeechInputLength())
         if (safeText.isBlank()) return
@@ -36,6 +38,14 @@ internal class AndroidSystemVoiceEngine(context: Context) : TextToSpeech.OnInitL
             selectBestVoice(requested)?.let { engine.voice = it } ?: run { engine.language = requested }
         }
         engine.speak(safeText, TextToSpeech.QUEUE_FLUSH, Bundle(), "aura:${UUID.randomUUID()}")
+    }
+
+    fun speak(text: String, language: AssistantLanguage, profile: AuraVoiceProfile) {
+        if (ready) {
+            engine.setSpeechRate(profile.speechRate)
+            engine.setPitch(profile.pitch)
+        }
+        speak(text, language)
     }
 
     fun stop() {

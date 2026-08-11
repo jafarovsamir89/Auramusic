@@ -16,6 +16,9 @@ import az.simplesoft.aura.assistant.AuraAiContext
 import az.simplesoft.aura.assistant.AuraAiEngine
 import az.simplesoft.aura.assistant.AuraSpeechSynthesizer
 import az.simplesoft.aura.assistant.AuraWakeWordService
+import az.simplesoft.aura.assistant.VoiceStyle
+import az.simplesoft.aura.assistant.SpeechResponsePolicy
+import az.simplesoft.aura.assistant.ResponseVerbosity
 import az.simplesoft.aura.assistant.RecognitionBackend
 import az.simplesoft.aura.assistant.VoiceCaptureDiagnostics
 import az.simplesoft.aura.assistant.VoiceInputState
@@ -423,6 +426,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     fun startPushToTalk(start: () -> Unit) {
         viewModelScope.launch {
+            // Barge-in: stop AURA immediately before opening the microphone.
+            speech.stop()
             if (state.value.wakeWordEnabled) {
                 runCatching { AuraWakeWordService.stop(getApplication()) }
                 delay(350L)
@@ -581,7 +586,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     assistantCommandCoordinator.fail(commandId)
                 }
             }
-            if (speakResponse) speech.speak(responseText, answer.language)
+            if (speakResponse) {
+                val style = if (state.value.isCarMode) VoiceStyle.DRIVING else VoiceStyle.FRIENDLY
+                if (SpeechResponsePolicy.verbosity(answer.intent, state.value.isCarMode) != ResponseVerbosity.SILENT) {
+                    speech.speak(responseText, answer.language, style)
+                }
+            }
         }
         commandJob.invokeOnCompletion { cause ->
             pendingCommandId?.let { commandId ->

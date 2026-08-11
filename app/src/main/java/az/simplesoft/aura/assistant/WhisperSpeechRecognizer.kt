@@ -7,7 +7,10 @@ import android.annotation.SuppressLint
 import androidx.core.content.ContextCompat
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
 import android.media.MediaRecorder
+import android.media.audiofx.NoiseSuppressor
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -122,7 +125,13 @@ internal class WhisperSpeechRecognizer(
         var peakRms = 0f
         var noiseSum = 0.0
         var noiseSamples = 0
+        val effects = buildList {
+            if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(recorder.audioSessionId)?.also { add(it) }
+            if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(recorder.audioSessionId)?.also { add(it) }
+            if (AutomaticGainControl.isAvailable()) AutomaticGainControl.create(recorder.audioSessionId)?.also { add(it) }
+        }
         try {
+            effects.forEach { runCatching { it.enabled = true } }
             recorder.startRecording()
             mainHandler.post { onState(true) }
             while (recording.get()) {
@@ -154,6 +163,7 @@ internal class WhisperSpeechRecognizer(
             }
         } finally {
             runCatching { recorder.stop() }
+            effects.forEach { runCatching { it.release() } }
             recorder.release()
         }
         lastCaptureDiagnostics = VoiceCaptureDiagnostics(

@@ -69,7 +69,7 @@ class OfflineSpeechRecognizer(
         })
     }
 
-    fun start() {
+    override fun start() {
         commandGate.reset()
         recognizer.startListening(
             Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
