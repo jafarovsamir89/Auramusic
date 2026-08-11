@@ -4,10 +4,12 @@ import android.content.Context
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.Voice
+import android.util.Log
 import java.util.Locale
 import java.util.UUID
 
 internal class AndroidSystemVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
+    private companion object { const val TAG = "AuraTTS" }
     private val engine = TextToSpeech(context.applicationContext, this)
     private var ready = false
     private var pending: Pair<String, AssistantLanguage>? = null
@@ -34,9 +36,18 @@ internal class AndroidSystemVoiceEngine(context: Context) : TextToSpeech.OnInitL
         }
         val requested = language.locale()
         val support = engine.isLanguageAvailable(requested)
-        if (support >= TextToSpeech.LANG_AVAILABLE) {
-            selectBestVoice(requested)?.let { engine.voice = it } ?: run { engine.language = requested }
+        if (support < TextToSpeech.LANG_AVAILABLE) {
+            Log.w(TAG, "language unavailable: requested=${requested.toLanguageTag()} support=$support; speech skipped")
+            return
         }
+        val selected = selectBestVoice(requested)
+        selected?.let { engine.voice = it } ?: run { engine.language = requested }
+        Log.i(
+            TAG,
+            "speak language=${requested.toLanguageTag()} voice=${selected?.name ?: "default"} " +
+                "quality=${selected?.quality ?: -1} latency=${selected?.latency ?: -1} " +
+                "network=${selected?.isNetworkConnectionRequired ?: false}"
+        )
         engine.speak(safeText, TextToSpeech.QUEUE_FLUSH, Bundle(), "aura:${UUID.randomUUID()}")
     }
 
