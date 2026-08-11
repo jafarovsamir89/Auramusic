@@ -19,9 +19,12 @@ import az.simplesoft.aura.assistant.AuraWakeWordService
 import az.simplesoft.aura.assistant.VoiceStyle
 import az.simplesoft.aura.assistant.SpeechResponsePolicy
 import az.simplesoft.aura.assistant.ResponseVerbosity
+import az.simplesoft.aura.assistant.llm.LocalLlmReasoningProvider
+import az.simplesoft.aura.assistant.llm.LocalLlmDiagnostics
 import az.simplesoft.aura.assistant.RecognitionBackend
 import az.simplesoft.aura.assistant.VoiceCaptureDiagnostics
 import az.simplesoft.aura.assistant.VoiceInputState
+import az.simplesoft.aura.assistant.VoiceEngineMode
 import az.simplesoft.aura.assistant.CompactAssistantMemory
 import az.simplesoft.aura.assistant.AssistantCommandCoordinator
 import az.simplesoft.aura.assistant.ActionExecutionResult
@@ -116,6 +119,9 @@ data class AuraUiState(
     val assistantSource: AssistantSource = AssistantSource.LOCAL,
     val isOfflineOnly: Boolean = true,
     val assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics? = null,
+    val localLlmDiagnostics: LocalLlmDiagnostics? = null,
+    val brainEnabled: Boolean = true,
+    val voiceEngineMode: VoiceEngineMode = VoiceEngineMode.VERIFIED_SILERO,
     val isListening: Boolean = false,
     val voiceInputState: VoiceInputState = VoiceInputState.Idle,
     val recognitionBackend: RecognitionBackend = RecognitionBackend.Unavailable,
@@ -160,9 +166,14 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val stateRepository = AuraStateRepository(application)
     private val assistantMemory = CompactAssistantMemory(RoomAssistantMemoryPersistence(stateRepository))
     private val assistantCommandCoordinator = AssistantCommandCoordinator(application)
+    private val localLlm = LocalLlmReasoningProvider(
+        application,
+        enabled = { preferences.getBoolean("brain_enabled", true) }
+    )
     private val auraAi = AuraAiEngine(
         local = intentEngine,
-        memory = assistantMemory
+        memory = assistantMemory,
+        localLlm = localLlm
     )
     private val speech = AuraSpeechSynthesizer(application)
     private val audio = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -206,17 +217,29 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val initialHistory = preferences.getString("history", "")
         .orEmpty().split('|').filter(String::isNotBlank)
     private val initialWakeWordEnabled = preferences.getBoolean("wake_word_enabled", false)
+    private val initialBrainEnabled = preferences.getBoolean("brain_enabled", true)
+    private val initialVoiceEngineMode = runCatching {
+        VoiceEngineMode.valueOf(preferences.getString("voice_engine_mode", VoiceEngineMode.VERIFIED_SILERO.name).orEmpty())
+    }.getOrDefault(VoiceEngineMode.VERIFIED_SILERO)
 
     private val _state = MutableStateFlow(
         AuraUiState(
             likedIds = initialLiked,
             historyIds = initialHistory,
-            wakeWordEnabled = initialWakeWordEnabled
+            wakeWordEnabled = initialWakeWordEnabled,
+            brainEnabled = initialBrainEnabled,
+            voiceEngineMode = initialVoiceEngineMode
         )
     )
     val state = _state.asStateFlow()
 
     init {
+        speech.setEngineMode(initialVoiceEngineMode)
+        viewModelScope.launch {
+            localLlm.diagnostics.collect { diagnostics ->
+                _state.update { it.copy(localLlmDiagnostics = diagnostics) }
+            }
+        }
         viewModelScope.launch {
             runCatching {
                 stateRepository.importLegacy(
@@ -458,6 +481,17 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
+    fun setBrainEnabled(enabled: Boolean) {
+        preferences.edit { putBoolean("brain_enabled", enabled) }
+        _state.update { it.copy(brainEnabled = enabled) }
+    }
+
+    fun setVoiceEngineMode(mode: VoiceEngineMode) {
+        speech.setEngineMode(mode)
+        preferences.edit { putString("voice_engine_mode", mode.name) }
+        _state.update { it.copy(voiceEngineMode = mode) }
+    }
+
     fun resumeWakeWordServiceIfNeeded() {
         if (!state.value.wakeWordEnabled) return
         runCatching { AuraWakeWordService.start(getApplication()) }
@@ -548,7 +582,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     favoriteCount = current.favorites.size,
                     currentPlaylist = current.selectedPlaylist?.name,
                     currentTrackLiked = current.liked,
-                    lastIntent = current.assistantSource.name
+                    lastIntent = current.assistantSource.name,
+                    recentTurns = current.assistantMessages.takeLast(6).map { it.role.name to it.text }
                 )
             )
             val execution = executeAssistantReply(answer)
@@ -1685,6 +1720,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     override fun onCleared() {
         speech.shutdown()
+        localLlm.close()
         playback.release()
         super.onCleared()
     }

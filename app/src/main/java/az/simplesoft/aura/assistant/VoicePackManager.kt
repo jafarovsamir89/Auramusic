@@ -20,6 +20,8 @@ import java.util.concurrent.TimeUnit
 
 enum class VoicePackStatus { NOT_INSTALLED, DOWNLOADING, VERIFYING, READY, CORRUPT, FAILED }
 
+enum class VoiceEngineMode { SYSTEM, VERIFIED_SILERO }
+
 data class VoicePackMetadata(
     val id: String,
     val language: AssistantLanguage,
@@ -34,6 +36,26 @@ data class VoicePackMetadata(
 
 data class VoicePackProgress(val downloadedBytes: Long = 0L, val totalBytes: Long = 0L) {
     val percent: Int get() = if (totalBytes <= 0L) 0 else ((downloadedBytes * 100L) / totalBytes).toInt().coerceIn(0, 100)
+}
+
+data class VoiceLabCandidate(
+    val id: String,
+    val language: AssistantLanguage,
+    val speaker: String,
+    val model: String,
+    val sampleRates: String,
+    val status: String,
+    val note: String
+)
+
+/** Official Silero candidates kept separate from verified downloadable packs. */
+object VoiceLabCatalog {
+    val candidates: List<VoiceLabCandidate> = listOf(
+        VoiceLabCandidate("silero-v5-5-ru-baya", AssistantLanguage.RUSSIAN, "baya", "v5_5_ru", "8 / 24 / 48 kHz", "candidate", "A/B evaluation pending on the physical device"),
+        VoiceLabCandidate("silero-v5-5-ru-kseniya", AssistantLanguage.RUSSIAN, "kseniya", "v5_5_ru", "8 / 24 / 48 kHz", "candidate", "Compare with the verified v1 Kseniya pack"),
+        VoiceLabCandidate("silero-v5-5-ru-xenia", AssistantLanguage.RUSSIAN, "xenia", "v5_5_ru", "8 / 24 / 48 kHz", "candidate", "A/B evaluation pending on the physical device"),
+        VoiceLabCandidate("silero-v5-cis-aze-gamat", AssistantLanguage.AZERBAIJANI, "aze_gamat", "v5_cis_base_nostress", "8 / 24 / 48 kHz", "candidate", "Must pass real Azerbaijani pronunciation checks before packaging")
+    )
 }
 
 interface VoiceEngine {

@@ -104,6 +104,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -156,7 +157,10 @@ import az.simplesoft.aura.assistant.DefaultVoiceInputController
 import az.simplesoft.aura.assistant.OfflineModelManager
 import az.simplesoft.aura.assistant.OfflineModelState
 import az.simplesoft.aura.assistant.VoicePackManager
+import az.simplesoft.aura.assistant.VoiceLabCatalog
+import az.simplesoft.aura.assistant.VoiceEngineMode
 import az.simplesoft.aura.assistant.VoicePackStatus
+import az.simplesoft.aura.assistant.llm.LocalLlmModelManager
 import az.simplesoft.aura.assistant.AssistantRole
 import az.simplesoft.aura.assistant.AuraWakeWordBus
 import az.simplesoft.aura.assistant.VoiceInputState
@@ -434,6 +438,11 @@ private fun MainShell(
                     voiceBackend = state.recognitionBackend,
                     voiceDiagnostics = state.voiceDiagnostics,
                     assistantDiagnostics = state.assistantDiagnostics,
+                    localLlmDiagnostics = state.localLlmDiagnostics,
+                    voiceEngineMode = state.voiceEngineMode,
+                    onVoiceEngineMode = vm::setVoiceEngineMode,
+                    brainEnabled = state.brainEnabled,
+                    onBrainEnabled = vm::setBrainEnabled,
                     onTestVoice = onVoice
                 )
             }
@@ -694,12 +703,18 @@ private fun DiagnosticsScreen(
     voiceBackend: az.simplesoft.aura.assistant.RecognitionBackend,
     voiceDiagnostics: az.simplesoft.aura.assistant.VoiceCaptureDiagnostics?,
     assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics?,
+    localLlmDiagnostics: az.simplesoft.aura.assistant.llm.LocalLlmDiagnostics?,
+    voiceEngineMode: VoiceEngineMode,
+    onVoiceEngineMode: (VoiceEngineMode) -> Unit,
+    brainEnabled: Boolean,
+    onBrainEnabled: (Boolean) -> Unit,
     onTestVoice: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val whisper = remember(context) { OfflineModelManager(context) }
     val voices = remember(context) { VoicePackManager(context) }
+    val brain = remember(context) { LocalLlmModelManager(context) }
     val whisperState by whisper.state.collectAsStateWithLifecycle()
     val whisperProgress by whisper.progress.collectAsStateWithLifecycle()
     val voiceProgress by voices.progress.collectAsStateWithLifecycle()
@@ -708,6 +723,7 @@ private fun DiagnosticsScreen(
     var voiceJob by remember { mutableStateOf<Job?>(null) }
     var activeVoiceId by remember { mutableStateOf<String?>(null) }
     var deleteTarget by remember { mutableStateOf<String?>(null) }
+    var brainJob by remember { mutableStateOf<Job?>(null) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().statusBarsPadding(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
@@ -743,6 +759,19 @@ private fun DiagnosticsScreen(
             }
             TextButton(onClick = onTestVoice) { Text("Test microphone") }
         }
+        item {
+            Text("Voice engine", color = SecondaryText, fontSize = 12.sp)
+            Spacer(Modifier.height(4.dp))
+            VoiceEngineMode.entries.forEach { mode ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = voiceEngineMode == mode, onClick = { onVoiceEngineMode(mode) })
+                    Column {
+                        Text(if (mode == VoiceEngineMode.SYSTEM) "System TTS" else "Verified Silero Kseniya v1", fontSize = 13.sp)
+                        Text(if (mode == VoiceEngineMode.SYSTEM) "Android device voice" else "Russian only; falls back to system if not installed", color = SecondaryText, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
         assistantDiagnostics?.let { decision ->
             item {
                 Text("Assistant decision", color = SecondaryText, fontSize = 12.sp)
@@ -756,6 +785,53 @@ private fun DiagnosticsScreen(
                 DiagnosticRow("Entities", decision.entities.joinToString { "${it.type}:${it.value}" }.ifBlank { "—" })
                 DiagnosticRow("Context", decision.contextReferences.joinToString().ifBlank { "—" })
                 DiagnosticRow("Assistant latency", "${decision.processingTimeMs} ms")
+            }
+        }
+        localLlmDiagnostics?.let { brainDiagnostics ->
+            item {
+                Text("Local brain run", color = SecondaryText, fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                DiagnosticRow("Model", "${brainDiagnostics.model} · ${brainDiagnostics.quantization}")
+                DiagnosticRow("RAM", "${brainDiagnostics.ramBeforeMb} → ${brainDiagnostics.ramAfterMb} MB")
+                DiagnosticRow("Load", "${brainDiagnostics.loadMs} ms")
+                DiagnosticRow("Tokens", "${brainDiagnostics.promptTokens} prompt / ${brainDiagnostics.outputTokens} output")
+                DiagnosticRow("Speed", "${"%.1f".format(brainDiagnostics.tokensPerSecond)} tok/s")
+                DiagnosticRow("TTFT / total", "${brainDiagnostics.timeToFirstTokenMs} / ${brainDiagnostics.totalMs} ms")
+                DiagnosticRow("Route", brainDiagnostics.route)
+            }
+        }
+        item {
+            Text("Local brain", color = SecondaryText, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Hybrid Local LLM", fontSize = 13.sp)
+                    Text(if (brainEnabled) "Fast path + Brain Pack fallback" else "Legacy LocalAssistantEngine only", color = SecondaryText, fontSize = 11.sp)
+                }
+                androidx.compose.material3.Switch(checked = brainEnabled, onCheckedChange = onBrainEnabled)
+            }
+            brain.models().forEach { model ->
+                val state = brain.state(model.id)
+                val progress = brain.progress(model.id)
+                ResourceCard(
+                    title = model.displayName,
+                    status = state.name,
+                    detail = "${model.quantization} · ${model.sizeBytes / 1_000_000} MB · ${progress.percent}%",
+                    actionLabel = when (state) {
+                        az.simplesoft.aura.assistant.llm.BrainModelState.READY -> "Delete"
+                        az.simplesoft.aura.assistant.llm.BrainModelState.DOWNLOADING,
+                        az.simplesoft.aura.assistant.llm.BrainModelState.VERIFYING -> "Cancel"
+                        else -> "Install"
+                    },
+                    onAction = {
+                        when (state) {
+                            az.simplesoft.aura.assistant.llm.BrainModelState.READY -> brainJob = scope.launch { brain.delete(model.id) }
+                            az.simplesoft.aura.assistant.llm.BrainModelState.DOWNLOADING,
+                            az.simplesoft.aura.assistant.llm.BrainModelState.VERIFYING -> brainJob?.cancel()
+                            else -> brainJob = scope.launch { runCatching { brain.install(model.id) }; brainJob = null }
+                        }
+                    }
+                )
             }
         }
         item { DiagnosticRow("Страница", diagnostics.selectedPage) }
@@ -812,6 +888,22 @@ private fun DiagnosticsScreen(
                         }
                     }
                 )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("Voice Lab · experimental", color = SecondaryText, fontSize = 12.sp)
+            Text(
+                "Официальные Silero v5 кандидаты. Пока не проверены и не подменяют системный AZ.",
+                color = SecondaryText,
+                fontSize = 11.sp
+            )
+            VoiceLabCatalog.candidates.forEach { candidate ->
+                Surface(color = ElevatedSurface, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("${candidate.speaker} · ${candidate.language.tag}", fontSize = 13.sp)
+                        Text("${candidate.model} · ${candidate.sampleRates} · ${candidate.status}", color = SecondaryText, fontSize = 11.sp)
+                        Text(candidate.note, color = SecondaryText, fontSize = 11.sp)
+                    }
+                }
             }
         }
     }

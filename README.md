@@ -4,16 +4,19 @@ AURA is a native Android personal music assistant. Online catalog search and pla
 
 ## Local Assistant Boundary
 
-AURA's assistant is fully local and deterministic. There is no remote text service, server, account, token billing, or hidden model download:
+AURA's assistant is local-first and deterministic. There is no remote text service, server, account, token billing, or hidden model download. AURA 0.6 optionally adds a separately installed local Qwen3 Brain Pack for unresolved natural-language requests:
 
 ```text
 voice or text
-  -> local intent and dialogue library
+  -> deterministic local intent and dialogue library
+  -> optional in-process llama.cpp Brain Pack (only when deterministic routing is unresolved)
   -> Music Brain / PlaybackService / Android API
   -> concise reply + local Silero TTS or Android system TTS
 ```
 
 Commands, dialogue branches, memory, and reply variants work without a network. Russian, Azerbaijani, and English are supported by the local dialogue layer. Durable user facts and recent messages are stored in bounded Room records; complete transcripts are not retained.
+
+The Brain Pack is managed explicitly from Diagnostics. Qwen3 0.6B Q8_0 is the default; the 1.7B pack is benchmark-only. The model returns strict JSON decisions and never executes tools directly.
 
 Music catalog search, YouTube playback, and Radio Browser station catalogs are network features. Local files, playlists, favorites, queue, history, and assistant memory remain usable without them. Android's system `SpeechRecognizer` only receives `EXTRA_PREFER_OFFLINE`; that flag is a preference and does not guarantee that the vendor recognizer stays off the network. Install the bundled Whisper resource for a fully local speech path.
 

@@ -15,14 +15,16 @@ data class AuraAiContext(
     val favoriteCount: Int = 0,
     val currentPlaylist: String? = null,
     val currentTrackLiked: Boolean = false,
-    val lastIntent: String? = null
+    val lastIntent: String? = null,
+    val recentTurns: List<Pair<String, String>> = emptyList()
 )
 
 /** One local entry point for UI and voice. Remote reasoning is intentionally absent by default. */
 class AuraAiEngine(
     local: LocalIntentEngine,
     private val memory: CompactAssistantMemory,
-    private val localAssistant: LocalAssistantEngine = LocalAssistantEngine(local)
+    private val localAssistant: LocalAssistantEngine = LocalAssistantEngine(local),
+    private val localLlm: ReasoningProvider? = null
 ) {
     private val localProvider: ReasoningProvider = LocalReasoningProvider(localAssistant)
 
@@ -31,28 +33,49 @@ class AuraAiEngine(
         val normalized = TextNormalizer.normalize(input)
         val assistantContext = context.toAssistantContext(memorySnapshot)
         val localDecision = localProvider.reason(
-            AssistantRequest(input, normalized.normalizedText, normalized.detectedLanguage),
+            AssistantRequest(
+                input,
+                normalized.normalizedText,
+                normalized.detectedLanguage,
+                recentTurns = context.recentTurns
+            ),
             assistantContext
         )
-        val localReply = AssistantReply(
-            intent = localDecision.action ?: MusicIntent.Unknown,
-            text = localDecision.reply,
-            language = localDecision.language,
+        val llmDecision = localLlm?.takeIf { localDecision.isUnresolved && it.isAvailable }?.let { provider ->
+            runCatching {
+                provider.reason(
+                    AssistantRequest(
+                        input,
+                        normalized.normalizedText,
+                        normalized.detectedLanguage,
+                        recentTurns = context.recentTurns
+                    ),
+                    assistantContext
+                )
+            }.getOrNull()
+        }
+        val selectedDecision = llmDecision ?: localDecision
+        val selectedSource = if (llmDecision != null) AssistantSource.LOCAL_LLM else AssistantSource.LOCAL
+        val selectedReply = AssistantReply(
+            intent = selectedDecision.action ?: MusicIntent.Unknown,
+            text = selectedDecision.reply,
+            language = selectedDecision.language,
             route = when {
-                localDecision.action != null -> AssistantRoute.LOCAL_ACTION
-                localDecision.isUnresolved -> AssistantRoute.NEEDS_REASONING
+                selectedDecision.action != null -> AssistantRoute.LOCAL_ACTION
+                selectedDecision.isUnresolved -> AssistantRoute.NEEDS_REASONING
                 else -> AssistantRoute.LOCAL_CONVERSATION
             },
-            memoryInsights = localDecision.memoryInsights,
-            diagnostics = localDecision.diagnostics
+            memoryInsights = selectedDecision.memoryInsights,
+            source = selectedSource,
+            diagnostics = selectedDecision.diagnostics
         )
-        val finalReply = if (localDecision.isUnresolved) {
-            localReply.copy(
-                text = fallbackText(localReply.language),
+        val finalReply = if (selectedDecision.isUnresolved) {
+            selectedReply.copy(
+                text = fallbackText(selectedReply.language),
                 route = AssistantRoute.LOCAL_CONVERSATION,
                 source = AssistantSource.FALLBACK
             )
-        } else localReply
+        } else selectedReply
         memory.record(input, finalReply)
         return finalReply
     }

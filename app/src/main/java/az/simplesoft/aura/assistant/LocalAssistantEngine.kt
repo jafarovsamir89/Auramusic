@@ -48,7 +48,8 @@ data class AssistantRequest(
     val originalText: String,
     val normalizedText: String,
     val language: AssistantLanguage,
-    val diagnostics: DecisionDiagnostics? = null
+    val diagnostics: DecisionDiagnostics? = null,
+    val recentTurns: List<Pair<String, String>> = emptyList()
 )
 
 /** Default future-facing provider seam. AURA 0.4 uses this local provider only. */

@@ -12,12 +12,15 @@ class AuraSpeechSynthesizer(context: Context) : VoiceEngine, AuraVoiceEngine {
     private val russianSilero = SileroRussianVoiceEngine(context)
     private val textProcessor = SpeechTextProcessor()
     private val profile = AuraVoiceProfile()
+    @Volatile private var engineMode = VoiceEngineMode.VERIFIED_SILERO
 
     override val id: String = "aura-local-voice"
     override val supportedLanguages: Set<AssistantLanguage> = AssistantLanguage.entries.toSet()
     override val isReady: Boolean get() = system.isReady
 
     override fun prepare() = Unit
+
+    fun setEngineMode(mode: VoiceEngineMode) { engineMode = mode }
 
     override fun speak(text: String, language: AssistantLanguage) {
         speak(text, language, VoiceStyle.NEUTRAL)
@@ -28,7 +31,11 @@ class AuraSpeechSynthesizer(context: Context) : VoiceEngine, AuraVoiceEngine {
         if (processed.isBlank()) return
         stop()
         when (language) {
-            AssistantLanguage.RUSSIAN -> russianSilero.speak(processed) { system.speak(processed, language, profileFor(style)) }
+            AssistantLanguage.RUSSIAN -> if (engineMode == VoiceEngineMode.SYSTEM) {
+                system.speak(processed, language, profileFor(style))
+            } else {
+                russianSilero.speak(processed) { system.speak(processed, language, profileFor(style)) }
+            }
             // The available Silero pack is Russian; never use it as fake Azerbaijani.
             AssistantLanguage.AZERBAIJANI -> system.speak(processed, language, profileFor(style))
             AssistantLanguage.ENGLISH -> system.speak(processed, language, profileFor(style))
