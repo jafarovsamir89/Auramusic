@@ -3,14 +3,15 @@ package az.simplesoft.aura.ui
 import android.app.Application
 import android.content.Context
 import android.media.AudioManager
-import az.simplesoft.aura.BuildConfig
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.content.edit
+import az.simplesoft.aura.BuildConfig
 import az.simplesoft.aura.assistant.AssistantMessage
 import az.simplesoft.aura.assistant.AssistantReply
 import az.simplesoft.aura.assistant.AssistantRole
 import az.simplesoft.aura.assistant.AssistantSource
+import az.simplesoft.aura.assistant.AssistantTrackContext
 import az.simplesoft.aura.assistant.AuraAiContext
 import az.simplesoft.aura.assistant.AuraAiEngine
 import az.simplesoft.aura.assistant.AuraSpeechSynthesizer
@@ -18,7 +19,6 @@ import az.simplesoft.aura.assistant.CompactAssistantMemory
 import az.simplesoft.aura.assistant.LocalIntentEngine
 import az.simplesoft.aura.assistant.MusicIntent
 import az.simplesoft.aura.assistant.Mood
-import az.simplesoft.aura.assistant.OpenRouterAssistantAdapter
 import az.simplesoft.aura.assistant.RoomAssistantMemoryPersistence
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.LocalMusicProvider
@@ -102,7 +102,9 @@ data class AuraUiState(
     val assistantMessages: List<AssistantMessage> = emptyList(),
     val isAssistantThinking: Boolean = false,
     val assistantSource: AssistantSource = AssistantSource.LOCAL,
-    val isCloudAiConfigured: Boolean = BuildConfig.OPENROUTER_API_KEY.isNotBlank(),
+    val assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics? = null,
+    // Remote reasoning is deliberately disabled in AURA 0.4, even if a key is present.
+    val isCloudAiConfigured: Boolean = false,
     val isListening: Boolean = false,
     val isLoading: Boolean = false,
     val isBuffering: Boolean = false,
@@ -144,10 +146,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val assistantMemory = CompactAssistantMemory(RoomAssistantMemoryPersistence(stateRepository))
     private val auraAi = AuraAiEngine(
         local = intentEngine,
-        remote = OpenRouterAssistantAdapter(
-            apiKey = BuildConfig.OPENROUTER_API_KEY,
-            model = BuildConfig.OPENROUTER_MODEL
-        ),
         memory = assistantMemory
     )
     private val speech = AuraSpeechSynthesizer(application)
@@ -419,7 +417,16 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     currentArtist = track?.artist,
                     isPlaying = current.isPlaying,
                     hourOfDay = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
-                    carMode = current.isCarMode
+                    carMode = current.isCarMode,
+                    queue = current.queue.map { AssistantTrackContext(it.id, it.title, it.artist) },
+                    currentIndex = current.currentIndex,
+                    lastSearchQuery = current.diagnostics.query.takeIf { it != "—" },
+                    lastSearchResults = current.searchResults.map { AssistantTrackContext(it.id, it.title, it.artist) },
+                    playlists = current.playlists.map { it.name },
+                    favoriteCount = current.favorites.size,
+                    currentPlaylist = current.selectedPlaylist?.name,
+                    currentTrackLiked = current.liked,
+                    lastIntent = current.assistantSource.name
                 )
             )
             val replyTimestamp = System.currentTimeMillis()
@@ -428,6 +435,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     assistantText = answer.text,
                     isAssistantThinking = false,
                     assistantSource = answer.source,
+                    assistantDiagnostics = answer.diagnostics.takeIf { BuildConfig.DEBUG },
                     assistantMessages = (value.assistantMessages + AssistantMessage(
                         id = "ui:aura:$replyTimestamp",
                         role = AssistantRole.AURA,
