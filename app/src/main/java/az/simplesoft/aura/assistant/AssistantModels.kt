@@ -43,24 +43,89 @@ enum class AssistantLanguage(val tag: String) {
     companion object {
         fun detect(text: String): AssistantLanguage {
             val normalized = text.lowercase()
+            val tokens = TextNormalizer.normalizeForMatching(normalized).split(' ').filter(String::isNotBlank)
+            var russian = normalized.count { it in 'а'..'я' || it == 'ё' }.toDouble() * 0.04
+            var azerbaijani = normalized.count { it in "əıöüşıçğ" }.toDouble() * 0.35
+            var english = normalized.count { it in 'a'..'z' }.toDouble() * 0.01
+            russian += tokens.count { it in RUSSIAN_WORDS } * 2.2
+            azerbaijani += tokens.count { it in AZERBAIJANI_WORDS } * 2.4
+            english += tokens.count { it in ENGLISH_WORDS } * 1.4
+            // ASCII transliteration is common in speech transcripts and must remain AZ, not EN.
+            if (tokens.any { it in AZERBAIJANI_TRANSLITERATIONS }) azerbaijani += 3.2
             return when {
-                normalized.any { it in 'ә'..'ә' || it in "çğıöşü" } ||
-                    listOf("salam", "necəsən", "mahnı", "musiqi", "zəhmət").any(normalized::contains) -> AZERBAIJANI
-                normalized.any { it in 'а'..'я' || it == 'ё' } -> RUSSIAN
+                azerbaijani >= russian && azerbaijani >= english && azerbaijani > 0.5 -> AZERBAIJANI
+                russian >= english && russian > 0.5 -> RUSSIAN
                 else -> ENGLISH
             }
         }
+
+        private val RUSSIAN_WORDS = setOf(
+            "включи", "поставь", "сыграй", "найди", "песня", "песню", "музыку", "трек",
+            "очередь", "плейлист", "громче", "тише", "пауза", "следующая", "предыдущая",
+            "привет", "здравствуй", "как", "дела", "сегодня", "день", "мне", "нравится"
+        )
+        private val AZERBAIJANI_WORDS = setOf(
+            "salam", "necəsən", "mahni", "musiqi", "qoş", "qos", "novbeti", "sesi",
+            "artir", "azalt", "goster", "radionu", "pleylist", "mahnini", "bunu", "onu"
+        )
+        private val AZERBAIJANI_TRANSLITERATIONS = setOf(
+            "salam", "mahni", "mahnini", "qos", "gosh", "sesi", "artir", "azalt", "novbeti", "goster", "ac"
+        )
+        private val ENGLISH_WORDS = setOf(
+            "hello", "hi", "play", "pause", "next", "previous", "track", "song", "music", "queue", "please", "thanks"
+        )
     }
 }
 
 enum class AssistantRoute {
     LOCAL_ACTION,
-    LOCAL_CONVERSATION
+    LOCAL_CONVERSATION,
+    NEEDS_REASONING
 }
 
 enum class AssistantRole { USER, AURA }
 
-enum class AssistantSource { LOCAL, FALLBACK }
+enum class AssistantSource { LOCAL, REMOTE, FALLBACK, TOOL }
+
+enum class AssistantEntityType {
+    TRACK, ARTIST, PLAYLIST, MOOD, DECADE, GENRE, DURATION, ORDINAL, TIME, DATE,
+    APP_NAME, CONTACT, LOCATION
+}
+
+data class AssistantEntity(
+    val type: AssistantEntityType,
+    val value: String,
+    val confidence: Double = 1.0
+)
+
+data class DecisionDiagnostics(
+    val originalText: String,
+    val normalizedText: String,
+    val language: AssistantLanguage,
+    val topIntents: List<String> = emptyList(),
+    val selectedIntent: String? = null,
+    val confidence: Double = 0.0,
+    val entities: List<AssistantEntity> = emptyList(),
+    val contextReferences: List<String> = emptyList(),
+    val reason: String = "",
+    val processingTimeMs: Long = 0L
+)
+
+data class AssistantDecision(
+    val intentId: String,
+    val confidence: Double,
+    val entities: List<AssistantEntity>,
+    val language: AssistantLanguage,
+    val reply: String,
+    val action: MusicIntent?,
+    val memoryInsights: List<MemoryInsight> = emptyList(),
+    val needsClarification: Boolean = false,
+    val clarification: String? = null,
+    val diagnostics: DecisionDiagnostics
+) {
+    val isUnresolved: Boolean
+        get() = action == null && !needsClarification && diagnostics.reason !in setOf("local-knowledge", "local-conversation")
+}
 
 data class AssistantMessage(
     val id: String,
@@ -96,5 +161,6 @@ data class AssistantReply(
         AssistantRoute.LOCAL_ACTION
     },
     val memoryInsights: List<MemoryInsight> = emptyList(),
-    val source: AssistantSource = AssistantSource.LOCAL
+    val source: AssistantSource = AssistantSource.LOCAL,
+    val diagnostics: DecisionDiagnostics? = null
 )

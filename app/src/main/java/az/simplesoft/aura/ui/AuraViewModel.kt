@@ -6,10 +6,12 @@ import android.media.AudioManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.content.edit
+import az.simplesoft.aura.BuildConfig
 import az.simplesoft.aura.assistant.AssistantMessage
 import az.simplesoft.aura.assistant.AssistantReply
 import az.simplesoft.aura.assistant.AssistantRole
 import az.simplesoft.aura.assistant.AssistantSource
+import az.simplesoft.aura.assistant.AssistantTrackContext
 import az.simplesoft.aura.assistant.AuraAiContext
 import az.simplesoft.aura.assistant.AuraAiEngine
 import az.simplesoft.aura.assistant.AuraSpeechSynthesizer
@@ -18,7 +20,6 @@ import az.simplesoft.aura.assistant.RecognitionBackend
 import az.simplesoft.aura.assistant.VoiceCaptureDiagnostics
 import az.simplesoft.aura.assistant.VoiceInputState
 import az.simplesoft.aura.assistant.CompactAssistantMemory
-import az.simplesoft.aura.assistant.DataBackedCompanionEngine
 import az.simplesoft.aura.assistant.AssistantCommandCoordinator
 import az.simplesoft.aura.assistant.ActionExecutionResult
 import az.simplesoft.aura.assistant.LocalIntentEngine
@@ -111,6 +112,7 @@ data class AuraUiState(
     val isAssistantThinking: Boolean = false,
     val assistantSource: AssistantSource = AssistantSource.LOCAL,
     val isOfflineOnly: Boolean = true,
+    val assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics? = null,
     val isListening: Boolean = false,
     val voiceInputState: VoiceInputState = VoiceInputState.Idle,
     val recognitionBackend: RecognitionBackend = RecognitionBackend.Unavailable,
@@ -157,8 +159,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val assistantCommandCoordinator = AssistantCommandCoordinator(application)
     private val auraAi = AuraAiEngine(
         local = intentEngine,
-        memory = assistantMemory,
-        dataBackedCompanion = DataBackedCompanionEngine(application)
+        memory = assistantMemory
     )
     private val speech = AuraSpeechSynthesizer(application)
     private val audio = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -536,7 +537,15 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     hourOfDay = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
                     carMode = current.isCarMode,
                     queueSize = current.queue.size,
-                    playlists = current.playlists.map { it.name }
+                    queue = current.queue.map { AssistantTrackContext(it.id, it.title, it.artist) },
+                    currentIndex = current.currentIndex,
+                    lastSearchQuery = current.diagnostics.query.takeIf { it != "—" },
+                    lastSearchResults = current.searchResults.map { AssistantTrackContext(it.id, it.title, it.artist) },
+                    playlists = current.playlists.map { it.name },
+                    favoriteCount = current.favorites.size,
+                    currentPlaylist = current.selectedPlaylist?.name,
+                    currentTrackLiked = current.liked,
+                    lastIntent = current.assistantSource.name
                 )
             )
             val execution = executeAssistantReply(answer)
@@ -555,6 +564,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     assistantText = responseText,
                     isAssistantThinking = false,
                     assistantSource = answer.source,
+                    assistantDiagnostics = answer.diagnostics.takeIf { BuildConfig.DEBUG },
                     assistantMessages = (value.assistantMessages + AssistantMessage(
                         id = "ui:aura:$replyTimestamp",
                         role = AssistantRole.AURA,
