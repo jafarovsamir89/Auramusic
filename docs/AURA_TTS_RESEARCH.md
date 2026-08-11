@@ -1,18 +1,19 @@
 # AURA voice packs
 
-The voice layer has one selection seam and two local implementations:
+The voice layer has one selection seam and explicit capability-based fallback:
 
-- Russian Silero `v5_cis_base_nostress.jit`, configured at about 91.7 MB.
-- Azerbaijani Silero pack, configured by its verified download metadata.
-- Android system TTS fallback for missing, corrupt, unsupported, or failed
-  packs.
+- Russian Silero Kseniya `v1_kseniya_16000.jit`, installed explicitly and
+  checksum-verified.
+- Android system TTS for Azerbaijani `az-AZ` and English. A Russian model is
+  never presented as Azerbaijani.
 
 The app must show these as optional local resources, with size, language,
 version, license and verification status. It must not silently download a pack
 on the first spoken answer. Downloads use a partial file and checksum before
 the final filename is made visible.
 
-TTS must stop the previous utterance before starting a new one, release its
-`AudioTrack`, and request assistant audio focus without stopping music. A
-future pack manager should expose install, cancel, verify and delete actions
-independently for each language.
+TTS stops the previous utterance before starting a new one, releases its
+`AudioTrack`, and exposes a barge-in stop path. Audio focus/ducking still needs
+device-level validation. The pack manager exposes install, verify and delete
+for the Russian pack; an AZ pack will only be added after a properly trained
+model passes real pronunciation checks.

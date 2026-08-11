@@ -18,11 +18,6 @@ data class AuraAiContext(
     val lastIntent: String? = null
 )
 
-interface RemoteAssistantAdapter {
-    val isAvailable: Boolean
-    suspend fun reason(input: String, context: AuraAiContext, memory: AssistantMemorySnapshot, language: AssistantLanguage): AssistantReply
-}
-
 /** One local entry point for UI and voice. Remote reasoning is intentionally absent by default. */
 class AuraAiEngine(
     local: LocalIntentEngine,
