@@ -137,3 +137,105 @@ data class CachedPlayableSourceEntity(
 
 @Entity(tableName = "user_preferences", primaryKeys = ["key"])
 data class UserPreferenceEntity(val key: String, val value: String, val updatedAt: Long)
+
+/** A dialogue branch, stored as data so the local companion can grow without code changes. */
+@Entity(tableName = "assistant_dialogue_nodes", indices = [Index("topic"), Index("language")])
+data class AssistantDialogueNodeEntity(
+    @PrimaryKey val id: String,
+    val topic: String,
+    val language: String,
+    val nextNodeId: String?,
+    val priority: Int
+)
+
+@Entity(tableName = "assistant_dialogue_variants", indices = [Index("nodeId"), Index("language")])
+data class AssistantDialogueVariantEntity(
+    @PrimaryKey val id: String,
+    val nodeId: String,
+    val language: String,
+    val tone: String,
+    val text: String,
+    val weight: Int,
+    val cooldownKey: String?
+)
+
+@Entity(tableName = "assistant_intent_patterns", indices = [Index("intent"), Index("language")])
+data class AssistantIntentPatternEntity(
+    @PrimaryKey val id: String,
+    val nodeId: String = "",
+    val intent: String,
+    val language: String,
+    val pattern: String,
+    val emotion: String?,
+    val priority: Int
+)
+
+@Entity(tableName = "assistant_conversation_state")
+data class AssistantConversationStateEntity(
+    @PrimaryKey val id: String = "active",
+    val nodeId: String?,
+    val topic: String?,
+    val emotion: String?,
+    val expectedIntent: String? = null,
+    val failureCount: Int = 0,
+    val lastBranch: String? = null,
+    val updatedAt: Long
+)
+
+/** Durable command envelope. SharedFlow may notify the UI, but never owns delivery. */
+@Entity(
+    tableName = "assistant_pending_commands",
+    indices = [Index("status"), Index("fingerprint"), Index("createdAt")]
+)
+data class AssistantPendingCommandEntity(
+    @PrimaryKey val commandId: String,
+    val text: String,
+    val fingerprint: String,
+    val source: String,
+    val status: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val attempts: Int = 0,
+    val requiresUi: Boolean = true
+)
+
+@Entity(tableName = "assistant_user_memory", indices = [Index("category"), Index("updatedAt")])
+data class AssistantUserMemoryEntity(
+    @PrimaryKey val key: String,
+    val category: String,
+    val value: String,
+    val confirmed: Boolean,
+    val updatedAt: Long
+)
+
+@Entity(tableName = "assistant_learned_phrases", indices = [Index("normalizedPhrase", unique = true), Index("intent")])
+data class AssistantLearnedPhraseEntity(
+    @PrimaryKey val id: String,
+    val phrase: String,
+    val normalizedPhrase: String,
+    val intent: String,
+    val slotsJson: String,
+    val confirmed: Boolean,
+    val errorCount: Int,
+    val confidence: Float,
+    val lastUsedAt: Long?
+)
+
+@Entity(tableName = "assistant_unknown_utterances", indices = [Index("normalizedText", unique = true), Index("lastSeenAt")])
+data class AssistantUnknownUtteranceEntity(
+    @PrimaryKey val id: String,
+    val normalizedText: String,
+    val language: String,
+    val topic: String?,
+    val result: String,
+    val frequency: Int,
+    val firstSeenAt: Long,
+    val lastSeenAt: Long
+)
+
+@Entity(tableName = "assistant_response_stats", indices = [Index("variantId", unique = true)])
+data class AssistantResponseStatEntity(
+    @PrimaryKey val variantId: String,
+    val usedCount: Int,
+    val lastUsedAt: Long?
+)

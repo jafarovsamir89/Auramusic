@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "language", "intents", "patterns", "responses"],
+    "properties": {
+      "id": {"type": "string", "minLength": 1},
+      "language": {"enum": ["ru", "az", "en"]},
+      "intents": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+      "patterns": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+      "responses": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+      "context": {"type": "array", "items": {"type": "string"}},
+      "emotion": {"type": "string"},
+      "next": {"type": "array", "items": {"type": "string"}}
+    },
+    "additionalProperties": false
+  }
+}

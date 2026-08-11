@@ -1,6 +1,13 @@
 package az.simplesoft.aura.ui
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
@@ -110,6 +117,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -143,8 +151,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import az.simplesoft.aura.assistant.OfflineSpeechRecognizer
+import androidx.core.content.ContextCompat
+import az.simplesoft.aura.assistant.DefaultVoiceInputController
+import az.simplesoft.aura.assistant.OfflineModelManager
+import az.simplesoft.aura.assistant.OfflineModelState
+import az.simplesoft.aura.assistant.VoicePackManager
+import az.simplesoft.aura.assistant.VoicePackStatus
 import az.simplesoft.aura.assistant.AssistantRole
+import az.simplesoft.aura.assistant.AuraWakeWordBus
+import az.simplesoft.aura.assistant.VoiceInputState
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.RadioCountry
@@ -153,6 +168,8 @@ import az.simplesoft.aura.data.database.AuraQueueSnapshot
 import az.simplesoft.aura.domain.music.AuraRepeatMode
 import coil.compose.AsyncImage
 import java.text.SimpleDateFormat
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import java.util.Date
 import java.util.Locale
 
@@ -173,25 +190,62 @@ private val ReferenceBlue = Color(0xFF2467FF)
 @Composable
 fun AuraApp(
     initialCommand: String? = null,
+    speakInitialCommand: Boolean = false,
+    initialVoicePreview: String? = null,
+    initialVoicePreviewLanguage: String? = null,
     vm: AuraViewModel = viewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val recognizer = remember {
-        OfflineSpeechRecognizer(
+    val voiceController = remember(context) {
+        DefaultVoiceInputController(
             context = context,
-            onText = {
-                vm.setQuery(it)
-                vm.submitVoice(it)
-            },
-            onState = vm::setListening
+            onTranscript = vm::submitVoice,
+            onDiagnostics = vm::setVoiceDiagnostics
         )
     }
+    val voiceState by voiceController.state.collectAsStateWithLifecycle()
+    val voiceBackend by voiceController.backend.collectAsStateWithLifecycle()
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) vm.startPushToTalk(voiceController::start)
+        else vm.setVoiceInputState(VoiceInputState.PermissionRequired(Manifest.permission.RECORD_AUDIO), voiceBackend)
+    }
+    val voiceInput = {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            vm.startPushToTalk(voiceController::start)
+        }
+    }
     var playlistTarget by remember { mutableStateOf<Track?>(null) }
-    DisposableEffect(Unit) { onDispose(recognizer::destroy) }
-    LaunchedEffect(initialCommand) {
-        initialCommand?.takeIf(String::isNotBlank)?.let(vm::submit)
+    DisposableEffect(Unit) { onDispose(voiceController::destroy) }
+    LaunchedEffect(voiceState, voiceBackend) {
+        vm.setVoiceInputState(voiceState, voiceBackend)
+        when (voiceState) {
+            is VoiceInputState.TranscriptReady,
+            is VoiceInputState.PermissionRequired,
+            is VoiceInputState.ModelRequired,
+            is VoiceInputState.NoSpeech,
+            is VoiceInputState.Failed -> vm.resumeWakeWordAfterPushToTalk()
+            else -> Unit
+        }
+    }
+    LaunchedEffect(initialCommand, speakInitialCommand) {
+        initialCommand?.takeIf(String::isNotBlank)?.let {
+            if (speakInitialCommand) vm.submitVoice(it) else vm.submit(it)
+        }
+    }
+    LaunchedEffect(initialVoicePreview, initialVoicePreviewLanguage) {
+        initialVoicePreview?.takeIf(String::isNotBlank)?.let {
+            vm.previewVoice(it, if (initialVoicePreviewLanguage == "ru") az.simplesoft.aura.assistant.AssistantLanguage.RUSSIAN else az.simplesoft.aura.assistant.AssistantLanguage.AZERBAIJANI)
+        }
+    }
+    LaunchedEffect(Unit) {
+        vm.resumeWakeWordServiceIfNeeded()
+        AuraWakeWordBus.commands.collect { command -> vm.submitVoice(command) }
     }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -245,7 +299,7 @@ fun AuraApp(
                 onNext = vm::next,
                 onLike = vm::toggleLike,
                 onExit = vm::toggleCarMode,
-                onVoice = recognizer::start
+                onVoice = voiceInput
             )
             state.isQueueOpen -> QueueScreen(
                 state = state,
@@ -276,7 +330,20 @@ fun AuraApp(
                 onCar = vm::toggleCarMode,
                 onAddToPlaylist = { playlistTarget = state.nowTrack }
             )
-                else -> MainShell(state, vm, recognizer::start) { playlistTarget = it }
+                else -> MainShell(
+                    state = state,
+                    vm = vm,
+                    onVoice = voiceInput,
+                    onOpenSettings = {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:${context.packageName}")
+                            )
+                        )
+                    },
+                    onAddToPlaylist = { playlistTarget = it }
+                )
             }
         }
     }
@@ -287,6 +354,7 @@ private fun MainShell(
     state: AuraUiState,
     vm: AuraViewModel,
     onVoice: () -> Unit,
+    onOpenSettings: () -> Unit,
     onAddToPlaylist: (Track) -> Unit
 ) {
     Box(Modifier.fillMaxSize()) {
@@ -355,11 +423,18 @@ private fun MainShell(
                 AuraDestination.ASSISTANT -> AssistantScreen(
                     state = state,
                     onVoice = onVoice,
-                    onCommand = vm::submit
+                    onCommand = vm::submit,
+                    onWakeWord = vm::setWakeWordEnabled,
+                    onOpenSettings = onOpenSettings
                 )
                 AuraDestination.DIAGNOSTICS -> DiagnosticsScreen(
                     diagnostics = state.diagnostics,
-                    onBack = { vm.navigate(AuraDestination.HOME) }
+                    onBack = { vm.navigate(AuraDestination.HOME) },
+                    voiceState = state.voiceInputState,
+                    voiceBackend = state.recognitionBackend,
+                    voiceDiagnostics = state.voiceDiagnostics,
+                    assistantDiagnostics = state.assistantDiagnostics,
+                    onTestVoice = onVoice
                 )
             }
         }
@@ -612,7 +687,27 @@ private fun HeroAction(label: String, icon: ImageVector, onClick: () -> Unit) {
 }
 
 @Composable
-private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Unit) {
+private fun DiagnosticsScreen(
+    diagnostics: ProviderDiagnostics,
+    onBack: () -> Unit,
+    voiceState: VoiceInputState,
+    voiceBackend: az.simplesoft.aura.assistant.RecognitionBackend,
+    voiceDiagnostics: az.simplesoft.aura.assistant.VoiceCaptureDiagnostics?,
+    assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics?,
+    onTestVoice: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val whisper = remember(context) { OfflineModelManager(context) }
+    val voices = remember(context) { VoicePackManager(context) }
+    val whisperState by whisper.state.collectAsStateWithLifecycle()
+    val whisperProgress by whisper.progress.collectAsStateWithLifecycle()
+    val voiceProgress by voices.progress.collectAsStateWithLifecycle()
+    var packs by remember { mutableStateOf(voices.packs()) }
+    var whisperJob by remember { mutableStateOf<Job?>(null) }
+    var voiceJob by remember { mutableStateOf<Job?>(null) }
+    var activeVoiceId by remember { mutableStateOf<String?>(null) }
+    var deleteTarget by remember { mutableStateOf<String?>(null) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().statusBarsPadding(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
@@ -635,6 +730,34 @@ private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Un
         item { DiagnosticRow("MIME", diagnostics.mimeType) }
         item { DiagnosticRow("Истекает", diagnostics.expiresAt?.let { Date(it).toString() } ?: "—") }
         item { DiagnosticRow("Fallback", diagnostics.fallbackReason) }
+        item {
+            Text("Voice input", color = SecondaryText, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            DiagnosticRow("Backend", voiceBackend.toString())
+            DiagnosticRow("State", voiceState.toString())
+            voiceDiagnostics?.let { capture ->
+                DiagnosticRow("RMS / peak", "${"%.4f".format(capture.averageRms)} / ${"%.4f".format(capture.peakRms)}")
+                DiagnosticRow("Capture", "${capture.captureDurationMs} ms, ${capture.sampleCount} samples")
+                DiagnosticRow("Speech", if (capture.heardSpeech) "heard" else "not heard")
+                DiagnosticRow("Transcription", capture.transcriptionDurationMs?.let { "$it ms" } ?: "-")
+            }
+            TextButton(onClick = onTestVoice) { Text("Test microphone") }
+        }
+        assistantDiagnostics?.let { decision ->
+            item {
+                Text("Assistant decision", color = SecondaryText, fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                DiagnosticRow("Raw transcript", decision.originalText)
+                DiagnosticRow("Normalized", decision.normalizedText)
+                DiagnosticRow("Language", decision.language.tag)
+                DiagnosticRow("Top intents", decision.topIntents.joinToString(" · ").ifBlank { "—" })
+                DiagnosticRow("Selected", decision.selectedIntent ?: "—")
+                DiagnosticRow("Confidence", "${"%.2f".format(decision.confidence)}")
+                DiagnosticRow("Entities", decision.entities.joinToString { "${it.type}:${it.value}" }.ifBlank { "—" })
+                DiagnosticRow("Context", decision.contextReferences.joinToString().ifBlank { "—" })
+                DiagnosticRow("Assistant latency", "${decision.processingTimeMs} ms")
+            }
+        }
         item { DiagnosticRow("Страница", diagnostics.selectedPage) }
         item {
             Text("Кандидаты", color = SecondaryText, fontSize = 12.sp)
@@ -642,6 +765,92 @@ private fun DiagnosticsScreen(diagnostics: ProviderDiagnostics, onBack: () -> Un
             diagnostics.candidates.forEach { candidate ->
                 Text(candidate, Modifier.padding(vertical = 5.dp), color = AccentSilver)
             }
+        }
+        item {
+            Text("Offline storage", color = SecondaryText, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            ResourceCard(
+                title = "Whisper speech recognition",
+                status = whisperState.name,
+                detail = "${whisperProgress.percent}% - ${whisper.metadata.sizeBytes / 1_000_000} MB",
+                actionLabel = when {
+                    whisperState == OfflineModelState.DOWNLOADING || whisperState == OfflineModelState.VERIFYING -> "Cancel"
+                    whisperState == OfflineModelState.READY -> "Delete"
+                    else -> "Install"
+                },
+                onAction = {
+                    when {
+                        whisperState == OfflineModelState.DOWNLOADING || whisperState == OfflineModelState.VERIFYING -> whisperJob?.cancel()
+                        whisperState == OfflineModelState.READY -> deleteTarget = "whisper"
+                        else -> whisperJob = scope.launch {
+                            runCatching { whisper.download() }
+                            whisperJob = null
+                        }
+                    }
+                }
+            )
+            packs.forEach { pack ->
+                val progress = voiceProgress[pack.id]
+                ResourceCard(
+                    title = "${pack.displayName} TTS (${pack.language.tag})",
+                    status = pack.status.name,
+                    detail = "${progress?.percent ?: 0}% - ${pack.sizeBytes / 1_000_000} MB - ${pack.sha256.take(12)}...",
+                    actionLabel = if (activeVoiceId == pack.id) "Cancel" else if (pack.status == VoicePackStatus.READY) "Delete" else "Install",
+                    onAction = {
+                        when {
+                            activeVoiceId == pack.id -> voiceJob?.cancel()
+                            pack.status == VoicePackStatus.READY -> deleteTarget = pack.id
+                            else -> {
+                                activeVoiceId = pack.id
+                                voiceJob = scope.launch {
+                                    runCatching { voices.install(pack.id) }
+                                    packs = voices.packs()
+                                    activeVoiceId = null
+                                    voiceJob = null
+                                }
+                            }
+                        }
+                    }
+                )
+            }
+        }
+    }
+    deleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete local voice resource?") },
+            text = { Text("Music, playlists, queue, history, and favorites will not be changed.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (target == "whisper") {
+                        scope.launch { whisper.delete() }
+                    } else {
+                        voices.delete(target)
+                        packs = voices.packs()
+                    }
+                    deleteTarget = null
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } }
+        )
+    }
+}
+
+@Composable
+private fun ResourceCard(
+    title: String,
+    status: String,
+    detail: String,
+    actionLabel: String,
+    onAction: () -> Unit
+) {
+    Surface(color = ElevatedSurface, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 13.sp)
+                Text("$status - $detail", color = SecondaryText, fontSize = 11.sp)
+            }
+            TextButton(onClick = onAction) { Text(actionLabel) }
         }
     }
 }
@@ -1198,7 +1407,9 @@ private fun PlaylistDetail(
 private fun AssistantScreen(
     state: AuraUiState,
     onVoice: () -> Unit,
-    onCommand: (String) -> Unit
+    onCommand: (String) -> Unit,
+    onWakeWord: (Boolean) -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -1216,13 +1427,67 @@ private fun AssistantScreen(
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("A U R A", textAlign = TextAlign.Center, letterSpacing = 3.sp, fontSize = 14.sp)
                 Text(
-                    if (state.isCloudAiConfigured) "DeepSeek · память включена" else "Локальный режим · ожидается AI-ключ",
-                    color = if (state.isCloudAiConfigured) AuraMint else SecondaryText,
+                    when (state.recognitionBackend) {
+                        az.simplesoft.aura.assistant.RecognitionBackend.Whisper -> "Whisper · полностью локально"
+                        az.simplesoft.aura.assistant.RecognitionBackend.AndroidOnDevice -> "Android on-device"
+                        az.simplesoft.aura.assistant.RecognitionBackend.AndroidSystem -> "Системное распознавание · сеть возможна"
+                        az.simplesoft.aura.assistant.RecognitionBackend.Unavailable -> "Распознавание недоступно"
+                    },
+                    color = AuraMint,
                     fontSize = 9.sp
                 )
             }
             IconButton(onClick = onVoice, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Rounded.GraphicEq, "Голос", tint = ReferenceMagenta)
+            }
+        }
+        when (val voiceState = state.voiceInputState) {
+            is VoiceInputState.NoSpeech,
+            is VoiceInputState.Failed,
+            is VoiceInputState.PermissionRequired,
+            is VoiceInputState.ModelRequired -> Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFF38202B),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(state.assistantText, Modifier.weight(1f), color = PrimaryText, fontSize = 12.sp)
+                    TextButton(onClick = onVoice) { Text("Повторить") }
+                    if (voiceState is VoiceInputState.PermissionRequired) {
+                        TextButton(onClick = onOpenSettings) { Text("Настройки") }
+                    }
+                }
+            }
+            else -> Unit
+        }
+        Spacer(Modifier.height(12.dp))
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = ElevatedSurface,
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Rounded.Mic, contentDescription = null, tint = if (state.wakeWordEnabled) AuraMint else SecondaryText)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Слушать «АУРА»", fontSize = 13.sp)
+                    Text(
+                        if (state.wakeWordEnabled) "Активно в фоне и при выключенном экране" else "Включается с постоянным уведомлением",
+                        color = SecondaryText,
+                        fontSize = 10.sp
+                    )
+                }
+                Switch(
+                    checked = state.wakeWordEnabled,
+                    onCheckedChange = onWakeWord,
+                    colors = SwitchDefaults.colors(checkedThumbColor = PrimaryText, checkedTrackColor = AuraAccent)
+                )
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -1279,8 +1544,6 @@ private fun AssistantScreen(
                         Surface(shape = RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp), color = Color(0xFF202631)) {
                             Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = AuraAccentSoft)
-                                Spacer(Modifier.width(8.dp))
-                                Text(state.assistantText, color = SecondaryText, fontSize = 12.sp)
                             }
                         }
                     }
@@ -1353,7 +1616,20 @@ private fun AssistantScreen(
         ) {
             MiniAuraFace(34.dp)
             Spacer(Modifier.width(10.dp))
-            Text(if (state.isListening) "Слушаю тебя…" else "Нажми и говори", color = PrimaryText, fontSize = 12.sp)
+            Text(
+                when (state.voiceInputState) {
+                    VoiceInputState.Listening -> "Слушаю тебя..."
+                    VoiceInputState.Processing -> "Распознаю..."
+                    is VoiceInputState.TranscriptReady -> "Текст получен"
+                    is VoiceInputState.NoSpeech,
+                    is VoiceInputState.Failed,
+                    is VoiceInputState.PermissionRequired,
+                    is VoiceInputState.ModelRequired -> "Повторить голосовой ввод"
+                    else -> "Нажми и говори"
+                },
+                color = PrimaryText,
+                fontSize = 12.sp
+            )
         }
     }
 }

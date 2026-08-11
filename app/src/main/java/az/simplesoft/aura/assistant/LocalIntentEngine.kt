@@ -2,7 +2,7 @@ package az.simplesoft.aura.assistant
 
 /**
  * Fast, private first-pass understanding. Only explicit music and device commands become actions.
- * Ambiguous phrases are deliberately returned as NEEDS_REASONING and never become a search.
+ * Ambiguous phrases are deliberately returned as local conversation and never become a search.
  */
 class LocalIntentEngine {
 
@@ -27,7 +27,7 @@ class LocalIntentEngine {
                 "One moment, let me think…"
             ),
             language = language,
-            route = AssistantRoute.NEEDS_REASONING,
+            route = AssistantRoute.LOCAL_CONVERSATION,
             memoryInsights = extractMemoryInsights(original, language)
         )
     }
@@ -107,7 +107,7 @@ class LocalIntentEngine {
     private fun localPlaybackIntent(text: String, language: AssistantLanguage): AssistantReply? = when {
         matchesAny(text, "мой микс", "включи мой микс", "музыка для меня", "my mix", "mənim miksim") -> action(MusicIntent.MyMix, language, "Собираю твой микс.", "Sənin miksini hazırlayıram.", "Building your mix.")
         matchesAny(text, "продолжить прослушивание", "продолжи слушать", "continue listening", "musiqini davam etdir") -> action(MusicIntent.ContinueListening, language, "Продолжаю с того, что тебе нравится.", "Sevdiyin musiqidən davam edirəm.", "Continuing with music you like.")
-        matchesAny(text, "пауза", "останови", "стоп", "pause", "stop", "dayandır") -> action(MusicIntent.Pause, language, "Ставлю на паузу.", "Pauza edirəm.", "Pausing.")
+        matchesAny(text, "пауза", "pauza", "останови", "стоп", "pause", "stop", "dayandır") -> action(MusicIntent.Pause, language, "Ставлю на паузу.", "Pauza edirəm.", "Pausing.")
         matchesAny(text, "продолжи", "играй дальше", "resume", "continue playing", "davam et") -> action(MusicIntent.Play, language, "Продолжаю.", "Davam edirəm.", "Resuming.")
         matchesAny(text, "следующая", "следующий трек", "переключи", "next song", "next track", "növbəti mahnı") -> action(MusicIntent.Next, language, "Следующий трек.", "Növbəti mahnı.", "Next track.")
         matchesAny(text, "предыдущая", "предыдущий трек", "previous track", "əvvəlki mahnı") -> action(MusicIntent.Previous, language, "Возвращаю предыдущий трек.", "Əvvəlki mahnıya qayıdıram.", "Going back one track.")
@@ -141,17 +141,15 @@ class LocalIntentEngine {
     }
 
     private fun explicitMusicSearch(text: String, language: AssistantLanguage): AssistantReply? {
-        val musicCue = when (language) {
-            AssistantLanguage.RUSSIAN -> Regex("\\b(включи|поставь|сыграй)\\b|\\bнайди\\b.*\\b(песню|песни|музыку|трек)\\b")
-            AssistantLanguage.AZERBAIJANI -> Regex("\\b(çal|qoş|səsləndir)\\b|\\btap\\b.*\\b(mahnı|musiqi)\\b")
-            AssistantLanguage.ENGLISH -> Regex("\\b(play|put on)\\b|\\bfind\\b.*\\b(song|music|track)\\b")
-        }
+        // Mixed speech is common in ASR; command cues must not depend on one detected language.
+        val musicCue = Regex("\\b(включи|поставь|сыграй|найди|cal|qos|seslendir|tap|play|put on|find)\\b")
         if (!musicCue.containsMatchIn(text)) return null
 
         val mood = detectMood(text)
         val decade = Regex("(19|20)\\d0").find(text)?.value?.toIntOrNull()
         val cleaned = text
-            .replace(Regex("\\b(включи|поставь|найди|сыграй|музыку|песни|песню|трек|треки|play|put|on|find|song|music|track|çal|qoş|tap|mahnı|musiqi)\\b"), " ")
+            .replace(Regex("\\b(включи|поставь|найди|сыграй|музыку|песни|песню|трек|треки|play|put|on|find|song|music|track|çal|qoş|tap|mahnı|musiqi|mahni|mahnisi|mahnini)\\b"), " ")
+            .replace(Regex("\\b(пожалуйста|пожалста|please|zəhmət\\s+olmasa)\\b"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
         val query = cleaned.ifBlank { mood?.title ?: phrase(language, "музыка", "musiqi", "music") }
