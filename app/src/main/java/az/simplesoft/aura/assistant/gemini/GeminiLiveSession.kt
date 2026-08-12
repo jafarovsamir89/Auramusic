@@ -14,6 +14,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -50,13 +51,15 @@ class GeminiLiveSession(
 
     fun connect() {
         if (mutableState.value == GeminiSessionState.CONNECTING || mutableState.value == GeminiSessionState.READY) return
+        Log.i(TAG, "connect requested: model=${GeminiLiveConfig.MODEL} resume=${resumeHandle != null}")
         closedByUser = false
         mutableState.value = if (reconnects == 0) GeminiSessionState.CONNECTING else GeminiSessionState.RECONNECTING
         _diagnostics.value = _diagnostics.value.copy(state = mutableState.value, lastError = null)
         scope.launch(Dispatchers.IO) {
-            runCatching { authProvider.getCredential() }
-                .onSuccess { credential -> openSocket(credential) }
-                .onFailure { fail(it.message ?: "Gemini authentication failed") }
+            runCatching {
+                val credential = authProvider.getCredential()
+                openSocket(credential)
+            }.onFailure { fail(it.message ?: "Gemini connection failed") }
         }
     }
 
@@ -71,7 +74,8 @@ class GeminiLiveSession(
     }
 
     private fun openSocket(credential: GeminiCredential) {
-        val url = GeminiLiveConfig.WS_URL.toHttpUrl().newBuilder()
+        // OkHttp's WebSocket Request accepts https and upgrades it to wss.
+        val url = GeminiLiveConfig.WS_URL.replaceFirst("wss://", "https://").toHttpUrl().newBuilder()
             .addQueryParameter(if (credential.ephemeral) "access_token" else "key", credential.value)
             .build()
         setupStartedAt = System.currentTimeMillis()
@@ -79,6 +83,7 @@ class GeminiLiveSession(
             Request.Builder().url(url).build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    Log.i(TAG, "WebSocket opened")
                     connectedAt = System.currentTimeMillis()
                     _diagnostics.value = _diagnostics.value.copy(
                         connected = true,
@@ -86,12 +91,24 @@ class GeminiLiveSession(
                         bytesSent = 0,
                         bytesReceived = 0
                     )
-                    webSocket.send(setupMessage().toString())
+                    val setup = setupMessage().toString()
+                    Log.i(TAG, "sending setup bytes=${setup.toByteArray().size}")
+                    Log.i(TAG, "setup sent=${webSocket.send(setup)}")
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    val preview = text.take(500).replace(Regex("(key|access_token)=([^&\\\" ]+)"), "$1=<redacted>")
+                    Log.i(TAG, "server message: $preview")
                     _diagnostics.value = _diagnostics.value.copy(bytesReceived = _diagnostics.value.bytesReceived + text.toByteArray().size)
                     handleServerMessage(webSocket, JSONObject(text))
+                }
+
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    val text = bytes.utf8()
+                    Log.i(TAG, "server binary message bytes=${bytes.size}")
+                    _diagnostics.value = _diagnostics.value.copy(bytesReceived = _diagnostics.value.bytesReceived + bytes.size)
+                    runCatching { handleServerMessage(webSocket, JSONObject(text)) }
+                        .onFailure { fail("Gemini message parse error: ${it.message ?: "invalid server message"}") }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -110,14 +127,16 @@ class GeminiLiveSession(
     private fun setupMessage(): JSONObject = JSONObject().apply {
         put("setup", JSONObject().apply {
             put("model", "models/${GeminiLiveConfig.MODEL}")
-            put("responseModalities", JSONArray().put("AUDIO"))
             put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", GeminiSystemPrompt.VALUE))))
             put("tools", JSONArray().put(JSONObject().put("functionDeclarations", GeminiToolRegistry.declarations())))
             put("sessionResumption", JSONObject().apply { resumeHandle?.let { put("handle", it) } })
             put("contextWindowCompression", JSONObject().put("slidingWindow", JSONObject()))
             put("inputAudioTranscription", JSONObject())
             put("outputAudioTranscription", JSONObject())
-            put("generationConfig", JSONObject().put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal")).put("speechConfig", JSONObject().put("voiceConfig", JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voiceName)))))
+            put("generationConfig", JSONObject()
+                .put("responseModalities", JSONArray().put("AUDIO"))
+                .put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal"))
+                .put("speechConfig", JSONObject().put("voiceConfig", JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voiceName)))))
         })
     }
 
@@ -154,8 +173,13 @@ class GeminiLiveSession(
     }
 
     private fun handleServerMessage(webSocket: WebSocket, message: JSONObject) {
+        message.optJSONObject("error")?.let { error ->
+            fail("Gemini API error ${error.optInt("code", 0)}: ${error.optString("message", "unknown error")}")
+            return
+        }
         when {
             message.has("setupComplete") -> {
+                Log.i(TAG, "setup complete")
                 mutableState.value = GeminiSessionState.READY
                 _diagnostics.value = _diagnostics.value.copy(
                     state = GeminiSessionState.READY,
