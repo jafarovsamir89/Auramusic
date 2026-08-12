@@ -27,6 +27,8 @@ class GeminiLiveSession(
     private val audioOutput: GeminiAudioOutput,
     private val scope: CoroutineScope,
     voice: String = GeminiLiveConfig.DEFAULT_VOICE,
+    private val userContextProvider: () -> String = { "" },
+    private val usageStore: GeminiUsageStore? = null,
     private val onInputTranscription: (String) -> Unit = {},
     private val onOutputTranscription: (String) -> Unit = {},
     private val onError: (String) -> Unit = {}
@@ -45,8 +47,15 @@ class GeminiLiveSession(
     private var speechEndAt = 0L
     private var reconnects = 0
     private var closedByUser = false
+    private val countedUsage = mutableSetOf<String>()
     private var sessionId = UUID.randomUUID().toString()
-    private val _diagnostics = MutableStateFlow(GeminiDiagnostics(voice = voiceName, sessionId = sessionId))
+    private val _diagnostics = MutableStateFlow(
+        GeminiDiagnostics(
+            voice = voiceName,
+            sessionId = sessionId,
+            lifetimeUsage = usageStore?.read() ?: GeminiTokenUsage()
+        )
+    )
     val diagnostics: StateFlow<GeminiDiagnostics> = _diagnostics.asStateFlow()
 
     fun connect() {
@@ -127,7 +136,11 @@ class GeminiLiveSession(
     private fun setupMessage(): JSONObject = JSONObject().apply {
         put("setup", JSONObject().apply {
             put("model", "models/${GeminiLiveConfig.MODEL}")
-            put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", GeminiSystemPrompt.VALUE))))
+            val memory = userContextProvider().trim().take(2_000)
+            val prompt = if (memory.isBlank()) GeminiSystemPrompt.VALUE else {
+                "${GeminiSystemPrompt.VALUE}\n\nКонтекст пользователя (используй только для персонализации):\n$memory"
+            }
+            put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt))))
             put("tools", JSONArray().put(JSONObject().put("functionDeclarations", GeminiToolRegistry.declarations())))
             put("sessionResumption", JSONObject().apply { resumeHandle?.let { put("handle", it) } })
             put("contextWindowCompression", JSONObject().put("slidingWindow", JSONObject()))
@@ -206,6 +219,12 @@ class GeminiLiveSession(
                 }
             }
         }
+        message.optJSONObject("usageMetadata")?.let { metadata ->
+            recordUsage(parseUsage(metadata))
+        }
+        message.optJSONObject("serverContent")?.optJSONObject("usageMetadata")?.let { metadata ->
+            recordUsage(parseUsage(metadata))
+        }
         message.optJSONObject("serverContent")?.let { content ->
             if (content.optBoolean("interrupted")) {
                 interrupt()
@@ -277,6 +296,48 @@ class GeminiLiveSession(
         onError(message)
     }
 
+    private fun parseUsage(metadata: JSONObject): GeminiTokenUsage {
+        fun long(name: String) = metadata.optLong(name, 0L)
+        fun modalityTokens(name: String): Pair<Long, Long> {
+            var audio = 0L
+            var text = 0L
+            val details = metadata.optJSONArray(name) ?: return audio to text
+            for (index in 0 until details.length()) {
+                val item = details.optJSONObject(index) ?: continue
+                val count = item.optLong("tokenCount", 0L)
+                if (item.optString("modality").equals("AUDIO", true)) audio += count else text += count
+            }
+            return audio to text
+        }
+        val prompt = modalityTokens("promptTokensDetails")
+        val response = modalityTokens("responseTokensDetails")
+        return GeminiTokenUsage(
+            promptTokens = long("promptTokenCount"),
+            responseTokens = long("responseTokenCount"),
+            totalTokens = long("totalTokenCount"),
+            thoughtsTokens = long("thoughtsTokenCount"),
+            cachedTokens = long("cachedContentTokenCount"),
+            toolUsePromptTokens = long("toolUsePromptTokenCount"),
+            inputAudioTokens = prompt.first,
+            inputTextTokens = prompt.second,
+            outputAudioTokens = response.first,
+            outputTextTokens = response.second
+        )
+    }
+
+    private fun recordUsage(usage: GeminiTokenUsage) {
+        _diagnostics.value = _diagnostics.value.copy(lastUsage = usage)
+        val fingerprint = listOf(
+            usage.promptTokens, usage.responseTokens, usage.totalTokens,
+            usage.inputAudioTokens, usage.outputAudioTokens, usage.toolUsePromptTokens
+        ).joinToString(":")
+        if (countedUsage.add(fingerprint)) {
+            val session = _diagnostics.value.sessionUsage + usage
+            val lifetime = usageStore?.add(usage) ?: (_diagnostics.value.lifetimeUsage + usage)
+            _diagnostics.value = _diagnostics.value.copy(sessionUsage = session, lifetimeUsage = lifetime)
+        }
+    }
+
     fun close() {
         closedByUser = true
         socket?.close(1000, "client closed")
@@ -284,6 +345,11 @@ class GeminiLiveSession(
         audioOutput.stop()
         mutableState.value = GeminiSessionState.DISCONNECTED
         _diagnostics.value = _diagnostics.value.copy(state = GeminiSessionState.DISCONNECTED, connected = false)
+    }
+
+    fun resetUsage() {
+        usageStore?.clear()
+        _diagnostics.value = _diagnostics.value.copy(lifetimeUsage = GeminiTokenUsage())
     }
 
     private companion object { const val TAG = "GeminiLive" }

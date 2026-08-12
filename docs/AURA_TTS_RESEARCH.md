@@ -1,11 +1,11 @@
 # AURA voice packs
 
-The voice layer has one selection seam and explicit capability-based fallback:
+The voice layer has one selection seam and explicit capability boundaries:
 
 - Russian Silero Kseniya `v1_kseniya_16000.jit`, installed explicitly and
   checksum-verified.
-- Android system TTS for Azerbaijani `az-AZ` and English. A Russian model is
-  never presented as Azerbaijani.
+- Native Gemini audio for online Russian, Azerbaijani and English. Android
+  system TTS is deliberately not used.
 
 The app must show these as optional local resources, with size, language,
 version, license and verification status. It must not silently download a pack
@@ -29,6 +29,6 @@ experimental candidates.
 They are deliberately not presented as verified installable packs yet. Before
 shipping one, AURA must pin the exact official artifact, size, checksum, and
 runtime format, then run physical-device A/B checks for naturalness,
-pronunciation, latency, and clipping. Azerbaijani remains on the real Android
-`az-AZ` fallback until `aze_gamat` passes those checks; no Russian model is
-used as pseudo-Azerbaijani.
+pronunciation, latency, and clipping. Until an Azerbaijani local pack passes
+those checks, offline Azerbaijani speech is disabled; no Russian model is used
+as pseudo-Azerbaijani and no Android TTS fallback is used.

@@ -27,11 +27,13 @@ object GeminiToolRegistry {
         }
         return JSONArray().apply {
             put(declaration("search_music", "Search AURA's music catalog. Do not claim a result before the tool response.", query, listOf("query")))
+            put(declaration("play_mood_mix", "Build and play a mood-specific queue. Prefer this over a generic search when the user asks for music by mood.", JSONObject().put("mood", string("One of calm, drive, focus, energy, night, sad, happy")), listOf("mood")))
             put(declaration("play_track", "Play one selected track from the last search results.", JSONObject().put("index", integer("Zero-based result index")), listOf("index")))
             put(declaration("play_artist", "Find and play music by an artist.", JSONObject().put("artist", string("Artist name")), listOf("artist")))
             put(declaration("play_playlist", "Play a saved AURA playlist.", JSONObject().put("name", string("Playlist name")), listOf("name")))
             put(declaration("next_track", "Skip to the next track."))
             put(declaration("previous_track", "Return to the previous track."))
+            put(declaration("seek_relative", "Seek forward or backward by seconds.", JSONObject().put("seconds", integer("Positive or negative seconds")), listOf("seconds")))
             put(declaration("pause_music", "Pause playback."))
             put(declaration("resume_music", "Resume playback."))
             put(declaration("volume_up", "Raise music volume."))
@@ -50,6 +52,8 @@ object GeminiToolRegistry {
             put(declaration("set_repeat", "Set repeat mode.", JSONObject().put("mode", string("One of off, one, all")), listOf("mode")))
             put(declaration("open_queue", "Open the queue screen."))
             put(declaration("open_playlists", "Open saved playlists."))
+            put(declaration("open_history", "Open listening history."))
+            put(declaration("set_auto_continue", "Enable or disable automatic queue continuation.", JSONObject().put("enabled", boolean("Whether auto continue is enabled")), listOf("enabled")))
         }
     }
 }

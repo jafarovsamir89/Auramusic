@@ -84,7 +84,7 @@ class PersonalRecommendationEngine(
             Mood.FOCUS -> "музыка для концентрации focus mix"
             Mood.ENERGY -> "энергичная музыка workout mix"
             Mood.NIGHT -> "ночная музыка night drive mix"
-            Mood.SAD -> "грустная музыка sad mix"
+            Mood.SAD -> "грустные песни melancholic acoustic piano sad playlist"
             Mood.HAPPY -> "весёлая музыка happy mix"
         }
         return resolvePersonalized(search(query, limit * 2), context, limit)

@@ -54,7 +54,8 @@ class AuraWakeWordService : Service() {
             context = this,
             onCommand = ::handleUtterance,
             onState = { listening -> state = if (listening) WakeWordServiceState.LISTENING_FOR_COMMAND else WakeWordServiceState.WAITING_FOR_WAKE_WORD },
-            onTerminal = ::handleTerminal
+            onTerminal = ::handleTerminal,
+            preferOnDevice = true
         )
     }
 
@@ -188,7 +189,7 @@ class AuraWakeWordService : Service() {
         private const val NOTIFICATION_ID = 207
         private const val RETRY_DELAY_MS = 400L
         private const val FOLLOW_UP_DELAY_MS = 250L
-        private const val FOLLOW_UP_WINDOW_MS = 6_000L
+        private const val FOLLOW_UP_WINDOW_MS = 4_000L
         private const val COMMAND_COOLDOWN_MS = 8_000L
         private const val MAX_RETRY_STREAK = 6
         private const val LONG_RECOVERY_DELAY_MS = 60_000L

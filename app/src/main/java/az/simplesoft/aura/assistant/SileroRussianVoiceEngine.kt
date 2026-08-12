@@ -61,7 +61,7 @@ internal class SileroRussianVoiceEngine(
                 Log.i(TAG, "Russian female voice generated ${audio.size} samples")
                 if (utterance.get() == requestId) play(audio, requestId)
             }.onFailure { error ->
-                Log.w(TAG, "Russian Silero voice failed; using Android TTS", error)
+                Log.w(TAG, "Russian Silero voice failed; speech skipped", error)
                 if (utterance.get() == requestId) mainHandler.post {
                     if (utterance.get() == requestId) onFailure()
                 }

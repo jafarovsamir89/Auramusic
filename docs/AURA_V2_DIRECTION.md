@@ -21,7 +21,7 @@ real not-found result rather than a false confirmation.
   when `EXTRA_PREFER_OFFLINE` is set. A fully guaranteed offline wake-word
   detector still requires a separate local detector integration.
 - The first Whisper and Silero downloads are explicit model/voice-pack setup
-  work, not hidden first-query work. Until a pack is verified, Android TTS is
-  the fallback.
+  work, not hidden first-query work. Until a pack is verified, AURA stays
+  silent rather than using robotic Android TTS.
 - Actual latency, RAM and model sizes must be measured on the target Helio G96
   device; repository constants are not a benchmark.

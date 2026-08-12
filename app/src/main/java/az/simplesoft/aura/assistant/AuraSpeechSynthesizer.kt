@@ -1,6 +1,7 @@
 package az.simplesoft.aura.assistant
 
 import android.content.Context
+import android.util.Log
 /**
  * Unified local voice seam. Russian can use the installed female Silero pack;
  * Azerbaijani deliberately uses the best real system az-AZ voice until a
@@ -8,7 +9,6 @@ import android.content.Context
  */
 class AuraSpeechSynthesizer(context: Context) : VoiceEngine, AuraVoiceEngine {
     val voicePacks = VoicePackManager(context)
-    private val system = AndroidSystemVoiceEngine(context)
     private val russianSilero = SileroRussianVoiceEngine(context)
     private val textProcessor = SpeechTextProcessor()
     private val profile = AuraVoiceProfile()
@@ -16,7 +16,7 @@ class AuraSpeechSynthesizer(context: Context) : VoiceEngine, AuraVoiceEngine {
 
     override val id: String = "aura-local-voice"
     override val supportedLanguages: Set<AssistantLanguage> = AssistantLanguage.entries.toSet()
-    override val isReady: Boolean get() = system.isReady
+    override val isReady: Boolean get() = true
 
     override fun prepare() = Unit
 
@@ -31,25 +31,23 @@ class AuraSpeechSynthesizer(context: Context) : VoiceEngine, AuraVoiceEngine {
         if (processed.isBlank()) return
         stop()
         when (language) {
-            AssistantLanguage.RUSSIAN -> if (engineMode == VoiceEngineMode.SYSTEM) {
-                system.speak(processed, language, profileFor(style))
+            AssistantLanguage.RUSSIAN -> if (engineMode == VoiceEngineMode.VERIFIED_SILERO) {
+                russianSilero.speak(processed) { Log.w("AuraVoice", "Russian Silero pack is unavailable; speech skipped") }
             } else {
-                russianSilero.speak(processed) { system.speak(processed, language, profileFor(style)) }
+                Log.w("AuraVoice", "Android TTS is disabled; speech skipped")
             }
-            // The available Silero pack is Russian; never use it as fake Azerbaijani.
-            AssistantLanguage.AZERBAIJANI -> system.speak(processed, language, profileFor(style))
-            AssistantLanguage.ENGLISH -> system.speak(processed, language, profileFor(style))
+            // No Android TTS fallback: native Gemini handles online RU/AZ/EN audio.
+            AssistantLanguage.AZERBAIJANI,
+            AssistantLanguage.ENGLISH -> Log.w("AuraVoice", "Offline voice is unavailable for $language; speech skipped")
         }
     }
 
     override fun stop() {
         russianSilero.stop()
-        system.stop()
     }
 
     override fun shutdown() {
         russianSilero.shutdown()
-        system.shutdown()
     }
 
     private fun profileFor(style: VoiceStyle): AuraVoiceProfile = when (style) {

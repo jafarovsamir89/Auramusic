@@ -15,7 +15,7 @@ voice or text
 offline voice/text
   -> existing deterministic local intent and dialogue library
   -> Music Brain / PlaybackService / Android API
-  -> local Silero TTS or Android system TTS
+  -> local Silero TTS (Russian only; no Android TTS fallback)
 ```
 
 Commands, dialogue branches, memory, and reply variants work without a network. Russian, Azerbaijani, and English are supported by the local dialogue layer. Durable user facts and recent messages are stored in bounded Room records; complete transcripts are not retained.
@@ -28,13 +28,13 @@ For a local debug build, add `GEMINI_API_KEY=...` to the ignored `local.properti
 
 ## Voice Resources
 
-Downloads are explicit and visible in the debug Diagnostics storage screen. No speech request starts a download.
+Downloads are explicit and visible in the debug Diagnostics storage screen. No speech request starts a download. Android system TTS is deliberately not used: if the verified Russian Silero pack is absent, AURA stays silent instead of producing a robotic fallback. Online Smart Voice speaks through Gemini native audio.
 
 | Resource | Exact size | Languages | Install behavior |
 | --- | ---: | --- | --- |
 | Whisper `ggml-base-q5_1.bin` | 59,707,625 bytes | RU/AZ/EN | Manual install, SHA-256 verified |
 | Silero Kseniya `v1_kseniya_16000.jit` | 142,264,026 bytes | RU | Manual install, SHA-256 verified |
-| Android system `az-AZ` voice | Device-provided | AZ | Runtime fallback; no pseudo-AZ Silero model |
+| Android system voices | — | — | Not used by AURA |
 
 Each download uses a `.part` file, validates HTTP size and SHA-256, atomically moves the model first, then creates an atomic `.sha256` sidecar. Cancelled or failed downloads remove only the partial resource. On restart, stale `IN_PROGRESS` assistant commands are requeued up to three attempts for UI work or failed for background work.
 

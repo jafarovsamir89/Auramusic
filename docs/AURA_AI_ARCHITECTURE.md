@@ -25,8 +25,9 @@ through Whisper or Android/Silero TTS.
    `GeminiAudioOutput` for 16 kHz input and 24 kHz native output. The session
    handles all server content parts, transcriptions, synchronous tool calls,
    interruptions, resumption, compression and diagnostics.
-7. `AuraSpeechSynthesizer` selects a local Silero pack when verified and falls
-  back to Android TTS when it is unavailable.
+7. `AuraSpeechSynthesizer` uses the verified local Silero pack for Russian only;
+  Android TTS is intentionally disabled. Online Smart Voice uses Gemini native
+  audio for RU/AZ/EN.
 
 ## Online Smart Voice boundary
 

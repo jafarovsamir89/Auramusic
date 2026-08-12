@@ -36,6 +36,7 @@ import az.simplesoft.aura.assistant.gemini.LocalDebugApiKeyProvider
 import az.simplesoft.aura.assistant.gemini.GeminiSessionState
 import az.simplesoft.aura.assistant.gemini.GeminiToolExecutor
 import az.simplesoft.aura.assistant.gemini.GeminiToolResult
+import az.simplesoft.aura.assistant.gemini.GeminiUsageStore
 import az.simplesoft.aura.assistant.LocalIntentEngine
 import az.simplesoft.aura.assistant.MusicIntent
 import az.simplesoft.aura.assistant.Mood
@@ -124,13 +125,16 @@ data class AuraUiState(
     val playlists: List<AuraPlaylist> = emptyList(),
     val queueHistory: List<AuraQueueSnapshot> = emptyList(),
     val selectedPlaylistId: String? = null,
-    val assistantText: String = "Привет! Я AURA. Что будем слушать?",
+    val assistantText: String = "Привет. Я AURA.",
     val assistantMessages: List<AssistantMessage> = emptyList(),
     val isAssistantThinking: Boolean = false,
     val assistantSource: AssistantSource = AssistantSource.LOCAL,
     val isOfflineOnly: Boolean = true,
     val geminiConfigured: Boolean = false,
     val geminiDiagnostics: GeminiDiagnostics = GeminiDiagnostics(),
+    val onboardingComplete: Boolean = false,
+    val userName: String? = null,
+    val preferredLanguage: String = "ru",
     val assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics? = null,
     val voiceEngineMode: VoiceEngineMode = VoiceEngineMode.VERIFIED_SILERO,
     val isListening: Boolean = false,
@@ -185,6 +189,10 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val audio = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val geminiAudioOutput = GeminiAudioOutput(application)
     private val geminiAudioInput = GeminiAudioInput(application)
+    private val geminiUsageStore = GeminiUsageStore(application)
+    @Volatile private var geminiUserContext: String = ""
+    private var lastGeminiUserText = ""
+    private var geminiMemoryJob: Job? = null
     private var geminiIdleJob: Job? = null
     private val geminiSession: GeminiLiveSession by lazy {
         GeminiLiveSession(
@@ -192,6 +200,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         toolExecutor = GeminiToolExecutor { name, args -> executeGeminiTool(name, args) },
         audioOutput = geminiAudioOutput,
         scope = viewModelScope,
+        userContextProvider = { geminiUserContext },
+        usageStore = geminiUsageStore,
         onInputTranscription = ::onGeminiInputTranscription,
         onOutputTranscription = ::onGeminiOutputTranscription,
         onError = { message ->
@@ -239,15 +249,23 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val initialHistory = preferences.getString("history", "")
         .orEmpty().split('|').filter(String::isNotBlank)
     private val initialWakeWordEnabled = preferences.getBoolean("wake_word_enabled", false)
+    private val initialOnboardingComplete = preferences.getBoolean("onboarding_complete", false)
+    private val initialUserName = preferences.getString("user_name", null)?.takeIf(String::isNotBlank)
+    private val initialPreferredLanguage = preferences.getString("preferred_language", "ru").orEmpty().ifBlank { "ru" }
     private val initialVoiceEngineMode = runCatching {
         VoiceEngineMode.valueOf(preferences.getString("voice_engine_mode", VoiceEngineMode.VERIFIED_SILERO.name).orEmpty())
-    }.getOrDefault(VoiceEngineMode.VERIFIED_SILERO)
+    }.getOrDefault(VoiceEngineMode.VERIFIED_SILERO).let {
+        if (it == VoiceEngineMode.SYSTEM) VoiceEngineMode.VERIFIED_SILERO else it
+    }
 
     private val _state = MutableStateFlow(
         AuraUiState(
             likedIds = initialLiked,
             historyIds = initialHistory,
             wakeWordEnabled = initialWakeWordEnabled,
+            onboardingComplete = initialOnboardingComplete,
+            userName = initialUserName,
+            preferredLanguage = initialPreferredLanguage,
             isOfflineOnly = BuildConfig.GEMINI_API_KEY.isBlank(),
             geminiConfigured = BuildConfig.GEMINI_API_KEY.isNotBlank(),
             geminiDiagnostics = geminiSession.diagnostics.value,
@@ -258,6 +276,10 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     init {
         speech.setEngineMode(initialVoiceEngineMode)
+        viewModelScope.launch {
+            val memory = assistantMemory.snapshot()
+            geminiUserContext = memory.promptSummary()
+        }
         viewModelScope.launch {
             geminiSession.diagnostics.collect { diagnostics ->
                 _state.update { it.copy(geminiDiagnostics = diagnostics) }
@@ -547,6 +569,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         val input = text.trim()
         if (input.isBlank() || !state.value.geminiConfigured) return
         val timestamp = System.currentTimeMillis()
+        lastGeminiUserText = input.take(320)
         _state.update { current ->
             current.copy(
                 assistantText = current.assistantText,
@@ -573,6 +596,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     private fun onGeminiInputTranscription(text: String) {
+        lastGeminiUserText = text.take(320)
         val timestamp = System.currentTimeMillis()
         _state.update { current ->
             val previous = current.assistantMessages.lastOrNull { it.role == AssistantRole.USER && it.id.startsWith("gemini:user:") }
@@ -597,6 +621,23 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     private fun onGeminiOutputTranscription(text: String) {
+        geminiMemoryJob?.cancel()
+        geminiMemoryJob = viewModelScope.launch {
+            delay(900L)
+            val userText = lastGeminiUserText.trim()
+            if (userText.isNotBlank()) {
+                assistantMemory.record(
+                    userText,
+                    AssistantReply(
+                        intent = MusicIntent.Unknown,
+                        text = text.take(500),
+                        language = az.simplesoft.aura.assistant.AssistantLanguage.detect(text),
+                        source = AssistantSource.REMOTE
+                    )
+                )
+                geminiUserContext = assistantMemory.snapshot().promptSummary()
+            }
+        }
         val timestamp = System.currentTimeMillis()
         _state.update { current ->
             val previous = current.assistantMessages.lastOrNull { it.role == AssistantRole.AURA && it.id.startsWith("gemini:aura:") }
@@ -625,9 +666,14 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         fun unsupported() = GeminiToolResult("unsupported", "Эта функция пока недоступна в AURA.")
         return when (name) {
             "search_music" -> {
+                val requestedMood = moodFromGemini(args.optString("mood"))
                 val query = args.optString("query").trim().ifBlank { args.optString("mood") }
                 if (query.isBlank()) return GeminiToolResult("error", "Не указан запрос")
                 if (!stateRestored) return GeminiToolResult("error", "Музыка ещё восстанавливается")
+                if (requestedMood != null && args.optString("query").isBlank()) {
+                    playMoodMix(requestedMood)
+                    return ok("Запускаю подборку под настроение", JSONObject().put("mood", requestedMood.name.lowercase()))
+                }
                 searchTracks(MusicSearchRequest(rawQuery = query)).join()
                 val results = state.value.searchResults
                 if (results.isEmpty()) GeminiToolResult("not_found", "Ничего не нашла")
@@ -654,6 +700,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             "next_track" -> { next(); ok("Следующий трек запущен") }
             "previous_track" -> { previous(); ok("Предыдущий трек запущен") }
+            "seek_relative" -> {
+                val seconds = args.optInt("seconds", 0).coerceIn(-600, 600)
+                seekTo(state.value.positionMs + seconds * 1_000L)
+                ok("Позиция изменена", JSONObject().put("seconds", seconds))
+            }
             "pause_music" -> { playback.pause(); ok("Воспроизведение поставлено на паузу") }
             "resume_music" -> { playCurrent(); ok("Воспроизведение продолжено") }
             "volume_up" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 0); ok("Громкость увеличена") }
@@ -670,6 +721,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             "get_queue" -> ok("Очередь получена", JSONObject().put("tracks", state.value.queue.take(10).joinToString { "${it.title} — ${it.artist}" }))
             "get_recent_history" -> ok("История получена", JSONObject().put("tracks", state.value.history.takeLast(10).joinToString { "${it.title} — ${it.artist}" }))
             "find_similar_music" -> { playSimilarMix(); ok("Ищу похожую музыку") }
+            "play_mood_mix" -> {
+                val mood = moodFromGemini(args.optString("mood"))
+                    ?: return GeminiToolResult("error", "Не знаю такое настроение")
+                playMoodMix(mood)
+                ok("Запускаю подборку под настроение", JSONObject().put("mood", mood.name.lowercase()))
+            }
             "play_my_mix" -> { playMyMix(); ok("Запускаю твой микс") }
             "shuffle" -> { _state.update { it.copy(isShuffleEnabled = !it.isShuffleEnabled) }; playback.setShuffle(state.value.isShuffleEnabled); ok("Перемешивание изменено") }
             "set_repeat" -> {
@@ -682,8 +739,25 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             "open_queue" -> { _state.update { it.copy(isQueueOpen = true, isPlayerExpanded = false) }; ok("Очередь открыта") }
             "open_playlists" -> { _state.update { it.copy(destination = AuraDestination.LIBRARY, librarySection = LibrarySection.PLAYLISTS) }; ok("Плейлисты открыты") }
+            "open_history" -> { _state.update { it.copy(destination = AuraDestination.LIBRARY, librarySection = LibrarySection.HISTORY) }; ok("История открыта") }
+            "set_auto_continue" -> {
+                val enabled = args.optBoolean("enabled", true)
+                _state.update { it.copy(autoContinueEnabled = enabled) }
+                ok(if (enabled) "Автопродолжение включено" else "Автопродолжение выключено")
+            }
             else -> unsupported()
         }
+    }
+
+    private fun moodFromGemini(value: String): Mood? = when (value.trim().lowercase()) {
+        "calm", "спокойное", "спокойный", "relax" -> Mood.CALM
+        "drive", "дорога", "поездка" -> Mood.DRIVE
+        "focus", "фокус", "концентрация" -> Mood.FOCUS
+        "energy", "энергия", "энергичное" -> Mood.ENERGY
+        "night", "ночное", "ночь" -> Mood.NIGHT
+        "sad", "грустное", "грусть", "печаль" -> Mood.SAD
+        "happy", "весёлое", "радость" -> Mood.HAPPY
+        else -> null
     }
 
     fun startPushToTalk(start: () -> Unit) {
@@ -720,10 +794,45 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
+    fun completeOnboarding(name: String, language: String) {
+        val cleanName = name.trim().replace(Regex("\\s+"), " ").take(40).ifBlank { null }
+        val cleanLanguage = language.takeIf { it in setOf("ru", "az", "en") } ?: "ru"
+        preferences.edit {
+            putBoolean("onboarding_complete", true)
+            if (cleanName == null) remove("user_name") else putString("user_name", cleanName)
+            putString("preferred_language", cleanLanguage)
+        }
+        viewModelScope.launch {
+            val facts = buildList {
+                cleanName?.let { add(az.simplesoft.aura.assistant.MemoryInsight("identity", "name", it)) }
+                add(az.simplesoft.aura.assistant.MemoryInsight("language", "preferred", cleanLanguage))
+            }
+            assistantMemory.remember(facts)
+            geminiUserContext = assistantMemory.snapshot().promptSummary()
+        }
+        _state.update {
+            it.copy(
+                onboardingComplete = true,
+                userName = cleanName,
+                preferredLanguage = cleanLanguage,
+                assistantText = if (cleanName == null) "Рада познакомиться. Я AURA." else "Рада познакомиться, $cleanName."
+            )
+        }
+    }
+
+    fun resetOnboarding() {
+        preferences.edit { remove("onboarding_complete"); remove("user_name"); remove("preferred_language") }
+        _state.update { it.copy(onboardingComplete = false, userName = null, preferredLanguage = "ru") }
+    }
+
     fun setVoiceEngineMode(mode: VoiceEngineMode) {
         speech.setEngineMode(mode)
         preferences.edit { putString("voice_engine_mode", mode.name) }
         _state.update { it.copy(voiceEngineMode = mode) }
+    }
+
+    fun resetGeminiUsage() {
+        geminiSession.resetUsage()
     }
 
     fun resumeWakeWordServiceIfNeeded() {
@@ -820,6 +929,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     recentTurns = current.assistantMessages.takeLast(6).map { it.role.name to it.text }
                 )
             )
+            geminiUserContext = assistantMemory.snapshot().promptSummary()
             val execution = executeAssistantReply(answer)
             val responseText = when (execution) {
                 is ActionExecutionResult.Success -> answer.text

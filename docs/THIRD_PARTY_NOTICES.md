@@ -21,7 +21,7 @@ This file is an engineering inventory, not legal advice. Full license texts and 
 | Model | Purpose | Distribution | License | Source |
 |---|---|---|---|---|
 | Silero `v1_kseniya_16000` | Optional local Russian text-to-speech | Explicit HTTPS install; SHA-256 pinned in the app | MIT | https://github.com/snakers4/silero-models |
-| Android system `az-AZ` voice | Azerbaijani text-to-speech fallback selected at runtime | Installed on the device; no model redistributed by AURA | Device vendor terms | Android TTS API |
+| Android system voices | Not used by AURA | No model redistributed by AURA | — | — |
 
 The Silero models are not bundled into the base APK. AURA installs official artifacts only after an explicit user action, verifies the exact size and SHA-256, writes a sidecar checksum, and publishes the model through an atomic rename into private application storage.
 

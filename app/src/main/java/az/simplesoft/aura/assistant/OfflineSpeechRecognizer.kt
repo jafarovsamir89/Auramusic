@@ -97,12 +97,12 @@ class OfflineSpeechRecognizer(
     override fun destroy() = recognizer.destroy()
 
     private fun createRecognizer(context: Context): SpeechRecognizer {
-        return if (preferOnDevice && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
-        ) {
-            SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-        } else {
-            SpeechRecognizer.createSpeechRecognizer(context)
+        if (preferOnDevice) {
+            check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+            ) { "On-device speech recognizer is unavailable" }
+            return SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
         }
+        return SpeechRecognizer.createSpeechRecognizer(context)
     }
 }

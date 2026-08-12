@@ -228,6 +228,8 @@ fun AuraApp(
         }
     }
     var playlistTarget by remember { mutableStateOf<Track?>(null) }
+    var onboardingName by rememberSaveable { mutableStateOf(state.userName.orEmpty()) }
+    var onboardingLanguage by rememberSaveable { mutableStateOf(state.preferredLanguage) }
     DisposableEffect(Unit) { onDispose(voiceController::destroy) }
     LaunchedEffect(voiceState, voiceBackend) {
         if (!state.geminiConfigured) vm.setVoiceInputState(voiceState, voiceBackend)
@@ -296,6 +298,37 @@ fun AuraApp(
                     onCreate = { name ->
                         vm.createPlaylistWithTrack(name, track)
                         playlistTarget = null
+                    }
+                )
+            }
+            if (!state.onboardingComplete) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text("Давай познакомимся") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Я AURA — твой музыкальный помощник. Как я могу к тебе обращаться?")
+                            OutlinedTextField(
+                                value = onboardingName,
+                                onValueChange = { onboardingName = it.take(40) },
+                                singleLine = true,
+                                label = { Text("Имя (необязательно)") },
+                                placeholder = { Text("Например, Самир") }
+                            )
+                            Text("На каком языке отвечать?")
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                listOf("ru" to "Русский", "az" to "AZ", "en" to "EN").forEach { (code, label) ->
+                                    TextButton(onClick = { onboardingLanguage = code }) {
+                                        Text(if (onboardingLanguage == code) "✓ $label" else label)
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(onClick = { vm.completeOnboarding(onboardingName, onboardingLanguage) }) {
+                            Text("Продолжить")
+                        }
                     }
                 )
             }
@@ -444,6 +477,7 @@ private fun MainShell(
                     assistantDiagnostics = state.assistantDiagnostics,
                     geminiDiagnostics = state.geminiDiagnostics,
                     onGeminiVoice = vm::setGeminiVoice,
+                    onResetGeminiUsage = vm::resetGeminiUsage,
                     voiceEngineMode = state.voiceEngineMode,
                     onVoiceEngineMode = vm::setVoiceEngineMode,
                     onTestVoice = onVoice
@@ -514,7 +548,12 @@ private fun HomeScreen(
                 }
             }
             Spacer(Modifier.height(12.dp))
-            Text("${greeting()}, Эмиль!", fontSize = 22.sp, lineHeight = 27.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "${greeting()}${state.userName?.let { ", $it" } ?: ""}",
+                fontSize = 22.sp,
+                lineHeight = 27.sp,
+                fontWeight = FontWeight.SemiBold
+            )
             Spacer(Modifier.height(4.dp))
             Text(
                 "Готова подобрать музыку\nпод твоё настроение",
@@ -708,6 +747,7 @@ private fun DiagnosticsScreen(
     assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics?,
     geminiDiagnostics: GeminiDiagnostics,
     onGeminiVoice: (String) -> Unit,
+    onResetGeminiUsage: () -> Unit,
     voiceEngineMode: VoiceEngineMode,
     onVoiceEngineMode: (VoiceEngineMode) -> Unit,
     onTestVoice: () -> Unit
@@ -762,12 +802,12 @@ private fun DiagnosticsScreen(
         item {
             Text("Voice engine", color = SecondaryText, fontSize = 12.sp)
             Spacer(Modifier.height(4.dp))
-            VoiceEngineMode.entries.forEach { mode ->
+            VoiceEngineMode.entries.filter { it == VoiceEngineMode.VERIFIED_SILERO }.forEach { mode ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(selected = voiceEngineMode == mode, onClick = { onVoiceEngineMode(mode) })
                     Column {
-                        Text(if (mode == VoiceEngineMode.SYSTEM) "System TTS" else "Verified Silero Kseniya v1", fontSize = 13.sp)
-                        Text(if (mode == VoiceEngineMode.SYSTEM) "Android device voice" else "Russian only; falls back to system if not installed", color = SecondaryText, fontSize = 11.sp)
+                        Text("Verified Silero Kseniya v1", fontSize = 13.sp)
+                        Text("Русский офлайн-голос; без Android TTS fallback", color = SecondaryText, fontSize = 11.sp)
                     }
                 }
             }
@@ -810,6 +850,13 @@ private fun DiagnosticsScreen(
             DiagnosticRow("Last tool", geminiDiagnostics.lastTool ?: "—")
             DiagnosticRow("Tool result", geminiDiagnostics.lastToolResult ?: "—")
             DiagnosticRow("Reconnects / interruptions", "${geminiDiagnostics.reconnectCount} / ${geminiDiagnostics.interruptionCount}")
+            DiagnosticRow("Последний ответ", "${geminiDiagnostics.lastUsage.totalTokens} токенов")
+            DiagnosticRow("Текущая сессия", "${geminiDiagnostics.sessionUsage.totalTokens} токенов")
+            DiagnosticRow("Всего на устройстве", "${geminiDiagnostics.lifetimeUsage.totalTokens} токенов")
+            DiagnosticRow("Аудио input / output", "${geminiDiagnostics.lifetimeUsage.inputAudioTokens} / ${geminiDiagnostics.lifetimeUsage.outputAudioTokens}")
+            DiagnosticRow("Текст input / output", "${geminiDiagnostics.lifetimeUsage.inputTextTokens} / ${geminiDiagnostics.lifetimeUsage.outputTextTokens}")
+            DiagnosticRow("Примерная стоимость", "${formatUsd(geminiDiagnostics.lifetimeUsage.estimatedCostUsd)}")
+            TextButton(onClick = onResetGeminiUsage) { Text("Сбросить счётчик") }
             geminiDiagnostics.lastError?.let { DiagnosticRow("Error", it) }
             Text(
                 if (geminiDiagnostics.connected) "Gemini Smart Voice отправляет аудио в облачный Live API." else "Для Smart Voice нужен интернет и GEMINI_API_KEY в debug local.properties.",
@@ -2673,6 +2720,8 @@ private fun formatDuration(milliseconds: Long): String {
     val totalSeconds = milliseconds / 1000
     return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
+
+private fun formatUsd(value: Double): String = "$" + "%.4f".format(Locale.US, value)
 
 private fun sourceLabel(track: Track): String = when (track.sourceId) {
     "local" -> "НА ТЕЛЕФОНЕ"
