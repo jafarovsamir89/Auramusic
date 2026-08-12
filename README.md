@@ -4,18 +4,27 @@ AURA is a native Android personal music assistant. Online catalog search and pla
 
 ## Local Assistant Boundary
 
-AURA's assistant is currently local and deterministic. There is no remote text service, server, account, token billing, or hidden model download. A cloud LLM is being evaluated separately and is not part of this build:
+AURA keeps the existing deterministic/local assistant as an offline fallback and adds an optional Gemini Live Smart Voice mode. When configured, `gemini-3.1-flash-live-preview` is the online conversational brain and returns native audio directly; no Whisper → text → cloud → TTS chain is used in that mode. A cloud connection requires explicit user configuration and internet access:
 
 ```text
 voice or text
-  -> deterministic local intent and dialogue library
+  -> Gemini Live persistent WebSocket (online Smart Voice)
+  -> native Gemini AUDIO + AURA function tools
   -> Music Brain / PlaybackService / Android API
-  -> concise reply + local Silero TTS or Android system TTS
+
+offline voice/text
+  -> existing deterministic local intent and dialogue library
+  -> Music Brain / PlaybackService / Android API
+  -> local Silero TTS or Android system TTS
 ```
 
 Commands, dialogue branches, memory, and reply variants work without a network. Russian, Azerbaijani, and English are supported by the local dialogue layer. Durable user facts and recent messages are stored in bounded Room records; complete transcripts are not retained.
 
 Music catalog search, YouTube playback, and Radio Browser station catalogs are network features. Local files, playlists, favorites, queue, history, and assistant memory remain usable without them. Android's system `SpeechRecognizer` only receives `EXTRA_PREFER_OFFLINE`; that flag is a preference and does not guarantee that the vendor recognizer stays off the network. Install the bundled Whisper resource for a fully local speech path.
+
+## Gemini Smart Voice (debug)
+
+For a local debug build, add `GEMINI_API_KEY=...` to the ignored `local.properties` file. The key is never committed. Without it, AURA keeps the offline voice fallback. Smart Voice uses a persistent WSS session, 16 kHz mono PCM input, 24 kHz mono PCM native output, automatic transcription, synchronous music function calling, session resumption and context-window compression. Production should replace the debug key provider with a backend-issued ephemeral token provider.
 
 ## Voice Resources
 

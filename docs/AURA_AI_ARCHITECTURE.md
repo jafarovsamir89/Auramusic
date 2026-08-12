@@ -1,12 +1,13 @@
 # AURA local assistant architecture
 
-AURA's current assistant path is local and deterministic. It does not require a
-remote model, an API key, a server, or token billing. A cloud LLM may be added
-later behind an explicit provider boundary; it is not included in this build.
+AURA has two explicit paths. Offline mode remains local and deterministic. When
+debug Smart Voice is configured, Gemini Live is the conversational brain and
+returns native audio over a persistent WebSocket. The online path never routes
+through Whisper or Android/Silero TTS.
 
 ## Runtime path
 
-1. `OfflineSpeechRecognizer` captures one bounded utterance. Android's
+1. Local fallback uses `OfflineSpeechRecognizer` for one bounded utterance. Android's
    `SpeechRecognizer` is an offline-preferred fallback, not a guaranteed
    always-on wake-word detector.
 2. `LocalCommandClassifier` performs normalization, word-boundary matching,
@@ -20,8 +21,20 @@ later behind an explicit provider boundary; it is not included in this build.
 5. `DialogueSeedImporter`, `LocalDialogueMatcher`, `DialogueStateMachine` and
    `ResponseVariantSelector` read the versioned assets under
    `app/src/main/assets/assistant` and persist state/statistics in Room.
-6. `AuraSpeechSynthesizer` selects a local Silero pack when verified and falls
+6. Gemini Smart Voice uses `GeminiAudioInput` → `GeminiLiveSession` →
+   `GeminiAudioOutput` for 16 kHz input and 24 kHz native output. The session
+   handles all server content parts, transcriptions, synchronous tool calls,
+   interruptions, resumption, compression and diagnostics.
+7. `AuraSpeechSynthesizer` selects a local Silero pack when verified and falls
   back to Android TTS when it is unavailable.
+
+## Online Smart Voice boundary
+
+`GeminiAuthProvider` separates debug API-key authentication from the planned
+ephemeral-token provider. Gemini sees only compact music context and narrow
+function declarations. AURA validates and executes every function through the
+existing ViewModel/MusicBrain/Playback code; the model never receives Android
+objects, Room DAOs, the player, filesystem or shell access.
 
 Room is durable storage. A Flow is only a notification channel and is never the
 only copy of a voice command.

@@ -26,6 +26,16 @@ import az.simplesoft.aura.assistant.VoiceEngineMode
 import az.simplesoft.aura.assistant.CompactAssistantMemory
 import az.simplesoft.aura.assistant.AssistantCommandCoordinator
 import az.simplesoft.aura.assistant.ActionExecutionResult
+import az.simplesoft.aura.assistant.gemini.GeminiAudioInput
+import az.simplesoft.aura.assistant.gemini.GeminiAudioOutput
+import az.simplesoft.aura.assistant.gemini.GeminiAuthProvider
+import az.simplesoft.aura.assistant.gemini.GeminiDiagnostics
+import az.simplesoft.aura.assistant.gemini.GeminiLiveSession
+import az.simplesoft.aura.assistant.gemini.GeminiLiveConfig
+import az.simplesoft.aura.assistant.gemini.LocalDebugApiKeyProvider
+import az.simplesoft.aura.assistant.gemini.GeminiSessionState
+import az.simplesoft.aura.assistant.gemini.GeminiToolExecutor
+import az.simplesoft.aura.assistant.gemini.GeminiToolResult
 import az.simplesoft.aura.assistant.LocalIntentEngine
 import az.simplesoft.aura.assistant.MusicIntent
 import az.simplesoft.aura.assistant.Mood
@@ -75,8 +85,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.first
 import java.util.Calendar
 import kotlin.math.abs
+import org.json.JSONObject
 
 enum class AuraDestination { HOME, SEARCH, RADIO, LIBRARY, ASSISTANT, DIAGNOSTICS }
 enum class LibrarySection { FAVORITES, HISTORY, LOCAL, PLAYLISTS }
@@ -117,6 +129,8 @@ data class AuraUiState(
     val isAssistantThinking: Boolean = false,
     val assistantSource: AssistantSource = AssistantSource.LOCAL,
     val isOfflineOnly: Boolean = true,
+    val geminiConfigured: Boolean = false,
+    val geminiDiagnostics: GeminiDiagnostics = GeminiDiagnostics(),
     val assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics? = null,
     val voiceEngineMode: VoiceEngineMode = VoiceEngineMode.VERIFIED_SILERO,
     val isListening: Boolean = false,
@@ -169,6 +183,22 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     )
     private val speech = AuraSpeechSynthesizer(application)
     private val audio = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val geminiAudioOutput = GeminiAudioOutput(application)
+    private val geminiAudioInput = GeminiAudioInput(application)
+    private var geminiIdleJob: Job? = null
+    private val geminiSession: GeminiLiveSession by lazy {
+        GeminiLiveSession(
+        authProvider = LocalDebugApiKeyProvider(),
+        toolExecutor = GeminiToolExecutor { name, args -> executeGeminiTool(name, args) },
+        audioOutput = geminiAudioOutput,
+        scope = viewModelScope,
+        onInputTranscription = ::onGeminiInputTranscription,
+        onOutputTranscription = ::onGeminiOutputTranscription,
+        onError = { message ->
+            _state.update { it.copy(assistantText = message, isAssistantThinking = false) }
+        }
+        )
+    }
     private val playback = PlaybackConnection(application, this)
     private val providerManager = ProviderManager(
         setOf(
@@ -218,6 +248,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             likedIds = initialLiked,
             historyIds = initialHistory,
             wakeWordEnabled = initialWakeWordEnabled,
+            isOfflineOnly = BuildConfig.GEMINI_API_KEY.isBlank(),
+            geminiConfigured = BuildConfig.GEMINI_API_KEY.isNotBlank(),
+            geminiDiagnostics = geminiSession.diagnostics.value,
             voiceEngineMode = initialVoiceEngineMode
         )
     )
@@ -225,6 +258,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     init {
         speech.setEngineMode(initialVoiceEngineMode)
+        viewModelScope.launch {
+            geminiSession.diagnostics.collect { diagnostics ->
+                _state.update { it.copy(geminiDiagnostics = diagnostics) }
+            }
+        }
         viewModelScope.launch {
             runCatching {
                 stateRepository.importLegacy(
@@ -430,6 +468,222 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     fun setVoiceDiagnostics(value: VoiceCaptureDiagnostics) = _state.update {
         it.copy(voiceDiagnostics = value)
+    }
+
+    fun startGeminiVoice() {
+        if (!state.value.geminiConfigured) {
+            _state.update { it.copy(assistantText = "Gemini Smart Voice не настроен. Добавь GEMINI_API_KEY в local.properties.") }
+            return
+        }
+        if (geminiSession.state.value == GeminiSessionState.USER_SPEAKING ||
+            geminiSession.state.value == GeminiSessionState.MODEL_SPEAKING ||
+            geminiSession.state.value == GeminiSessionState.MODEL_THINKING
+        ) {
+            stopGeminiVoice()
+            return
+        }
+        _state.update {
+            it.copy(
+                assistantText = "Smart Voice подключается…",
+                isListening = false,
+                isAssistantThinking = true,
+                voiceInputState = VoiceInputState.CheckingAvailability,
+                recognitionBackend = RecognitionBackend.Unavailable
+            )
+        }
+        if (geminiSession.state.value == GeminiSessionState.DISCONNECTED || geminiSession.state.value == GeminiSessionState.ERROR) {
+            geminiSession.connect()
+        }
+        viewModelScope.launch {
+            runCatching {
+                geminiSession.state.first { it == GeminiSessionState.READY || it == GeminiSessionState.ERROR }
+                check(geminiSession.state.value == GeminiSessionState.READY) { "Gemini Live session failed" }
+                geminiAudioOutput.start()
+                geminiAudioInput.start(
+                    scope = viewModelScope,
+                    onChunk = geminiSession::sendAudio,
+                    onSpeechEnd = geminiSession::markSpeechEnded,
+                    onSpeechStart = {
+                        geminiIdleJob?.cancel()
+                        if (geminiSession.state.value == GeminiSessionState.MODEL_SPEAKING) geminiSession.interrupt()
+                    },
+                    onState = { listening ->
+                        _state.update {
+                            it.copy(
+                                isListening = listening,
+                                isAssistantThinking = !listening,
+                                voiceInputState = if (listening) VoiceInputState.Listening else VoiceInputState.Processing
+                            )
+                        }
+                        if (!listening) {
+                            geminiSession.markSpeechEnded()
+                            geminiIdleJob?.cancel()
+                            geminiIdleJob = viewModelScope.launch {
+                                delay(GeminiLiveConfig.IDLE_TIMEOUT_MS)
+                                geminiAudioInput.stop()
+                                geminiSession.close()
+                            }
+                        }
+                    }
+                )
+            }.onFailure { error ->
+                _state.update { it.copy(isListening = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Failed(error.message ?: "Gemini Voice недоступен", error)) }
+            }
+        }
+    }
+
+    fun stopGeminiVoice() {
+        geminiIdleJob?.cancel()
+        geminiAudioInput.stop()
+        geminiSession.markSpeechEnded()
+        _state.update { it.copy(isListening = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Idle) }
+    }
+
+    fun setGeminiVoice(voice: String) {
+        geminiSession.setVoice(voice)
+    }
+
+    fun sendGeminiText(text: String) {
+        val input = text.trim()
+        if (input.isBlank() || !state.value.geminiConfigured) return
+        val timestamp = System.currentTimeMillis()
+        _state.update { current ->
+            current.copy(
+                assistantText = current.assistantText,
+                isAssistantThinking = true,
+                assistantMessages = (current.assistantMessages + AssistantMessage(
+                    id = "gemini:text:$timestamp",
+                    role = AssistantRole.USER,
+                    text = input.take(320),
+                    language = az.simplesoft.aura.assistant.AssistantLanguage.detect(input),
+                    createdAt = timestamp
+                )).takeLast(20)
+            )
+        }
+        if (geminiSession.state.value == GeminiSessionState.DISCONNECTED || geminiSession.state.value == GeminiSessionState.ERROR) {
+            geminiSession.connect()
+            viewModelScope.launch {
+                geminiSession.state.first { it == GeminiSessionState.READY || it == GeminiSessionState.ERROR }
+                check(geminiSession.state.value == GeminiSessionState.READY) { "Gemini Live session failed" }
+                geminiSession.sendText(input)
+            }
+        } else {
+            geminiSession.sendText(input)
+        }
+    }
+
+    private fun onGeminiInputTranscription(text: String) {
+        val timestamp = System.currentTimeMillis()
+        _state.update { current ->
+            val previous = current.assistantMessages.lastOrNull { it.role == AssistantRole.USER && it.id.startsWith("gemini:user:") }
+            val messages = if (previous != null && previous.createdAt > timestamp - 5_000L) {
+                current.assistantMessages.map { if (it.id == previous.id) it.copy(text = text.take(320)) else it }
+            } else {
+                current.assistantMessages + AssistantMessage(
+                    id = "gemini:user:$timestamp",
+                    role = AssistantRole.USER,
+                    text = text.take(320),
+                    language = az.simplesoft.aura.assistant.AssistantLanguage.detect(text),
+                    createdAt = timestamp
+                )
+            }
+            current.copy(
+                query = "",
+                assistantText = text,
+                voiceInputState = VoiceInputState.TranscriptReady(text),
+                assistantMessages = messages.takeLast(20)
+            )
+        }
+    }
+
+    private fun onGeminiOutputTranscription(text: String) {
+        val timestamp = System.currentTimeMillis()
+        _state.update { current ->
+            val previous = current.assistantMessages.lastOrNull { it.role == AssistantRole.AURA && it.id.startsWith("gemini:aura:") }
+            val messages = if (previous != null && previous.createdAt > timestamp - 10_000L) {
+                current.assistantMessages.map { if (it.id == previous.id) it.copy(text = text.take(500)) else it }
+            } else {
+                current.assistantMessages + AssistantMessage(
+                    id = "gemini:aura:$timestamp",
+                    role = AssistantRole.AURA,
+                    text = text.take(500),
+                    language = az.simplesoft.aura.assistant.AssistantLanguage.detect(text),
+                    createdAt = timestamp
+                )
+            }
+            current.copy(
+                assistantText = text,
+                isAssistantThinking = false,
+                assistantSource = AssistantSource.REMOTE,
+                assistantMessages = messages.takeLast(20)
+            )
+        }
+    }
+
+    private suspend fun executeGeminiTool(name: String, args: JSONObject): GeminiToolResult {
+        fun ok(message: String, data: JSONObject = JSONObject()) = GeminiToolResult("success", message, data)
+        fun unsupported() = GeminiToolResult("unsupported", "Эта функция пока недоступна в AURA.")
+        return when (name) {
+            "search_music" -> {
+                val query = args.optString("query").trim().ifBlank { args.optString("mood") }
+                if (query.isBlank()) return GeminiToolResult("error", "Не указан запрос")
+                if (!stateRestored) return GeminiToolResult("error", "Музыка ещё восстанавливается")
+                searchTracks(MusicSearchRequest(rawQuery = query)).join()
+                val results = state.value.searchResults
+                if (results.isEmpty()) GeminiToolResult("not_found", "Ничего не нашла")
+                else ok("Найдено ${results.size} результатов", JSONObject().put("count", results.size).put("tracks", results.take(5).joinToString { "${it.title} — ${it.artist}" }))
+            }
+            "play_artist" -> {
+                val artist = args.optString("artist").trim()
+                if (artist.isBlank()) return GeminiToolResult("error", "Не указан исполнитель")
+                if (!stateRestored) return GeminiToolResult("error", "Музыка ещё восстанавливается")
+                searchTracks(MusicSearchRequest(rawQuery = artist, artist = artist, autoPlay = true)).join()
+                val track = state.value.nowTrack.takeIf { it.id != DemoCatalog.tracks.first().id }
+                if (track == null) GeminiToolResult("not_found", "Не нашла музыку исполнителя $artist")
+                else ok("Музыка исполнителя запущена", JSONObject().put("title", track.title).put("artist", track.artist))
+            }
+            "play_track" -> {
+                val index = args.optInt("index", -1)
+                val track = state.value.searchResults.getOrNull(index)
+                if (track == null) GeminiToolResult("not_found", "Результат с таким номером не найден") else { play(track); ok("Трек выбран", JSONObject().put("title", track.title).put("artist", track.artist)) }
+            }
+            "play_playlist" -> {
+                val name = args.optString("name").trim()
+                val playlist = state.value.playlists.firstOrNull { it.name.equals(name, true) || it.name.contains(name, true) }
+                if (playlist == null) GeminiToolResult("not_found", "Плейлист не найден") else { playPlaylist(playlist); ok("Плейлист запущен", JSONObject().put("name", playlist.name)) }
+            }
+            "next_track" -> { next(); ok("Следующий трек запущен") }
+            "previous_track" -> { previous(); ok("Предыдущий трек запущен") }
+            "pause_music" -> { playback.pause(); ok("Воспроизведение поставлено на паузу") }
+            "resume_music" -> { playCurrent(); ok("Воспроизведение продолжено") }
+            "volume_up" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 0); ok("Громкость увеличена") }
+            "volume_down" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, 0); ok("Громкость уменьшена") }
+            "set_volume" -> {
+                val requested = args.optInt("percent", -1)
+                if (requested !in 0..100) GeminiToolResult("error", "Громкость должна быть от 0 до 100") else { audio.setStreamVolume(AudioManager.STREAM_MUSIC, (audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * requested / 100.0).toInt(), 0); ok("Громкость установлена") }
+            }
+            "like_current_track" -> { if (!state.value.liked) toggleLike(); ok("Трек добавлен в любимые") }
+            "unlike_current_track" -> { if (state.value.liked) toggleLike(); ok("Трек убран из любимых") }
+            "add_current_to_queue" -> { addToQueue(state.value.nowTrack); ok("Трек добавлен в очередь") }
+            "play_next" -> { val query = args.optString("query").trim(); if (query.isBlank()) GeminiToolResult("error", "Не указан трек") else { searchAndQueue(query, playNext = true).join(); ok("Трек добавлен следующим") } }
+            "get_now_playing" -> ok("Текущее состояние", JSONObject().put("title", state.value.nowTrack.title).put("artist", state.value.nowTrack.artist).put("isPlaying", state.value.isPlaying))
+            "get_queue" -> ok("Очередь получена", JSONObject().put("tracks", state.value.queue.take(10).joinToString { "${it.title} — ${it.artist}" }))
+            "get_recent_history" -> ok("История получена", JSONObject().put("tracks", state.value.history.takeLast(10).joinToString { "${it.title} — ${it.artist}" }))
+            "find_similar_music" -> { playSimilarMix(); ok("Ищу похожую музыку") }
+            "play_my_mix" -> { playMyMix(); ok("Запускаю твой микс") }
+            "shuffle" -> { _state.update { it.copy(isShuffleEnabled = !it.isShuffleEnabled) }; playback.setShuffle(state.value.isShuffleEnabled); ok("Перемешивание изменено") }
+            "set_repeat" -> {
+                val mode = when (args.optString("mode").lowercase()) {
+                    "one" -> AuraRepeatMode.ONE
+                    "all" -> AuraRepeatMode.ALL
+                    else -> AuraRepeatMode.OFF
+                }
+                _state.update { it.copy(repeatMode = mode) }; playback.setRepeat(mode); ok("Повтор изменён")
+            }
+            "open_queue" -> { _state.update { it.copy(isQueueOpen = true, isPlayerExpanded = false) }; ok("Очередь открыта") }
+            "open_playlists" -> { _state.update { it.copy(destination = AuraDestination.LIBRARY, librarySection = LibrarySection.PLAYLISTS) }; ok("Плейлисты открыты") }
+            else -> unsupported()
+        }
     }
 
     fun startPushToTalk(start: () -> Unit) {
@@ -1699,6 +1953,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     override fun onCleared() {
+        geminiAudioInput.stop()
+        geminiSession.close()
         speech.shutdown()
         playback.release()
         super.onCleared()

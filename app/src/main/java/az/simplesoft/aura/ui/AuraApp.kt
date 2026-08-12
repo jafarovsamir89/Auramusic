@@ -163,6 +163,8 @@ import az.simplesoft.aura.assistant.VoicePackStatus
 import az.simplesoft.aura.assistant.AssistantRole
 import az.simplesoft.aura.assistant.AuraWakeWordBus
 import az.simplesoft.aura.assistant.VoiceInputState
+import az.simplesoft.aura.assistant.gemini.GeminiDiagnostics
+import az.simplesoft.aura.assistant.gemini.GeminiLiveConfig
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.RadioCountry
@@ -219,6 +221,8 @@ fun AuraApp(
     val voiceInput = {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else if (state.geminiConfigured) {
+            vm.startGeminiVoice()
         } else {
             vm.startPushToTalk(voiceController::start)
         }
@@ -226,7 +230,7 @@ fun AuraApp(
     var playlistTarget by remember { mutableStateOf<Track?>(null) }
     DisposableEffect(Unit) { onDispose(voiceController::destroy) }
     LaunchedEffect(voiceState, voiceBackend) {
-        vm.setVoiceInputState(voiceState, voiceBackend)
+        if (!state.geminiConfigured) vm.setVoiceInputState(voiceState, voiceBackend)
         when (voiceState) {
             is VoiceInputState.TranscriptReady,
             is VoiceInputState.PermissionRequired,
@@ -238,7 +242,8 @@ fun AuraApp(
     }
     LaunchedEffect(initialCommand, speakInitialCommand) {
         initialCommand?.takeIf(String::isNotBlank)?.let {
-            if (speakInitialCommand) vm.submitVoice(it) else vm.submit(it)
+            if (state.geminiConfigured) vm.sendGeminiText(it)
+            else if (speakInitialCommand) vm.submitVoice(it) else vm.submit(it)
         }
     }
     LaunchedEffect(initialVoicePreview, initialVoicePreviewLanguage) {
@@ -248,7 +253,7 @@ fun AuraApp(
     }
     LaunchedEffect(Unit) {
         vm.resumeWakeWordServiceIfNeeded()
-        AuraWakeWordBus.commands.collect { command -> vm.submitVoice(command) }
+        AuraWakeWordBus.commands.collect { command -> if (state.geminiConfigured) vm.sendGeminiText(command) else vm.submitVoice(command) }
     }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -426,7 +431,7 @@ private fun MainShell(
                 AuraDestination.ASSISTANT -> AssistantScreen(
                     state = state,
                     onVoice = onVoice,
-                    onCommand = vm::submit,
+                    onCommand = if (state.geminiConfigured) vm::sendGeminiText else vm::submit,
                     onWakeWord = vm::setWakeWordEnabled,
                     onOpenSettings = onOpenSettings
                 )
@@ -437,6 +442,8 @@ private fun MainShell(
                     voiceBackend = state.recognitionBackend,
                     voiceDiagnostics = state.voiceDiagnostics,
                     assistantDiagnostics = state.assistantDiagnostics,
+                    geminiDiagnostics = state.geminiDiagnostics,
+                    onGeminiVoice = vm::setGeminiVoice,
                     voiceEngineMode = state.voiceEngineMode,
                     onVoiceEngineMode = vm::setVoiceEngineMode,
                     onTestVoice = onVoice
@@ -699,6 +706,8 @@ private fun DiagnosticsScreen(
     voiceBackend: az.simplesoft.aura.assistant.RecognitionBackend,
     voiceDiagnostics: az.simplesoft.aura.assistant.VoiceCaptureDiagnostics?,
     assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics?,
+    geminiDiagnostics: GeminiDiagnostics,
+    onGeminiVoice: (String) -> Unit,
     voiceEngineMode: VoiceEngineMode,
     onVoiceEngineMode: (VoiceEngineMode) -> Unit,
     onTestVoice: () -> Unit
@@ -777,6 +786,36 @@ private fun DiagnosticsScreen(
                 DiagnosticRow("Context", decision.contextReferences.joinToString().ifBlank { "—" })
                 DiagnosticRow("Assistant latency", "${decision.processingTimeMs} ms")
             }
+        }
+        item {
+            Text("Gemini Smart Voice", color = SecondaryText, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            DiagnosticRow("Model", geminiDiagnostics.model)
+            DiagnosticRow("State", geminiDiagnostics.state.name)
+            DiagnosticRow("Connected", if (geminiDiagnostics.connected) "yes" else "no")
+            DiagnosticRow("Voice", geminiDiagnostics.voice)
+            Text("Gemini Voice Lab", color = SecondaryText, fontSize = 11.sp)
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
+                GeminiLiveConfig.VOICES.forEach { voice ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = geminiDiagnostics.voice == voice, onClick = { onGeminiVoice(voice) })
+                        Text(voice, fontSize = 11.sp)
+                    }
+                }
+            }
+            DiagnosticRow("Thinking", geminiDiagnostics.thinkingLevel)
+            DiagnosticRow("Input", geminiDiagnostics.inputTranscription.ifBlank { "—" })
+            DiagnosticRow("Output", geminiDiagnostics.outputTranscription.ifBlank { "—" })
+            DiagnosticRow("Speech end → first audio", geminiDiagnostics.speechEndToFirstAudioMs?.let { "$it ms" } ?: "—")
+            DiagnosticRow("Last tool", geminiDiagnostics.lastTool ?: "—")
+            DiagnosticRow("Tool result", geminiDiagnostics.lastToolResult ?: "—")
+            DiagnosticRow("Reconnects / interruptions", "${geminiDiagnostics.reconnectCount} / ${geminiDiagnostics.interruptionCount}")
+            geminiDiagnostics.lastError?.let { DiagnosticRow("Error", it) }
+            Text(
+                if (geminiDiagnostics.connected) "Gemini Smart Voice отправляет аудио в облачный Live API." else "Для Smart Voice нужен интернет и GEMINI_API_KEY в debug local.properties.",
+                color = SecondaryText,
+                fontSize = 11.sp
+            )
         }
         item { DiagnosticRow("Страница", diagnostics.selectedPage) }
         item {
@@ -1467,11 +1506,14 @@ private fun AssistantScreen(
                         az.simplesoft.aura.assistant.RecognitionBackend.Whisper -> "Whisper · полностью локально"
                         az.simplesoft.aura.assistant.RecognitionBackend.AndroidOnDevice -> "Android on-device"
                         az.simplesoft.aura.assistant.RecognitionBackend.AndroidSystem -> "Системное распознавание · сеть возможна"
-                        az.simplesoft.aura.assistant.RecognitionBackend.Unavailable -> "Распознавание недоступно"
+                        az.simplesoft.aura.assistant.RecognitionBackend.Unavailable -> if (state.geminiConfigured) "Gemini Live · native voice" else "Распознавание недоступно"
                     },
                     color = AuraMint,
                     fontSize = 9.sp
                 )
+                if (state.geminiConfigured) {
+                    Text("Smart Voice · голос отправляется в облачный Gemini", color = SecondaryText, fontSize = 8.sp)
+                }
             }
             IconButton(onClick = onVoice, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Rounded.GraphicEq, "Голос", tint = ReferenceMagenta)

@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,6 +7,16 @@ plugins {
     id("com.google.devtools.ksp")
     id("androidx.room")
 }
+
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { localProperties.load(it) }
+}
+val geminiApiKey = (localProperties.getProperty("GEMINI_API_KEY") ?: project.findProperty("GEMINI_API_KEY") as String?)
+    ?.replace("\\", "\\\\")
+    ?.replace("\"", "\\\"")
+    ?: ""
 
 room {
     schemaDirectory("$projectDir/schemas")
@@ -25,6 +37,7 @@ android {
         targetSdk = 35
         versionCode = 6
         versionName = "0.6.0"
+        buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
         ndk.abiFilters += "arm64-v8a"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
