@@ -85,7 +85,7 @@ enum class AssistantRoute {
 
 enum class AssistantRole { USER, AURA }
 
-enum class AssistantSource { LOCAL, LOCAL_LLM, REMOTE, FALLBACK, TOOL }
+enum class AssistantSource { LOCAL, REMOTE, FALLBACK, TOOL }
 
 enum class AssistantEntityType {
     TRACK, ARTIST, PLAYLIST, MOOD, DECADE, GENRE, DURATION, ORDINAL, TIME, DATE,

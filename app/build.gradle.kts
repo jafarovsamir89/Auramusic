@@ -50,7 +50,6 @@ android {
 
     packaging {
         jniLibs {
-            // llama.cpp dynamically loads the CPU backend from nativeLibraryDir.
             useLegacyPackaging = true
         }
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"

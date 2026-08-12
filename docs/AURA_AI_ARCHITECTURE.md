@@ -1,10 +1,8 @@
 # AURA local assistant architecture
 
-AURA's default path is local and deterministic. It does not require a remote
-model, an API key, a server, or token billing. AURA 0.6 adds an explicit,
-opt-in local reasoning layer: the deterministic engine remains the fast path,
-and a downloaded Qwen3 GGUF Brain Pack is consulted only when that engine
-cannot resolve a natural-language request.
+AURA's current assistant path is local and deterministic. It does not require a
+remote model, an API key, a server, or token billing. A cloud LLM may be added
+later behind an explicit provider boundary; it is not included in this build.
 
 ## Runtime path
 
@@ -19,26 +17,11 @@ cannot resolve a natural-language request.
    until the Activity claims them.
 4. `LocalIntentEngine` handles the existing music intent surface. The
    data-backed companion handles non-music dialogue.
-5. `LocalLlmReasoningProvider` is an optional fallback behind the deterministic
-   path. It uses the official llama.cpp Android binding in-process (no
-   localhost server), the separately installed Qwen3 0.6B Q8_0 GGUF pack, a
-   compact six-turn context, `/no_think`, and a strict JSON decision parser.
-   The model can propose a supported intent or a short conversation reply; it
-   cannot call tools or execute actions.
-6. `DialogueSeedImporter`, `LocalDialogueMatcher`, `DialogueStateMachine` and
+5. `DialogueSeedImporter`, `LocalDialogueMatcher`, `DialogueStateMachine` and
    `ResponseVariantSelector` read the versioned assets under
    `app/src/main/assets/assistant` and persist state/statistics in Room.
-7. `AuraSpeechSynthesizer` selects a local Silero pack when verified and falls
+6. `AuraSpeechSynthesizer` selects a local Silero pack when verified and falls
   back to Android TTS when it is unavailable.
-
-## Brain Pack lifecycle
-
-The Diagnostics screen exposes the Brain Pack as a visible resource. Install,
-checksum verification, cancellation, deletion, and loading are explicit user
-actions. The 0.6B pack is the product default; a separately listed 1.7B Q8_0
-pack is benchmark-only and is never downloaded implicitly. If the pack is not
-installed, AURA continues to use the deterministic engine without changing
-voice input or playback behavior.
 
 Room is durable storage. A Flow is only a notification channel and is never the
 only copy of a voice command.

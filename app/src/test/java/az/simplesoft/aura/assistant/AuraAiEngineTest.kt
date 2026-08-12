@@ -29,33 +29,6 @@ class AuraAiEngineTest {
     }
 
     @Test
-    fun `legacy unknown intent reaches the local llm fallback`() = runBlocking {
-        val engine = AuraAiEngine(
-            local = LocalIntentEngine(),
-            memory = CompactAssistantMemory(TestMemoryPersistence()),
-            localLlm = object : ReasoningProvider {
-                override val id = "test-llm"
-                override val isAvailable = true
-                override suspend fun reason(request: AssistantRequest, context: AssistantContext) =
-                    AssistantDecision(
-                        intentId = "SEARCH_MUSIC",
-                        confidence = 0.8,
-                        entities = emptyList(),
-                        language = request.language,
-                        reply = "Ищу.",
-                        action = MusicIntent.Search("calm focus music"),
-                        diagnostics = DecisionDiagnostics(request.originalText, request.normalizedText, request.language)
-                    )
-            }
-        )
-
-        val result = engine.respond("zxqv qwer blablabla", AuraAiContext(hourOfDay = 12))
-
-        assertEquals(AssistantSource.LOCAL_LLM, result.source)
-        assertEquals(MusicIntent.Search("calm focus music"), result.intent)
-    }
-
-    @Test
     fun `companion remembers a name locally`() = runBlocking {
         val engine = engine()
 

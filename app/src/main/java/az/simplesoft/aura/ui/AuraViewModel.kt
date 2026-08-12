@@ -19,8 +19,6 @@ import az.simplesoft.aura.assistant.AuraWakeWordService
 import az.simplesoft.aura.assistant.VoiceStyle
 import az.simplesoft.aura.assistant.SpeechResponsePolicy
 import az.simplesoft.aura.assistant.ResponseVerbosity
-import az.simplesoft.aura.assistant.llm.LocalLlmReasoningProvider
-import az.simplesoft.aura.assistant.llm.LocalLlmDiagnostics
 import az.simplesoft.aura.assistant.RecognitionBackend
 import az.simplesoft.aura.assistant.VoiceCaptureDiagnostics
 import az.simplesoft.aura.assistant.VoiceInputState
@@ -80,7 +78,7 @@ import kotlinx.coroutines.channels.Channel
 import java.util.Calendar
 import kotlin.math.abs
 
-enum class AuraDestination { HOME, SEARCH, RADIO, LIBRARY, ASSISTANT, DIAGNOSTICS, CHAT_SCRIPT_LAB }
+enum class AuraDestination { HOME, SEARCH, RADIO, LIBRARY, ASSISTANT, DIAGNOSTICS }
 enum class LibrarySection { FAVORITES, HISTORY, LOCAL, PLAYLISTS }
 enum class SearchPhase { IDLE, SEARCHING, MATCHING, RESOLVING, BUFFERING, PLAYING, ERROR }
 
@@ -120,8 +118,6 @@ data class AuraUiState(
     val assistantSource: AssistantSource = AssistantSource.LOCAL,
     val isOfflineOnly: Boolean = true,
     val assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics? = null,
-    val localLlmDiagnostics: LocalLlmDiagnostics? = null,
-    val brainEnabled: Boolean = true,
     val voiceEngineMode: VoiceEngineMode = VoiceEngineMode.VERIFIED_SILERO,
     val isListening: Boolean = false,
     val voiceInputState: VoiceInputState = VoiceInputState.Idle,
@@ -164,22 +160,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val localProvider = LocalMusicProvider(application)
     private val radioProvider = RadioBrowserProvider()
     private val preferences = application.getSharedPreferences("aura_state", Context.MODE_PRIVATE)
-    private val localLlmThreadCount = preferences.getInt(
-        "brain_threads",
-        LocalLlmReasoningProvider.recommendedThreadCount()
-    )
     private val stateRepository = AuraStateRepository(application)
     private val assistantMemory = CompactAssistantMemory(RoomAssistantMemoryPersistence(stateRepository))
     private val assistantCommandCoordinator = AssistantCommandCoordinator(application)
-    private val localLlm = LocalLlmReasoningProvider(
-        application,
-        threadCount = localLlmThreadCount,
-        enabled = { preferences.getBoolean("brain_enabled", true) }
-    )
     private val auraAi = AuraAiEngine(
         local = intentEngine,
-        memory = assistantMemory,
-        localLlm = localLlm
+        memory = assistantMemory
     )
     private val speech = AuraSpeechSynthesizer(application)
     private val audio = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -223,7 +209,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val initialHistory = preferences.getString("history", "")
         .orEmpty().split('|').filter(String::isNotBlank)
     private val initialWakeWordEnabled = preferences.getBoolean("wake_word_enabled", false)
-    private val initialBrainEnabled = preferences.getBoolean("brain_enabled", true)
     private val initialVoiceEngineMode = runCatching {
         VoiceEngineMode.valueOf(preferences.getString("voice_engine_mode", VoiceEngineMode.VERIFIED_SILERO.name).orEmpty())
     }.getOrDefault(VoiceEngineMode.VERIFIED_SILERO)
@@ -233,7 +218,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             likedIds = initialLiked,
             historyIds = initialHistory,
             wakeWordEnabled = initialWakeWordEnabled,
-            brainEnabled = initialBrainEnabled,
             voiceEngineMode = initialVoiceEngineMode
         )
     )
@@ -241,15 +225,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     init {
         speech.setEngineMode(initialVoiceEngineMode)
-        viewModelScope.launch(Dispatchers.Default) {
-            delay(1_200L)
-            runCatching { localLlm.warmUp() }
-        }
-        viewModelScope.launch {
-            localLlm.diagnostics.collect { diagnostics ->
-                _state.update { it.copy(localLlmDiagnostics = diagnostics) }
-            }
-        }
         viewModelScope.launch {
             runCatching {
                 stateRepository.importLegacy(
@@ -489,11 +464,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 )
             }
         }
-    }
-
-    fun setBrainEnabled(enabled: Boolean) {
-        preferences.edit { putBoolean("brain_enabled", enabled) }
-        _state.update { it.copy(brainEnabled = enabled) }
     }
 
     fun setVoiceEngineMode(mode: VoiceEngineMode) {
@@ -1730,7 +1700,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     override fun onCleared() {
         speech.shutdown()
-        localLlm.close()
         playback.release()
         super.onCleared()
     }

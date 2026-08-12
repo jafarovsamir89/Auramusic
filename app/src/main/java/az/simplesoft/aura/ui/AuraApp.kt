@@ -1,6 +1,5 @@
 package az.simplesoft.aura.ui
 
-import az.simplesoft.aura.BuildConfig
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -105,7 +104,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -162,7 +160,6 @@ import az.simplesoft.aura.assistant.VoicePackManager
 import az.simplesoft.aura.assistant.VoiceLabCatalog
 import az.simplesoft.aura.assistant.VoiceEngineMode
 import az.simplesoft.aura.assistant.VoicePackStatus
-import az.simplesoft.aura.assistant.llm.LocalLlmModelManager
 import az.simplesoft.aura.assistant.AssistantRole
 import az.simplesoft.aura.assistant.AuraWakeWordBus
 import az.simplesoft.aura.assistant.VoiceInputState
@@ -269,9 +266,6 @@ fun AuraApp(
     BackHandler(
         !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.DIAGNOSTICS
     ) { vm.navigate(AuraDestination.HOME) }
-    BackHandler(
-        !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.CHAT_SCRIPT_LAB
-    ) { vm.navigate(AuraDestination.DIAGNOSTICS) }
     BackHandler(
         !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.RADIO
     ) { vm.navigate(AuraDestination.HOME) }
@@ -443,19 +437,10 @@ private fun MainShell(
                     voiceBackend = state.recognitionBackend,
                     voiceDiagnostics = state.voiceDiagnostics,
                     assistantDiagnostics = state.assistantDiagnostics,
-                    localLlmDiagnostics = state.localLlmDiagnostics,
                     voiceEngineMode = state.voiceEngineMode,
                     onVoiceEngineMode = vm::setVoiceEngineMode,
-                    brainEnabled = state.brainEnabled,
-                    onBrainEnabled = vm::setBrainEnabled,
-                    onTestVoice = onVoice,
-                    onOpenChatScriptLab = { vm.navigate(AuraDestination.CHAT_SCRIPT_LAB) }
+                    onTestVoice = onVoice
                 )
-                AuraDestination.CHAT_SCRIPT_LAB -> if (BuildConfig.DEBUG) {
-                    ChatScriptLabScreen(onBack = { vm.navigate(AuraDestination.DIAGNOSTICS) })
-                } else {
-                    LaunchedEffect(Unit) { vm.navigate(AuraDestination.HOME) }
-                }
             }
         }
 
@@ -476,9 +461,7 @@ private fun MainShell(
                 )
                 Spacer(Modifier.height(8.dp))
             }
-            if (state.destination != AuraDestination.CHAT_SCRIPT_LAB) {
-                BottomNavigation(state.destination, vm::navigate, vm::openQueue)
-            }
+            BottomNavigation(state.destination, vm::navigate, vm::openQueue)
         }
     }
 }
@@ -716,19 +699,14 @@ private fun DiagnosticsScreen(
     voiceBackend: az.simplesoft.aura.assistant.RecognitionBackend,
     voiceDiagnostics: az.simplesoft.aura.assistant.VoiceCaptureDiagnostics?,
     assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics?,
-    localLlmDiagnostics: az.simplesoft.aura.assistant.llm.LocalLlmDiagnostics?,
     voiceEngineMode: VoiceEngineMode,
     onVoiceEngineMode: (VoiceEngineMode) -> Unit,
-    brainEnabled: Boolean,
-    onBrainEnabled: (Boolean) -> Unit,
-    onTestVoice: () -> Unit,
-    onOpenChatScriptLab: () -> Unit = {}
+    onTestVoice: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val whisper = remember(context) { OfflineModelManager(context) }
     val voices = remember(context) { VoicePackManager(context) }
-    val brain = remember(context) { LocalLlmModelManager(context) }
     val whisperState by whisper.state.collectAsStateWithLifecycle()
     val whisperProgress by whisper.progress.collectAsStateWithLifecycle()
     val voiceProgress by voices.progress.collectAsStateWithLifecycle()
@@ -737,7 +715,6 @@ private fun DiagnosticsScreen(
     var voiceJob by remember { mutableStateOf<Job?>(null) }
     var activeVoiceId by remember { mutableStateOf<String?>(null) }
     var deleteTarget by remember { mutableStateOf<String?>(null) }
-    var brainJob by remember { mutableStateOf<Job?>(null) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().statusBarsPadding(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
@@ -799,64 +776,6 @@ private fun DiagnosticsScreen(
                 DiagnosticRow("Entities", decision.entities.joinToString { "${it.type}:${it.value}" }.ifBlank { "—" })
                 DiagnosticRow("Context", decision.contextReferences.joinToString().ifBlank { "—" })
                 DiagnosticRow("Assistant latency", "${decision.processingTimeMs} ms")
-            }
-        }
-        localLlmDiagnostics?.let { brainDiagnostics ->
-            item {
-                Text("Local brain run", color = SecondaryText, fontSize = 12.sp)
-                Spacer(Modifier.height(8.dp))
-                DiagnosticRow("Model", "${brainDiagnostics.model} · ${brainDiagnostics.quantization}")
-                DiagnosticRow("Threads", brainDiagnostics.threads.toString())
-                DiagnosticRow("RAM", "${brainDiagnostics.ramBeforeMb} → ${brainDiagnostics.ramAfterMb} MB")
-                DiagnosticRow("Load", "${brainDiagnostics.loadMs} ms")
-                DiagnosticRow("Tokens", "${brainDiagnostics.promptTokens} prompt / ${brainDiagnostics.outputTokens} output")
-                DiagnosticRow("Speed", "${"%.1f".format(brainDiagnostics.tokensPerSecond)} tok/s")
-                DiagnosticRow("TTFT / total", "${brainDiagnostics.timeToFirstTokenMs} / ${brainDiagnostics.totalMs} ms")
-                DiagnosticRow("Route", brainDiagnostics.route)
-            }
-        }
-        item {
-            Text("Local brain", color = SecondaryText, fontSize = 12.sp)
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Hybrid Local LLM", fontSize = 13.sp)
-                    Text(if (brainEnabled) "Fast path + Brain Pack fallback" else "Legacy LocalAssistantEngine only", color = SecondaryText, fontSize = 11.sp)
-                }
-                androidx.compose.material3.Switch(checked = brainEnabled, onCheckedChange = onBrainEnabled)
-            }
-            brain.models().forEach { model ->
-                val state = brain.state(model.id)
-                val progress = brain.progress(model.id)
-                ResourceCard(
-                    title = model.displayName,
-                    status = state.name,
-                    detail = "${model.quantization} · ${model.sizeBytes / 1_000_000} MB · ${progress.percent}%",
-                    actionLabel = when (state) {
-                        az.simplesoft.aura.assistant.llm.BrainModelState.READY -> "Delete"
-                        az.simplesoft.aura.assistant.llm.BrainModelState.DOWNLOADING,
-                        az.simplesoft.aura.assistant.llm.BrainModelState.VERIFYING -> "Cancel"
-                        else -> "Install"
-                    },
-                    onAction = {
-                        when (state) {
-                            az.simplesoft.aura.assistant.llm.BrainModelState.READY -> brainJob = scope.launch { brain.delete(model.id) }
-                            az.simplesoft.aura.assistant.llm.BrainModelState.DOWNLOADING,
-                            az.simplesoft.aura.assistant.llm.BrainModelState.VERIFYING -> brainJob?.cancel()
-                            else -> brainJob = scope.launch { runCatching { brain.install(model.id) }; brainJob = null }
-                        }
-                    }
-                )
-            }
-        }
-        if (BuildConfig.DEBUG) {
-            item {
-                Text("Experiments", color = SecondaryText, fontSize = 12.sp)
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = onOpenChatScriptLab, modifier = Modifier.fillMaxWidth()) {
-                    Text("Open ChatScript Lab")
-                }
-                Text("Isolated debug-only rule brain; never used by AURA production routing.", color = SecondaryText, fontSize = 11.sp)
             }
         }
         item { DiagnosticRow("Страница", diagnostics.selectedPage) }

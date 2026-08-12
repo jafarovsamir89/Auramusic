@@ -15,7 +15,6 @@ This file is an engineering inventory, not legal advice. Full license texts and 
 | JUnit 4 | Unit testing only | EPL-1.0 | https://github.com/junit-team/junit4 |
 | MockWebServer | Test HTTP server only | Apache-2.0 | https://github.com/square/okhttp |
 | PyTorch Android 2.1 | TorchScript runtime for the optional local Silero voice pack | BSD-style PyTorch license | https://github.com/pytorch/pytorch |
-| llama.cpp | In-process GGUF inference for the optional AURA Brain Pack | MIT | https://github.com/ggml-org/llama.cpp |
 
 ## Optional voice models
 
@@ -34,18 +33,6 @@ The Silero models are not bundled into the base APK. AURA installs official arti
 Whisper `ggml-base-q5_1.bin` is also optional and is never downloaded by recognition implicitly. Its exact metadata is kept in `OfflineModelManager`; the same explicit-install, temporary-file, size, checksum, cancellation, and retry rules apply.
 
 Transitive dependencies must be captured from the final release dependency graph before distribution.
-
-## Optional Brain Pack models
-
-| Model | Purpose | Distribution | License | Source |
-|---|---|---|---|---|
-| Qwen3 0.6B Q8_0 | Default local reasoning fallback | Explicit HTTPS install; size and SHA-256 metadata are pinned in `LocalLlmModelManager` | Apache-2.0 | https://huggingface.co/Qwen/Qwen3-0.6B-GGUF |
-| Qwen3 1.7B Q8_0 | Physical-device benchmark comparison only | Explicit HTTPS install; never auto-downloaded | Apache-2.0 | https://huggingface.co/Qwen/Qwen3-1.7B-GGUF |
-
-Brain Packs are not bundled into the APK. llama.cpp is built from the pinned
-Git submodule under `third_party/llama.cpp`; its Android binding is adapted
-from the official `examples/llama.android` sample and remains an in-process
-JNI library.
 
 ## External data services
 

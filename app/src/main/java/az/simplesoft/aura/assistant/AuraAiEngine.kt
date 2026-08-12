@@ -24,8 +24,7 @@ data class AuraAiContext(
 class AuraAiEngine(
     local: LocalIntentEngine,
     private val memory: CompactAssistantMemory,
-    private val localAssistant: LocalAssistantEngine = LocalAssistantEngine(local),
-    private val localLlm: ReasoningProvider? = null
+    private val localAssistant: LocalAssistantEngine = LocalAssistantEngine(local)
 ) {
     private val localProvider: ReasoningProvider = LocalReasoningProvider(localAssistant)
 
@@ -42,23 +41,8 @@ class AuraAiEngine(
             ),
             assistantContext
         )
-        val localNeedsReasoning = localDecision.isUnresolved || localDecision.action == MusicIntent.Unknown
-        val llmDecision = localLlm?.takeIf { localNeedsReasoning && it.isAvailable }?.let { provider ->
-            runCatching {
-                provider.reason(
-                    AssistantRequest(
-                        input,
-                        normalized.normalizedText,
-                        normalized.detectedLanguage,
-                        recentTurns = context.recentTurns
-                    ),
-                    assistantContext
-                )
-            }.getOrNull()
-        }
-        val selectedDecision = llmDecision ?: localDecision
+        val selectedDecision = localDecision
         val selectedNeedsReasoning = selectedDecision.isUnresolved || selectedDecision.action == MusicIntent.Unknown
-        val selectedSource = if (llmDecision != null) AssistantSource.LOCAL_LLM else AssistantSource.LOCAL
         val selectedReply = AssistantReply(
             intent = selectedDecision.action ?: MusicIntent.Unknown,
             text = selectedDecision.reply,
@@ -69,7 +53,7 @@ class AuraAiEngine(
                 else -> AssistantRoute.LOCAL_CONVERSATION
             },
             memoryInsights = selectedDecision.memoryInsights,
-            source = selectedSource,
+            source = AssistantSource.LOCAL,
             diagnostics = selectedDecision.diagnostics
         )
         val finalReply = if (selectedNeedsReasoning) {
