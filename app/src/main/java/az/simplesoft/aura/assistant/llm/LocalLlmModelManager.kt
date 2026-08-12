@@ -58,12 +58,24 @@ class LocalLlmModelManager(
 
     fun models(): List<BrainModelMetadata> = definitions()
 
-    fun state(id: String): BrainModelState = mutableStates.value[id] ?: inspect(id).first
+    fun state(id: String): BrainModelState = mutableStates.value[id] ?: inspectFast(id).first
 
     fun progress(id: String): BrainModelProgress = mutableProgress.value[id]
         ?: BrainModelProgress(totalBytes = definition(id).sizeBytes)
 
-    fun isReady(id: String = DEFAULT_MODEL_ID): Boolean = inspect(id).first == BrainModelState.READY
+    fun isReady(id: String = DEFAULT_MODEL_ID): Boolean = inspectFast(id).first == BrainModelState.READY
+
+    /** Performs the expensive integrity check away from the main thread. */
+    suspend fun verify(id: String = DEFAULT_MODEL_ID): Boolean = withContext(Dispatchers.IO) {
+        val metadata = definition(id)
+        val model = File(root, metadata.fileName)
+        val sidecar = File(root, "${metadata.fileName}.sha256")
+        val valid = model.isFile && model.length() == metadata.sizeBytes &&
+            runCatching { model.sha256() == metadata.sha256 && sidecar.readText().trim() == metadata.sha256 }
+                .getOrDefault(false)
+        setState(id, if (valid) BrainModelState.READY else BrainModelState.FAILED)
+        valid
+    }
 
     fun modelFile(id: String = DEFAULT_MODEL_ID): File = File(root, definition(id).fileName)
 
@@ -141,13 +153,12 @@ class LocalLlmModelManager(
         }
     }
 
-    private fun inspect(id: String): Pair<BrainModelState, File?> {
+    private fun inspectFast(id: String): Pair<BrainModelState, File?> {
         val metadata = definition(id)
         val model = File(root, metadata.fileName)
         val sidecar = File(root, "${metadata.fileName}.sha256")
         val ready = model.isFile && model.length() == metadata.sizeBytes &&
-            runCatching { model.sha256() == metadata.sha256 && sidecar.readText().trim() == metadata.sha256 }
-                .getOrDefault(false)
+            runCatching { sidecar.readText().trim() == metadata.sha256 }.getOrDefault(false)
         val state = when {
             ready -> BrainModelState.READY
             model.exists() || sidecar.exists() -> BrainModelState.FAILED

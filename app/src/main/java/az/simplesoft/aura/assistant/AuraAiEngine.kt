@@ -1,5 +1,6 @@
 package az.simplesoft.aura.assistant
 
+
 data class AuraAiContext(
     val currentTrack: String? = null,
     val currentArtist: String? = null,
@@ -41,7 +42,8 @@ class AuraAiEngine(
             ),
             assistantContext
         )
-        val llmDecision = localLlm?.takeIf { localDecision.isUnresolved && it.isAvailable }?.let { provider ->
+        val localNeedsReasoning = localDecision.isUnresolved || localDecision.action == MusicIntent.Unknown
+        val llmDecision = localLlm?.takeIf { localNeedsReasoning && it.isAvailable }?.let { provider ->
             runCatching {
                 provider.reason(
                     AssistantRequest(
@@ -55,21 +57,22 @@ class AuraAiEngine(
             }.getOrNull()
         }
         val selectedDecision = llmDecision ?: localDecision
+        val selectedNeedsReasoning = selectedDecision.isUnresolved || selectedDecision.action == MusicIntent.Unknown
         val selectedSource = if (llmDecision != null) AssistantSource.LOCAL_LLM else AssistantSource.LOCAL
         val selectedReply = AssistantReply(
             intent = selectedDecision.action ?: MusicIntent.Unknown,
             text = selectedDecision.reply,
             language = selectedDecision.language,
             route = when {
-                selectedDecision.action != null -> AssistantRoute.LOCAL_ACTION
-                selectedDecision.isUnresolved -> AssistantRoute.NEEDS_REASONING
+                selectedDecision.action != null && selectedDecision.action != MusicIntent.Unknown -> AssistantRoute.LOCAL_ACTION
+                selectedNeedsReasoning -> AssistantRoute.NEEDS_REASONING
                 else -> AssistantRoute.LOCAL_CONVERSATION
             },
             memoryInsights = selectedDecision.memoryInsights,
             source = selectedSource,
             diagnostics = selectedDecision.diagnostics
         )
-        val finalReply = if (selectedDecision.isUnresolved) {
+        val finalReply = if (selectedNeedsReasoning) {
             selectedReply.copy(
                 text = fallbackText(selectedReply.language),
                 route = AssistantRoute.LOCAL_CONVERSATION,

@@ -41,7 +41,7 @@ static common_sampler                   * g_sampler;
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {
+Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativeInit(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {
     // Set llama log handler to Android
     llama_log_set(aichat_android_log_callback, nullptr);
 
@@ -58,7 +58,7 @@ Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_init(JNIEnv *env, job
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_load(JNIEnv *env, jobject, jstring jmodel_path) {
+Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativeLoad(JNIEnv *env, jobject, jstring jmodel_path) {
     llama_model_params model_params = llama_model_default_params();
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
@@ -112,7 +112,7 @@ static common_sampler *new_sampler(float temp) {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_prepare(JNIEnv * /*env*/, jobject /*unused*/) {
+Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativePrepare(JNIEnv * /*env*/, jobject /*unused*/) {
     auto *context = init_context(g_model);
     if (!context) { return 1; }
     g_context = context;
@@ -136,13 +136,13 @@ static std::string get_backend() {
 
 extern "C"
 JNIEXPORT jstring JNICALL
-Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_systemInfo(JNIEnv *env, jobject /*unused*/) {
+Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativeSystemInfo(JNIEnv *env, jobject /*unused*/) {
     return env->NewStringUTF(llama_print_system_info());
 }
 
 extern "C"
 JNIEXPORT jstring JNICALL
-Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_benchModel(JNIEnv *env, jobject /*unused*/, jint pp, jint tg,
+Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativeBenchModel(JNIEnv *env, jobject /*unused*/, jint pp, jint tg,
                                                       jint pl, jint nr) {
     auto *context = init_context(g_model, pp);
     if (!context) {
@@ -352,7 +352,7 @@ static int decode_tokens_in_batches(
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_processSystemPrompt(
+Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativeProcessSystemPrompt(
         JNIEnv *env,
         jobject /*unused*/,
         jstring jsystem_prompt
@@ -401,7 +401,7 @@ Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_processSystemPrompt(
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_processUserPrompt(
+Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativeProcessUserPrompt(
         JNIEnv *env,
         jobject /*unused*/,
         jstring juser_prompt,
@@ -485,7 +485,7 @@ static bool is_valid_utf8(const char *string) {
 
 extern "C"
 JNIEXPORT jstring JNICALL
-Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_generateNextToken(
+Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativeGenerateNextToken(
         JNIEnv *env,
         jobject /*unused*/
 ) {
@@ -545,7 +545,7 @@ Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_generateNextToken(
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_unload(JNIEnv * /*unused*/, jobject /*unused*/) {
+Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativeUnload(JNIEnv * /*unused*/, jobject /*unused*/) {
     // Reset long-term & short-term states
     reset_long_term_states();
     reset_short_term_states();
@@ -560,6 +560,6 @@ Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_unload(JNIEnv * /*unu
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_shutdown(JNIEnv *, jobject /*unused*/) {
+Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativeShutdown(JNIEnv *, jobject /*unused*/) {
     llama_backend_free();
 }

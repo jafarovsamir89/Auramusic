@@ -28,6 +28,7 @@ class LocalLlmReasoningProvider(
     private val engine = LocalLlmNativeEngine(context)
     private val loadMutex = Mutex()
     private var loadedModelId: String? = null
+    private var verifiedModelSignature: Pair<Long, Long>? = null
     private val mutableDiagnostics = MutableStateFlow<LocalLlmDiagnostics?>(null)
 
     override val id: String = "local-llama.cpp-qwen3"
@@ -40,13 +41,19 @@ class LocalLlmReasoningProvider(
     override suspend fun reason(request: AssistantRequest, context: AssistantContext): AssistantDecision {
         if (!isAvailable) return unresolved(request, "brain-pack-missing")
         val metadata = models.models().first { it.id == LocalLlmModelManager.DEFAULT_MODEL_ID }
+        val modelFile = models.modelFile(metadata.id)
+        val signature = modelFile.length() to modelFile.lastModified()
+        if (verifiedModelSignature != signature) {
+            if (!models.verify(metadata.id)) return unresolved(request, "brain-pack-checksum-failed")
+            verifiedModelSignature = signature
+        }
         val ramBefore = usedRamMb()
         var loadMs = 0L
         val systemPrompt = prompts.systemPrompt(request.language)
         val userPrompt = prompts.userPrompt(request, context, request.recentTurns)
         val inference = loadMutex.withLock {
             if (loadedModelId != metadata.id) {
-                loadMs = engine.load(models.modelFile(metadata.id))
+                loadMs = engine.load(modelFile)
                 loadedModelId = metadata.id
             }
             engine.complete(
@@ -119,6 +126,7 @@ class LocalLlmReasoningProvider(
     fun unload() {
         engine.unload()
         loadedModelId = null
+        verifiedModelSignature = null
     }
 
     override fun close() = engine.close()
@@ -132,6 +140,8 @@ class LocalLlmReasoningProvider(
 
     private fun estimateTokens(text: String): Int =
         (text.length / 3).coerceAtLeast(text.split(Regex("\\s+")).count { it.isNotBlank() })
+
+
 
     private fun unresolved(
         request: AssistantRequest,

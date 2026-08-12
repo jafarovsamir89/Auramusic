@@ -330,8 +330,10 @@ class LocalAssistantEngine(
         match: RegistryIntentMatch?,
         candidates: List<RegistryIntentMatch> = emptyList()
     ): AssistantDecision {
+        val needsReasoning = reply.intent == MusicIntent.Unknown && reply.route == AssistantRoute.LOCAL_CONVERSATION
         val entities = entitiesFor(reply.intent)
         val confidence = when {
+            needsReasoning -> 0.0
             match != null -> match.confidence
             reply.route == AssistantRoute.NEEDS_REASONING -> 0.0
             reply.intent is MusicIntent.Search -> 0.88
@@ -354,6 +356,7 @@ class LocalAssistantEngine(
                 confidence = confidence,
                 entities = entities,
                 reason = when {
+                    needsReasoning -> "local-unresolved"
                     reply.route == AssistantRoute.LOCAL_CONVERSATION -> "local-conversation"
                     match != null -> match.reason
                     else -> "legacy-compatibility-parser"
