@@ -3,12 +3,35 @@ package az.simplesoft.aura.assistant
 import az.simplesoft.aura.assistant.llm.LocalLlmDecision
 import az.simplesoft.aura.assistant.llm.LocalLlmDecisionParser
 import az.simplesoft.aura.assistant.llm.LocalLlmAction
+import az.simplesoft.aura.assistant.llm.LocalLlmPromptBuilder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalLlmDecisionParserTest {
     private val parser = LocalLlmDecisionParser()
+
+    @Test
+    fun promptRoutesNormalQuestionsToConversation() {
+        val prompt = LocalLlmPromptBuilder().systemPrompt(AssistantLanguage.RUSSIAN)
+        assertTrue(prompt.contains("Для любого обычного вопроса"))
+        assertTrue(prompt.contains("Не используй unresolved"))
+    }
+
+    @Test
+    fun promptDoesNotTeachTheBrainToRepeatFallbacks() {
+        val prompt = LocalLlmPromptBuilder().userPrompt(
+            AssistantRequest(
+                originalText = "почему люди слушают музыку",
+                normalizedText = "почему люди слушают музыку",
+                language = AssistantLanguage.RUSSIAN
+            ),
+            AssistantContext(),
+            listOf("AURA" to "Я пока не знаю ответа на это локально и не буду придумывать.")
+        )
+        assertTrue(!prompt.contains("Я пока не знаю ответа на это локально"))
+        assertTrue(prompt.endsWith("/no_think"))
+    }
 
     @Test
     fun parsesOnlySupportedStructuredActions() {

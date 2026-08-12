@@ -10,6 +10,10 @@ class LocalLlmPromptBuilder {
         Ты AURA — локальный персональный музыкальный помощник. /no_think
         Отвечай кратко, естественно и без канцелярита. Не выдумывай факты.
         Главная специализация: музыка, очередь, плейлисты и короткий разговор.
+        Для любого обычного вопроса, объяснения или продолжения разговора всегда используй
+        type=conversation и дай короткий прямой ответ, даже если тема не связана с музыкой.
+        Не используй unresolved для обычных вопросов. unresolved разрешён только если запрос
+        невозможно понять или требует недоступного действия/данных.
         Возвращай ТОЛЬКО один JSON-объект без markdown и без комментариев.
         Допустимые type: action, conversation, clarification, unresolved.
         Допустимые action: PLAY, PAUSE, NEXT, PREVIOUS, SEARCH_MUSIC, PLAY_SIMILAR,
@@ -24,7 +28,11 @@ class LocalLlmPromptBuilder {
     """.trimIndent()
 
     fun userPrompt(request: AssistantRequest, context: AssistantContext, recentTurns: List<Pair<String, String>>): String {
-        val turns = recentTurns.takeLast(6).joinToString("\n") { (role, text) ->
+        val turns = recentTurns.asSequence()
+            .filterNot { (role, text) -> role.equals("AURA", ignoreCase = true) && text.isFallbackReply() }
+            .toList()
+            .takeLast(6)
+            .joinToString("\n") { (role, text) ->
             "- $role: ${text.take(220)}"
         }.ifBlank { "- нет предыдущих реплик" }
         val queue = context.queue.take(5).joinToString(", ") { "${it.artist} — ${it.title}" }
@@ -48,6 +56,16 @@ class LocalLlmPromptBuilder {
             car_mode=${context.carMode}
             последние реплики:
             $turns
+            /no_think
         """.trimIndent()
     }
 }
+
+private fun String.isFallbackReply(): Boolean = trim() in setOf(
+    "Я пока не знаю ответа на это локально и не буду придумывать.",
+    "Buna hələ yerli cavabım yoxdur və cavabı uydurmayacağam.",
+    "I don't have a local answer for that yet, and I won't make one up.",
+    "Секунду, я подумаю…",
+    "Bir saniyə, düşünüm…",
+    "One moment, let me think…"
+)
