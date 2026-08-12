@@ -20,6 +20,12 @@ class LocalLlmDecisionParserTest {
     }
 
     @Test
+    fun stripsQwenThinkingWrapperBeforeParsing() {
+        val decision = parser.parse("<think>brief internal trace</think>\n{\"type\":\"conversation\",\"reply\":\"Я рядом.\"}")
+        assertTrue(decision is LocalLlmDecision.Conversation)
+    }
+
+    @Test
     fun rejectsUnknownToolAndMalformedOutput() {
         assertEquals(LocalLlmDecision.Unresolved, parser.parse("{\"type\":\"action\",\"action\":\"CALL_PHONE\"}"))
         assertEquals(LocalLlmDecision.Unresolved, parser.parse("{\"type\":\"action\",\"action\":\"PLAY\",\"parameters\":{\"tool\":\"phone\"}}"))

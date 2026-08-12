@@ -7,7 +7,7 @@ import org.json.JSONObject
 class LocalLlmDecisionParser {
     fun parse(raw: String): LocalLlmDecision {
         val json = runCatching {
-            JSONObject(raw.replace("```json", "", ignoreCase = true).replace("```", "").trim())
+            JSONObject(raw.toJsonCandidate())
         }.getOrNull() ?: return LocalLlmDecision.Unresolved
         if (!keysAre(json, setOf("type", "action", "parameters", "reply", "question"))) {
             return LocalLlmDecision.Unresolved
@@ -82,4 +82,14 @@ class LocalLlmDecisionParser {
         .takeIf { it.isNotBlank() && it.length <= 240 }
 
     private fun String?.boundedReply(): String? = this?.trim()?.takeIf { it.isNotBlank() }?.take(500)
+}
+
+private fun String.toJsonCandidate(): String {
+    val withoutThinking = replace(Regex("(?s)<think>.*?</think>"), "")
+        .replace("```json", "", ignoreCase = true)
+        .replace("```", "")
+        .trim()
+    val start = withoutThinking.indexOf('{')
+    val end = withoutThinking.lastIndexOf('}')
+    return if (start >= 0 && end >= start) withoutThinking.substring(start, end + 1) else withoutThinking
 }
