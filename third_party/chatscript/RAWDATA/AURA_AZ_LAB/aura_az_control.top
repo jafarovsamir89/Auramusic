@@ -1,0 +1,35 @@
+# AURA AZ Lab: UTF-8 and state smoke-test brain.
+outputmacro: aura_az()
+$cs_token = #STRICT_CASING
+$cs_token -= #DO_PARSE
+^addtopic(~aura_az_control)
+$cs_control_main = ~aura_az_control
+$singleResponse = 1
+$SHUTUP = 1
+
+table: defaultbot (^name)
+^createfact(^name defaultbot defaultbot)
+DATA:
+aura_az_lab
+
+topic: ~aura_az_control system ()
+u: ()
+    $_responseCount = %response
+    if ($singleResponse) {$_responseCount = 0}
+    if (%length == 0 AND %response == $_responseCount) { nofail(TOPIC ^gambit(~aura_az_dialogue)) }
+    if (%response == $_responseCount) { nofail(TOPIC ^rejoinder()) }
+    if (%response == $_responseCount) { nofail(TOPIC ^respond(~aura_az_dialogue)) }
+
+topic: ~aura_az_dialogue (nostay)
+u: ( salam ) Salam. Əhvalın necədir?
+u: ( necəsən ) Mən yaxşıyam. Sən necəsən?
+u: ( bu gün yorğunam ) Ağır gün olub?
+    a: ( hə bəli ) İş çox idi?
+u: ( iş çox idi ) Sakit musiqi kömək edə bilər.
+    a: ( hə bəli ) __ACTION__:PLAY_CALM Sakit musiqi aça bilərəm.
+    a: ( yox xeyr ) Oldu, başqa mövzudan danışaq.
+u: ( mən rok sevirəm ) Rok xoşladığını yadda saxladım.
+?: ( mənim adım nədir ) Sənin adını yadda saxlamaq üçün əvvəlcə özünü təqdim et.
+u: ( təşəkkür edirəm sağ ol ) Buyur.
+u: ( [Röya Aygün Əli Azərbaycan növbəti] ) UTF-8 simvollarını düzgün görürəm.
+u: () Səni dinləyirəm.

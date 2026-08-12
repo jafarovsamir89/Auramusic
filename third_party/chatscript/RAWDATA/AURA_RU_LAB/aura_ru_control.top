@@ -1,0 +1,66 @@
+# AURA RU Lab: a small curated rule brain for the Android experiment.
+outputmacro: aura_ru_lab()
+$cs_token = #STRICT_CASING
+$cs_token -= #DO_PARSE
+^addtopic(~aura_ru_control)
+$cs_control_main = ~aura_ru_control
+$singleResponse = 1
+$SHUTUP = 1
+
+table: defaultbot (^name)
+^createfact(^name defaultbot defaultbot)
+DATA:
+aura_ru_lab
+
+topic: ~aura_ru_control system ()
+u: ( %input<%userfirstline ) ^gambit(~aura_ru_gambits)
+u: ()
+    $_responseCount = %response
+    if ($singleResponse) {$_responseCount = 0}
+    $$currenttopic = %topic
+    if (%response == $_responseCount) { nofail(TOPIC ^rejoinder()) }
+    if (%length == 0 AND %response == $_responseCount) { nofail(TOPIC ^gambit(~aura_ru_dialogue)) }
+    if (%response == $_responseCount) { nofail(TOPIC ^rejoinder()) }
+    if (%response == $_responseCount) { nofail(TOPIC ^respond(~aura_ru_dialogue)) }
+    if (%response == $_responseCount) { nofail(TOPIC ^gambit(~aura_ru_dialogue)) }
+    if (%response == $_responseCount) { nofail(TOPIC ^repeat()) }
+
+topic: ~aura_ru_dialogue (nostay)
+
+u: ( привет ) Привет. Как настроение?
+u: ( здравствуй ) Привет. Как настроение?
+u: ( как дела ) У меня всё хорошо. А у тебя?
+u: ( [устал устала утомился утомилась] ) Тяжёлый день?
+    a: ( [да ага] ) Что сегодня было самым тяжёлым?
+u: ( [работы работа] [много много было] ) Похоже, день выдался насыщенным.
+u: ( [да ага] ) Тогда тебе сейчас, наверное, хочется чего-нибудь поспокойнее.
+    a: ( [да ага хочу] ) __ACTION__:PLAY_CALM Могу поставить спокойную музыку.
+    a: ( [нет не] ) Хорошо, тогда поговорим о чём-нибудь другом.
+u: ( мне [грустно печально] ) Жаль это слышать. Хочешь немного отвлечься музыкой?
+u: ( мне [весело хорошо] ) Радуюсь вместе с тобой. Что послушаем?
+u: ( мне скучно ) Давай найдём занятие или включим музыку под настроение.
+    a: ( да ) Можем обсудить музыку. Что тебе сейчас ближе?
+u: ( [музыка слушать] ) Музыка помогает менять настроение. Какой жанр тебе нравится?
+u: ( [рок роком] ) Рок — отличный выбор. Какая группа тебе нравится?
+u: ( [спокойную спокойная спокойное] [музыку мелодию] ) __ACTION__:PLAY_CALM Могу поставить спокойную музыку.
+    a: ( [да ага] ) __ACTION__:PLAY_CALM Включаю спокойный вариант.
+    a: ( [нет не] ) Поняла. Тогда не буду включать спокойную музыку.
+u: ( [в дороге за рулём] ) В дороге лучше всего работает музыка без лишних отвлечений.
+u: ( спасибо благодарю ) Пожалуйста.
+u: ( кто ты ) Я AURA — локальный conversational brain в экспериментальном режиме.
+u: ( что ты умеешь ) Могу поддержать короткий диалог и запомнить простые предпочтения.
+u: ( меня зовут _* ) $aura_name = '_0 Я запомнила. Тебя зовут $aura_name.
+?: ( [как меня зовут имя] ) Тебя зовут $aura_name.
+u: ( я люблю [рок рок-музыку] ) $aura_music = рок Запомнила: ты любишь рок.
+?: ( какую музыку я люблю ) Ты любишь $aura_music.
+u: ( [да точно] ) Хорошо, продолжаем.
+u: ( [нет не хочу] ) Хорошо, не будем. О чём поговорим?
+u: ( [повтори повторить] ) Могу повторить последний ответ, если он был непонятен.
+u: ( давай о другом сменим тему ) Конечно. Какую музыку хочется послушать?
+u: ( [пока до свидания] ) До встречи, Самир.
+u: ( [что ты думаешь посоветуешь] ) Я бы предложила немного отдохнуть и включить музыку, которая тебе нравится.
+u: ( [linkin park линкин парк] ) Linkin Park — сильный выбор. Какая песня нравится больше всего?
+    a: ( [numb нумб] ) Numb — одна из самых узнаваемых их песен.
+
+topic: ~aura_ru_gambits system ()
+u: () Привет. Я готова поговорить.

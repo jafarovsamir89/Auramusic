@@ -80,7 +80,7 @@ import kotlinx.coroutines.channels.Channel
 import java.util.Calendar
 import kotlin.math.abs
 
-enum class AuraDestination { HOME, SEARCH, RADIO, LIBRARY, ASSISTANT, DIAGNOSTICS }
+enum class AuraDestination { HOME, SEARCH, RADIO, LIBRARY, ASSISTANT, DIAGNOSTICS, CHAT_SCRIPT_LAB }
 enum class LibrarySection { FAVORITES, HISTORY, LOCAL, PLAYLISTS }
 enum class SearchPhase { IDLE, SEARCHING, MATCHING, RESOLVING, BUFFERING, PLAYING, ERROR }
 

@@ -1,5 +1,6 @@
 package az.simplesoft.aura.ui
 
+import az.simplesoft.aura.BuildConfig
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -104,6 +105,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -267,6 +269,9 @@ fun AuraApp(
     BackHandler(
         !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.DIAGNOSTICS
     ) { vm.navigate(AuraDestination.HOME) }
+    BackHandler(
+        !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.CHAT_SCRIPT_LAB
+    ) { vm.navigate(AuraDestination.DIAGNOSTICS) }
     BackHandler(
         !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.RADIO
     ) { vm.navigate(AuraDestination.HOME) }
@@ -443,8 +448,14 @@ private fun MainShell(
                     onVoiceEngineMode = vm::setVoiceEngineMode,
                     brainEnabled = state.brainEnabled,
                     onBrainEnabled = vm::setBrainEnabled,
-                    onTestVoice = onVoice
+                    onTestVoice = onVoice,
+                    onOpenChatScriptLab = { vm.navigate(AuraDestination.CHAT_SCRIPT_LAB) }
                 )
+                AuraDestination.CHAT_SCRIPT_LAB -> if (BuildConfig.DEBUG) {
+                    ChatScriptLabScreen(onBack = { vm.navigate(AuraDestination.DIAGNOSTICS) })
+                } else {
+                    LaunchedEffect(Unit) { vm.navigate(AuraDestination.HOME) }
+                }
             }
         }
 
@@ -465,7 +476,9 @@ private fun MainShell(
                 )
                 Spacer(Modifier.height(8.dp))
             }
-            BottomNavigation(state.destination, vm::navigate, vm::openQueue)
+            if (state.destination != AuraDestination.CHAT_SCRIPT_LAB) {
+                BottomNavigation(state.destination, vm::navigate, vm::openQueue)
+            }
         }
     }
 }
@@ -708,7 +721,8 @@ private fun DiagnosticsScreen(
     onVoiceEngineMode: (VoiceEngineMode) -> Unit,
     brainEnabled: Boolean,
     onBrainEnabled: (Boolean) -> Unit,
-    onTestVoice: () -> Unit
+    onTestVoice: () -> Unit,
+    onOpenChatScriptLab: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -833,6 +847,16 @@ private fun DiagnosticsScreen(
                         }
                     }
                 )
+            }
+        }
+        if (BuildConfig.DEBUG) {
+            item {
+                Text("Experiments", color = SecondaryText, fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = onOpenChatScriptLab, modifier = Modifier.fillMaxWidth()) {
+                    Text("Open ChatScript Lab")
+                }
+                Text("Isolated debug-only rule brain; never used by AURA production routing.", color = SecondaryText, fontSize = 11.sp)
             }
         }
         item { DiagnosticRow("Страница", diagnostics.selectedPage) }
