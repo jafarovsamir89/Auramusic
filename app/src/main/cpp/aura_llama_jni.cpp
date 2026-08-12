@@ -25,10 +25,13 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
  * LLama resources: context, model, batch and sampler
  */
 constexpr int   N_THREADS_MIN           = 2;
-constexpr int   N_THREADS_MAX           = 4;
+constexpr int   N_THREADS_MAX           = 8;
 constexpr int   N_THREADS_HEADROOM      = 2;
 
-constexpr int   DEFAULT_CONTEXT_SIZE    = 8192;
+// AURA bounds each request to a compact prompt and 160 output tokens. 4K is
+// ample for the six-turn local context and avoids reserving an oversized KV
+// cache on phones.
+constexpr int   DEFAULT_CONTEXT_SIZE    = 4096;
 constexpr int   OVERFLOW_HEADROOM       = 4;
 constexpr int   BATCH_SIZE              = 512;
 constexpr float DEFAULT_SAMPLER_TEMP    = 0.3f;
@@ -73,16 +76,21 @@ Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativeLoad(JNIEnv *en
     return 0;
 }
 
-static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE) {
+static llama_context *init_context(llama_model *model,
+                                   const int n_ctx = DEFAULT_CONTEXT_SIZE,
+                                   const int requested_threads = 0) {
     if (!model) {
         LOGe("%s: model cannot be null", __func__);
         return nullptr;
     }
 
     // Multi-threading setup
-    const int n_threads = std::max(N_THREADS_MIN, std::min(N_THREADS_MAX,
-                                                     (int) sysconf(_SC_NPROCESSORS_ONLN) -
-                                                     N_THREADS_HEADROOM));
+    const int detected_threads = std::max(N_THREADS_MIN, std::min(N_THREADS_MAX,
+                                                                    (int) sysconf(_SC_NPROCESSORS_ONLN) -
+                                                                    N_THREADS_HEADROOM));
+    const int n_threads = requested_threads > 0
+        ? std::max(N_THREADS_MIN, std::min(N_THREADS_MAX, requested_threads))
+        : detected_threads;
     LOGi("%s: Using %d threads", __func__, n_threads);
 
     // Context parameters setup
@@ -112,8 +120,9 @@ static common_sampler *new_sampler(float temp) {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativePrepare(JNIEnv * /*env*/, jobject /*unused*/) {
-    auto *context = init_context(g_model);
+Java_az_simplesoft_aura_assistant_llm_LocalLlmNativeEngine_nativePrepare(
+        JNIEnv * /*env*/, jobject /*unused*/, jint requested_threads) {
+    auto *context = init_context(g_model, DEFAULT_CONTEXT_SIZE, requested_threads);
     if (!context) { return 1; }
     g_context = context;
     g_batch = llama_batch_init(BATCH_SIZE, 0, 1);

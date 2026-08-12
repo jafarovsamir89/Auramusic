@@ -7,54 +7,37 @@ import az.simplesoft.aura.assistant.AssistantRequest
 /** Keeps prompts compact and gives Qwen only the capabilities AURA can validate. */
 class LocalLlmPromptBuilder {
     fun systemPrompt(language: AssistantLanguage): String = """
-        Ты AURA — локальный персональный музыкальный помощник. /no_think
-        Отвечай кратко, естественно и без канцелярита. Не выдумывай факты.
-        Главная специализация: музыка, очередь, плейлисты и короткий разговор.
-        Для любого обычного вопроса, объяснения или продолжения разговора всегда используй
-        type=conversation и дай короткий прямой ответ, даже если тема не связана с музыкой.
-        Не используй unresolved для обычных вопросов. unresolved разрешён только если запрос
-        невозможно понять или требует недоступного действия/данных.
-        Возвращай ТОЛЬКО один JSON-объект без markdown и без комментариев.
-        Допустимые type: action, conversation, clarification, unresolved.
-        Допустимые action: PLAY, PAUSE, NEXT, PREVIOUS, SEARCH_MUSIC, PLAY_SIMILAR,
-        MY_MIX, LIKE, UNLIKE, QUEUE_NEXT, QUEUE_ADD, OPEN_QUEUE, PLAY_PLAYLIST,
-        CREATE_PLAYLIST, VOLUME_UP, VOLUME_DOWN, REPEAT, SHUFFLE, NOW_PLAYING.
-        Никаких других инструментов. Модель не выполняет действия сама.
-        Для action используй {"type":"action","action":"...","parameters":{},"reply":"..."}.
-        Для conversation используй {"type":"conversation","reply":"..."}.
-        Для clarification используй {"type":"clarification","question":"..."}.
-        Для unresolved используй {"type":"unresolved"}.
-        Язык ответа: ${language.tag}. Голосовой ответ обычно одно предложение.
+        Ты AURA — локальный музыкальный помощник. Отвечай кратко, естественно, без выдумок.
+        Команда плеера -> type=action. Обычный вопрос или разговор -> type=conversation с прямым ответом.
+        Не используй unresolved для обычного вопроса; только если запрос непонятен или требует недоступных данных.
+        Верни ровно один JSON без markdown. type: action|conversation|clarification|unresolved.
+        action: PLAY, PAUSE, NEXT, PREVIOUS, SEARCH_MUSIC, PLAY_SIMILAR, MY_MIX, LIKE, UNLIKE,
+        QUEUE_NEXT, QUEUE_ADD, OPEN_QUEUE, PLAY_PLAYLIST, CREATE_PLAYLIST, VOLUME_UP, VOLUME_DOWN,
+        REPEAT, SHUFFLE, NOW_PLAYING. Схемы: {"type":"action","action":"...","parameters":{},"reply":"..."};
+        {"type":"conversation","reply":"..."}; {"type":"clarification","question":"..."}; {"type":"unresolved"}.
+        Язык: ${language.tag}. Одно короткое предложение. /no_think
     """.trimIndent()
 
     fun userPrompt(request: AssistantRequest, context: AssistantContext, recentTurns: List<Pair<String, String>>): String {
         val turns = recentTurns.asSequence()
             .filterNot { (role, text) -> role.equals("AURA", ignoreCase = true) && text.isFallbackReply() }
             .toList()
-            .takeLast(6)
+            .takeLast(3)
             .joinToString("\n") { (role, text) ->
-            "- $role: ${text.take(220)}"
+                "- $role: ${text.take(120)}"
         }.ifBlank { "- нет предыдущих реплик" }
-        val queue = context.queue.take(5).joinToString(", ") { "${it.artist} — ${it.title}" }
+        val queue = context.queue.take(3).joinToString(", ") { "${it.artist} — ${it.title}" }
             .ifBlank { "пусто" }
-        val results = context.lastSearchResults.take(5).joinToString(", ") { "${it.artist} — ${it.title}" }
+        val results = context.lastSearchResults.take(3).joinToString(", ") { "${it.artist} — ${it.title}" }
             .ifBlank { "нет" }
         return """
-            Запрос пользователя: ${request.originalText.take(500)}
-            Нормализованный текст: ${request.normalizedText.take(500)}
-            Контекст:
-            current_track=${context.currentTrack?.title ?: "нет"}
-            current_artist=${context.currentTrack?.artist ?: "нет"}
-            is_playing=${context.isPlaying}
-            last_search=${context.lastSearchQuery ?: "нет"}
-            last_search_results=$results
-            queue=$queue
-            queue_size=${context.queue.size}
-            current_playlist=${context.currentPlaylist ?: "нет"}
-            last_intent=${context.lastIntent ?: "нет"}
-            memory=${context.memoryFacts.take(5).joinToString("; ") { "${it.key}=${it.value}" }.ifBlank { "нет" }}
-            car_mode=${context.carMode}
-            последние реплики:
+            Вопрос: ${request.originalText.take(300)}
+            Нормализованный: ${request.normalizedText.take(300)}
+            Состояние: трек=${context.currentTrack?.title ?: "нет"}; исполнитель=${context.currentTrack?.artist ?: "нет"}; играет=${context.isPlaying}; поиск=${context.lastSearchQuery ?: "нет"}; очередь=${context.queue.size}; плейлист=${context.currentPlaylist ?: "нет"}; авто=${context.carMode}
+            Результаты поиска: $results
+            Очередь: $queue
+            Память: ${context.memoryFacts.take(3).joinToString("; ") { "${it.key}=${it.value}" }.ifBlank { "нет" }}
+            Диалог:
             $turns
             /no_think
         """.trimIndent()

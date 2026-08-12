@@ -792,6 +792,7 @@ private fun DiagnosticsScreen(
                 Text("Local brain run", color = SecondaryText, fontSize = 12.sp)
                 Spacer(Modifier.height(8.dp))
                 DiagnosticRow("Model", "${brainDiagnostics.model} · ${brainDiagnostics.quantization}")
+                DiagnosticRow("Threads", brainDiagnostics.threads.toString())
                 DiagnosticRow("RAM", "${brainDiagnostics.ramBeforeMb} → ${brainDiagnostics.ramAfterMb} MB")
                 DiagnosticRow("Load", "${brainDiagnostics.loadMs} ms")
                 DiagnosticRow("Tokens", "${brainDiagnostics.promptTokens} prompt / ${brainDiagnostics.outputTokens} output")

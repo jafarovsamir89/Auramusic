@@ -23,6 +23,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (BuildConfig.DEBUG) {
+            intent.getIntExtra("aura_llm_threads", -1)
+                .takeIf { it in 4..8 }
+                ?.let { threads ->
+                    getSharedPreferences("aura_state", MODE_PRIVATE)
+                        .edit()
+                        .putInt("brain_threads", threads)
+                        .apply()
+                }
+        }
         if (BuildConfig.DEBUG && intent.getBooleanExtra("aura_verify_russian_voice", false)) {
             Log.i("AuraDeviceCheck", "Starting Russian Silero verification")
             AuraSpeechSynthesizer(this).speak("Привет! Я АУРА, рада тебе.", AssistantLanguage.RUSSIAN)

@@ -4,6 +4,7 @@ package az.simplesoft.aura.assistant.llm
 data class LocalLlmDiagnostics(
     val model: String,
     val quantization: String,
+    val threads: Int,
     val ramBeforeMb: Long,
     val ramAfterMb: Long,
     val loadMs: Long,

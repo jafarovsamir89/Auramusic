@@ -22,10 +22,11 @@ class LocalLlmReasoningProvider(
     private val models: LocalLlmModelManager = LocalLlmModelManager(context),
     private val prompts: LocalLlmPromptBuilder = LocalLlmPromptBuilder(),
     private val parser: LocalLlmDecisionParser = LocalLlmDecisionParser(),
+    private val threadCount: Int = recommendedThreadCount(),
     private val enabled: () -> Boolean = { true }
 ) : ReasoningProvider, AutoCloseable {
     private val appContext = context.applicationContext
-    private val engine = LocalLlmNativeEngine(context)
+    private val engine = LocalLlmNativeEngine(context, threadCount)
     private val loadMutex = Mutex()
     private var loadedModelId: String? = null
     private var verifiedModelSignature: Pair<Long, Long>? = null
@@ -38,35 +39,37 @@ class LocalLlmReasoningProvider(
     val modelManager: LocalLlmModelManager get() = models
     val diagnostics: StateFlow<LocalLlmDiagnostics?> = mutableDiagnostics.asStateFlow()
 
+    /** Loads the verified model in the background so the first real answer skips mmap/context setup. */
+    suspend fun warmUp() {
+        if (!isAvailable) return
+        val metadata = models.models().first { it.id == LocalLlmModelManager.DEFAULT_MODEL_ID }
+        loadMutex.withLock {
+            ensureModelReady(metadata)
+        }
+    }
+
     override suspend fun reason(request: AssistantRequest, context: AssistantContext): AssistantDecision {
         if (!isAvailable) return unresolved(request, "brain-pack-missing")
         val metadata = models.models().first { it.id == LocalLlmModelManager.DEFAULT_MODEL_ID }
-        val modelFile = models.modelFile(metadata.id)
-        val signature = modelFile.length() to modelFile.lastModified()
-        if (verifiedModelSignature != signature) {
-            if (!models.verify(metadata.id)) return unresolved(request, "brain-pack-checksum-failed")
-            verifiedModelSignature = signature
-        }
         val ramBefore = usedRamMb()
         var loadMs = 0L
         val systemPrompt = prompts.systemPrompt(request.language)
         val userPrompt = prompts.userPrompt(request, context, request.recentTurns)
         val inference = loadMutex.withLock {
-            if (loadedModelId != metadata.id) {
-                loadMs = engine.load(modelFile)
-                loadedModelId = metadata.id
-            }
+            val readyLoadMs = ensureModelReady(metadata) ?: return@withLock null
+            loadMs = readyLoadMs
             engine.complete(
                 systemPrompt = systemPrompt,
                 userPrompt = userPrompt,
                 maxTokens = 160
             )
-        }
+        } ?: return unresolved(request, "brain-pack-checksum-failed")
         val parsed = parser.parse(inference.text)
         val generationMs = (inference.totalInferenceMs - inference.timeToFirstTokenMs).coerceAtLeast(1L)
         mutableDiagnostics.value = LocalLlmDiagnostics(
             model = metadata.parameters,
             quantization = metadata.quantization,
+            threads = threadCount,
             ramBeforeMb = ramBefore,
             ramAfterMb = usedRamMb(),
             loadMs = loadMs,
@@ -131,6 +134,17 @@ class LocalLlmReasoningProvider(
 
     override fun close() = engine.close()
 
+    private suspend fun ensureModelReady(metadata: BrainModelMetadata): Long? {
+        val modelFile = models.modelFile(metadata.id)
+        val signature = modelFile.length() to modelFile.lastModified()
+        if (verifiedModelSignature != signature) {
+            if (!models.verify(metadata.id)) return null
+            verifiedModelSignature = signature
+        }
+        if (loadedModelId == metadata.id) return 0L
+        return engine.load(modelFile).also { loadedModelId = metadata.id }
+    }
+
     private fun usedRamMb(): Long {
         val info = ActivityManager.MemoryInfo()
         (appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
@@ -170,6 +184,12 @@ class LocalLlmReasoningProvider(
         }
         AssistantLanguage.AZERBAIJANI -> "Oldu."
         AssistantLanguage.ENGLISH -> "Okay."
+    }
+
+    companion object {
+        // Helio G96 is a 2xA76 + 6xA55 big.LITTLE device. The physical A/B
+        // run showed 4 threads beating 6/8 once thermal throttling is included.
+        fun recommendedThreadCount(): Int = 4
     }
 }
 

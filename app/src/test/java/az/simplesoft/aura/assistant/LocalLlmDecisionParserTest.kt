@@ -14,8 +14,9 @@ class LocalLlmDecisionParserTest {
     @Test
     fun promptRoutesNormalQuestionsToConversation() {
         val prompt = LocalLlmPromptBuilder().systemPrompt(AssistantLanguage.RUSSIAN)
-        assertTrue(prompt.contains("Для любого обычного вопроса"))
+        assertTrue(prompt.contains("Обычный вопрос или разговор"))
         assertTrue(prompt.contains("Не используй unresolved"))
+        assertTrue(prompt.length < 1_200)
     }
 
     @Test
@@ -31,6 +32,7 @@ class LocalLlmDecisionParserTest {
         )
         assertTrue(!prompt.contains("Я пока не знаю ответа на это локально"))
         assertTrue(prompt.endsWith("/no_think"))
+        assertTrue(prompt.length < 1_000)
     }
 
     @Test

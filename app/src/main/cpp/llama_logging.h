@@ -15,11 +15,9 @@
 #endif
 
 #ifndef LOG_MIN_LEVEL
-#if defined(NDEBUG)
+// Token-by-token verbose logging makes debug inference materially slower and
+// floods logcat. Keep lifecycle/errors visible while profiling real latency.
 #define LOG_MIN_LEVEL ANDROID_LOG_INFO
-#else
-#define LOG_MIN_LEVEL ANDROID_LOG_VERBOSE
-#endif
 #endif
 
 static inline int ai_should_log(int prio) {
@@ -31,11 +29,9 @@ static inline int ai_should_log(int prio) {
 #endif
 }
 
-#if LOG_MIN_LEVEL <= ANDROID_LOG_VERBOSE
-#define LOGv(...) do { if (ai_should_log(ANDROID_LOG_VERBOSE)) __android_log_print(ANDROID_LOG_VERBOSE, LOG_TAG, __VA_ARGS__); } while (0)
-#else
+// Never emit per-token logs from the Android binding. They add synchronous
+// logcat work to the generation loop and make latency measurements noisy.
 #define LOGv(...) ((void)0)
-#endif
 
 #if LOG_MIN_LEVEL <= ANDROID_LOG_DEBUG
 #define LOGd(...) do { if (ai_should_log(ANDROID_LOG_DEBUG)) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__); } while (0)

@@ -20,7 +20,10 @@ data class LocalLlmInferenceResult(
 )
 
 /** Thin single-threaded JNI wrapper around the official llama.cpp Android binding. */
-internal class LocalLlmNativeEngine(context: Context) : AutoCloseable {
+internal class LocalLlmNativeEngine(
+    context: Context,
+    private val threadCount: Int
+) : AutoCloseable {
     private val nativeLibDir = context.applicationInfo.nativeLibraryDir
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -35,7 +38,7 @@ internal class LocalLlmNativeEngine(context: Context) : AutoCloseable {
         unloadInternal()
         val started = System.currentTimeMillis()
         check(nativeLoad(model.absolutePath) == 0) { "llama.cpp could not load model" }
-        check(nativePrepare() == 0) { "llama.cpp could not prepare context" }
+        check(nativePrepare(threadCount.coerceIn(2, 8)) == 0) { "llama.cpp could not prepare context" }
         modelLoaded = true
         systemPromptReady = false
         System.currentTimeMillis() - started
@@ -115,7 +118,7 @@ internal class LocalLlmNativeEngine(context: Context) : AutoCloseable {
 
     private external fun nativeInit(nativeLibDir: String)
     private external fun nativeLoad(modelPath: String): Int
-    private external fun nativePrepare(): Int
+    private external fun nativePrepare(threadCount: Int): Int
     private external fun nativeSystemInfo(): String
     private external fun nativeBenchModel(pp: Int, tg: Int, pl: Int, nr: Int): String
     private external fun nativeProcessSystemPrompt(systemPrompt: String): Int

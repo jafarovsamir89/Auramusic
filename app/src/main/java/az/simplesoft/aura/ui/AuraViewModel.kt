@@ -71,6 +71,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
@@ -163,11 +164,16 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val localProvider = LocalMusicProvider(application)
     private val radioProvider = RadioBrowserProvider()
     private val preferences = application.getSharedPreferences("aura_state", Context.MODE_PRIVATE)
+    private val localLlmThreadCount = preferences.getInt(
+        "brain_threads",
+        LocalLlmReasoningProvider.recommendedThreadCount()
+    )
     private val stateRepository = AuraStateRepository(application)
     private val assistantMemory = CompactAssistantMemory(RoomAssistantMemoryPersistence(stateRepository))
     private val assistantCommandCoordinator = AssistantCommandCoordinator(application)
     private val localLlm = LocalLlmReasoningProvider(
         application,
+        threadCount = localLlmThreadCount,
         enabled = { preferences.getBoolean("brain_enabled", true) }
     )
     private val auraAi = AuraAiEngine(
@@ -235,6 +241,10 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     init {
         speech.setEngineMode(initialVoiceEngineMode)
+        viewModelScope.launch(Dispatchers.Default) {
+            delay(1_200L)
+            runCatching { localLlm.warmUp() }
+        }
         viewModelScope.launch {
             localLlm.diagnostics.collect { diagnostics ->
                 _state.update { it.copy(localLlmDiagnostics = diagnostics) }
