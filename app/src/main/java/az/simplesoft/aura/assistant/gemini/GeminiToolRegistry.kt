@@ -27,7 +27,7 @@ object GeminiToolRegistry {
         }
         return JSONArray().apply {
             put(declaration("search_music", "Search AURA's music catalog. Do not claim a result before the tool response.", query, listOf("query")))
-            put(declaration("play_mood_mix", "Build and play a mood-specific queue. Prefer this over a generic search when the user asks for music by mood.", JSONObject().put("mood", string("One of calm, drive, focus, energy, night, sad, happy")), listOf("mood")))
+            put(declaration("play_mood_mix", "Build and play a mood-specific queue. Prefer this over a generic search when the user asks for music by mood. Lullaby means a real nursery/bedtime song, not generic chill or lo-fi.", JSONObject().put("mood", string("One of calm, drive, focus, energy, night, sad, happy, lullaby")), listOf("mood")))
             put(declaration("play_track", "Play one selected track from the last search results.", JSONObject().put("index", integer("Zero-based result index")), listOf("index")))
             put(declaration("play_artist", "Find and play music by an artist.", JSONObject().put("artist", string("Artist name")), listOf("artist")))
             put(declaration("play_playlist", "Play a saved AURA playlist.", JSONObject().put("name", string("Playlist name")), listOf("name")))

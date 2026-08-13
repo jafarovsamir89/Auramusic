@@ -42,7 +42,8 @@ class PersonalRecommendationEngine(
     private val providerManager: ProviderManager,
     private val candidateRanker: CandidateRankerV2,
     private val identityResolver: TrackIdentityResolver,
-    private val candidateResolver: (suspend (TrackCandidate) -> Track?)? = null
+    private val candidateResolver: (suspend (TrackCandidate) -> Track?)? = null,
+    private val searchBrain: MusicSearchBrain = MusicSearchBrain()
 ) : RecommendationEngine {
 
     override suspend fun myMix(context: RecommendationContext, limit: Int): List<Track> {
@@ -86,8 +87,11 @@ class PersonalRecommendationEngine(
             Mood.NIGHT -> "ночная музыка night drive mix"
             Mood.SAD -> "грустные песни melancholic acoustic piano sad playlist"
             Mood.HAPPY -> "весёлая музыка happy mix"
+            Mood.LULLABY -> "колыбельная для сна ребёнка lullaby bedtime nursery song"
         }
-        return resolvePersonalized(search(query, limit * 2), context, limit)
+        val request = searchBrain.interpret(MusicSearchRequest(rawQuery = query, autoPlay = false))
+        val candidates = (providerManager.search(request) as? PluginResult.Success)?.value.orEmpty()
+        return resolvePersonalized(candidates, context, limit, request)
     }
 
     override suspend fun extendQueue(context: RecommendationContext, limit: Int): List<Track> {
@@ -102,24 +106,25 @@ class PersonalRecommendationEngine(
     private suspend fun related(track: Track): List<TrackCandidate> =
         (providerManager.related(track) as? PluginResult.Success)?.value.orEmpty()
 
-    private suspend fun search(query: String, limit: Int): List<TrackCandidate> =
-        (providerManager.search(
-            MusicSearchRequest(
+    private suspend fun search(query: String, limit: Int): List<TrackCandidate> {
+        val request = searchBrain.interpret(MusicSearchRequest(
                 rawQuery = query,
                 preferredProviderId = ONLINE_PROVIDER,
                 limit = limit.coerceIn(1, 30),
                 autoPlay = false
-            )
-        ) as? PluginResult.Success)?.value.orEmpty()
+            ))
+        return (providerManager.search(request) as? PluginResult.Success)?.value.orEmpty()
+    }
 
     private suspend fun resolvePersonalized(
         candidates: List<TrackCandidate>,
         context: RecommendationContext,
-        limit: Int
+        limit: Int,
+        rankingRequest: MusicSearchRequest = MusicSearchRequest(rawQuery = context.currentTrack?.artist.orEmpty(), autoPlay = false)
     ): List<Track> {
         val excluded = context.skippedTrackIds + context.queue.map(Track::id)
         val ranked = candidateRanker.rank(
-            MusicSearchRequest(rawQuery = context.currentTrack?.artist.orEmpty(), autoPlay = false),
+            rankingRequest,
             candidates
         ).asSequence()
             .map { it.candidate }

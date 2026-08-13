@@ -149,7 +149,8 @@ enum class Mood(val title: String) {
     ENERGY("энергичное"),
     NIGHT("ночное"),
     SAD("грустное"),
-    HAPPY("весёлое")
+    HAPPY("весёлое"),
+    LULLABY("колыбельное")
 }
 
 data class AssistantReply(

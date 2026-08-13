@@ -45,6 +45,23 @@ class CandidateRankerV2Test {
         assertEquals("near", ranked.first().candidate.id)
     }
 
+    @Test
+    fun semanticLullabyBeatsChillVariant() {
+        val request = MusicSearchRequest(
+            rawQuery = "колыбельная для ребёнка",
+            semanticTags = setOf("lullaby", "bedtime", "nursery"),
+            excludedTerms = setOf("chill", "lofi")
+        )
+        val ranked = ranker.rank(request, listOf(
+            candidate("chill", "Chill Lofi Mix"),
+            candidate("lullaby", "Lullaby Nursery Bedtime Song")
+        ))
+
+        assertEquals("lullaby", ranked.first().candidate.id)
+        assertTrue(ranked.first().reasons.any { it.startsWith("semantic-match") })
+        assertTrue(ranked.last().penalties.any { it.startsWith("semantic-excluded") })
+    }
+
     private fun candidate(
         id: String,
         title: String,

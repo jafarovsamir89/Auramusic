@@ -18,7 +18,8 @@ class MusicBrain(
     private val candidateRanker: CandidateRankerV2,
     private val identityResolver: TrackIdentityResolver,
     private val recommendationEngine: RecommendationEngine,
-    private val playbackCoordinator: PlaybackCoordinator
+    private val playbackCoordinator: PlaybackCoordinator,
+    private val searchBrain: MusicSearchBrain = MusicSearchBrain()
 ) {
     private data class ResolvedAlternative(
         val candidate: TrackCandidate,
@@ -27,12 +28,13 @@ class MusicBrain(
 
     private val alternativesByTrackId = mutableMapOf<String, List<TrackCandidate>>()
 
-    suspend fun search(request: MusicSearchRequest): SearchOutcome =
-        when (val result = providerManager.search(request)) {
+    suspend fun search(request: MusicSearchRequest): SearchOutcome {
+        val interpreted = searchBrain.interpret(request)
+        return when (val result = providerManager.search(interpreted)) {
             is PluginResult.Success -> {
                 val reliability = providerManager.stats().mapValues { (_, value) -> value.successRate }
                 val ranked = candidateRanker.rank(
-                    request,
+                    interpreted,
                     result.value,
                     RankingContext(providerReliability = reliability)
                 )
@@ -41,6 +43,7 @@ class MusicBrain(
             }
             is PluginResult.Failure -> SearchOutcome.Failure(result.reason, result.message)
         }
+    }
 
     suspend fun searchAndPlay(request: MusicSearchRequest): PlaybackOutcome {
         val search = search(request)

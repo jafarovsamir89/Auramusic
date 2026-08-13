@@ -53,9 +53,9 @@ class LocalIntentEngine {
             }
         }
         return when {
-            matchesAny(text, "очисти очередь", "очистить очередь", "очисть очередь", "удали очередь", "clear queue", "növbəni təmizlə") ->
+            matchesAny(text, "очисти очередь", "очистить очередь", "очисть очередь", "удали очередь", "clear queue", "clear the queue", "növbəni təmizlə") ->
                 action(MusicIntent.ClearQueue, language, "Очищаю очередь.", "Növbəni təmizləyirəm.", "Clearing the queue.")
-            matchesAny(text, "открой очередь", "покажи очередь", "open queue", "show queue", "növbəni göstər") || text == "очередь" ->
+            matchesAny(text, "открой очередь", "покажи очередь", "open queue", "show queue", "show the queue", "növbəni göstər") || text == "очередь" ->
                 action(MusicIntent.OpenQueue, language, "Открываю очередь.", "Növbəni açıram.", "Opening the queue.")
             matchesAny(text, "выключи автопродолжение", "отключи автопродолжение", "disable autoplay") ->
                 action(MusicIntent.AutoContinue(false), language, "Автопродолжение выключено.", "Avtomatik davam söndürüldü.", "Auto-continue is off.")
@@ -83,10 +83,10 @@ class LocalIntentEngine {
             return action(MusicIntent.PlayPlaylist(display, true), language,
                 "Перемешиваю плейлист $display.", "$display pleylistini qarışdırıram.", "Shuffling playlist $display.")
         }
-        if (matchesAny(text, "открой плейлисты", "покажи плейлисты", "мои плейлисты", "плейлисты", "open playlists", "my playlists", "pleylistlərimi göstər")) {
+        if (matchesAny(text, "открой плейлисты", "покажи плейлисты", "мои плейлисты", "плейлисты", "open playlists", "show playlists", "my playlists", "pleylistlərimi göstər")) {
             return action(MusicIntent.OpenPlaylists, language, "Открываю твои плейлисты.", "Pleylistlərini açıram.", "Opening your playlists.")
         }
-        if (matchesAny(text, "открой радио", "покажи радио", "радиостанции", "радио", "включи радио", "запусти радио", "поставь радио", "включи радиостанцию", "радио по странам", "open radio", "play radio", "radio stations", "turn on the radio", "radionu aç")) {
+        if (matchesAny(text, "открой радио", "покажи радио", "радиостанции", "радио", "включи радио", "запусти радио", "поставь радио", "включи радиостанцию", "радио по странам", "open radio", "show radio", "play radio", "radio stations", "turn on the radio", "radionu aç")) {
             return action(MusicIntent.OpenRadio, language, "Открываю радио по странам.", "Radionu açıram.", "Opening radio stations.")
         }
         if (matchesAny(text, "сохрани очередь", "save queue")) {
@@ -105,24 +105,24 @@ class LocalIntentEngine {
     }
 
     private fun localPlaybackIntent(text: String, language: AssistantLanguage): AssistantReply? = when {
-        matchesAny(text, "мой микс", "включи мой микс", "музыка для меня", "подбери мне музыку", "my mix", "mənim miksim") -> action(MusicIntent.MyMix, language, "Собираю твой микс.", "Sənin miksini hazırlayıram.", "Building your mix.")
-        matchesAny(text, "продолжить прослушивание", "продолжи слушать", "возобнови прослушивание", "continue listening", "musiqini davam etdir") -> action(MusicIntent.ContinueListening, language, "Продолжаю с того, что тебе нравится.", "Sevdiyin musiqidən davam edirəm.", "Continuing with music you like.")
-        matchesAny(text, "пауза", "поставь на паузу", "приостанови", "останови воспроизведение", "останови музыку", "выключи музыку", "выключи песню", "стоп музыка", "pauza", "стоп", "pause", "stop", "dayandır") -> action(MusicIntent.Pause, language, "Ставлю на паузу.", "Pauza edirəm.", "Pausing.")
-        matchesAny(text, "продолжи", "играй дальше", "возобнови", "сними с паузы", "включи воспроизведение", "resume", "continue playing", "davam et") -> action(MusicIntent.Play, language, "Продолжаю.", "Davam edirəm.", "Resuming.")
-        matchesAny(text, "следующая", "следующий", "следующий трек", "дальше", "переключи песню", "переключи трек", "next song", "next track", "növbəti mahnı") -> action(MusicIntent.Next, language, "Следующий трек.", "Növbəti mahnı.", "Next track.")
-        matchesAny(text, "предыдущая", "предыдущий", "предыдущий трек", "назад", "верни предыдущий", "previous track", "əvvəlki mahnı") -> action(MusicIntent.Previous, language, "Возвращаю предыдущий трек.", "Əvvəlki mahnıya qayıdıram.", "Going back one track.")
-        matchesAny(text, "громче", "прибавь звук", "увеличь громкость", "сделай погромче", "louder", "volume up", "səsi artır") -> action(MusicIntent.Louder, language, "Делаю громче.", "Səsi artırıram.", "Turning it up.")
-        matchesAny(text, "тише", "убавь звук", "уменьши громкость", "сделай потише", "quieter", "volume down", "səsi azalt") -> action(MusicIntent.Quieter, language, "Делаю тише.", "Səsi azaldıram.", "Turning it down.")
-        matchesAny(text, "без звука", "выключи звук", "заглуши", "mute", "səsi söndür") -> action(MusicIntent.Mute, language, "Выключаю звук.", "Səsi söndürürəm.", "Muting.")
-        matchesAny(text, "включи звук", "верни звук", "сними без звука", "unmute", "səsi aç") -> action(MusicIntent.Unmute, language, "Включаю звук.", "Səsi açıram.", "Unmuting.")
-        matchesAny(text, "убери из любимых", "убери из избранного", "сними лайк", "не нравится", "dislike", "remove from favorites", "xoşum gəlmir") -> action(MusicIntent.Unlike, language, "Убрала из любимых.", "Seçilmişlərdən sildim.", "Removed from favorites.")
-        matchesAny(text, "добавь в любимые", "добавь в избранное", "сохрани эту песню", "мне нравится", "лайк", "add to favorites", "like this", "xoşuma gəlir") -> action(MusicIntent.Like, language, "Добавила в любимые.", "Seçilmişlərə əlavə etdim.", "Added to favorites.")
-        matchesAny(text, "повтор", "повторяй", "повтори песню", "зацикли", "repeat", "təkrar et") -> action(MusicIntent.Repeat, language, "Переключаю режим повтора.", "Təkrar rejimini dəyişirəm.", "Changing repeat mode.")
-        matchesAny(text, "случайный порядок", "в случайном порядке", "перемешай", "перемешай песни", "шаффл", "shuffle", "qarışdır") -> action(MusicIntent.Shuffle, language, "Перемешиваю очередь.", "Növbəni qarışdırıram.", "Shuffling the queue.")
-        matchesAny(text, "что сейчас играет", "что играет", "какая песня играет", "что за трек", "what is playing", "nə səslənir") -> action(MusicIntent.NowPlaying, language, "Сейчас играет.", "Hazırda səslənir.", "Now playing.")
-        matchesAny(text, "открой историю", "покажи историю", "история прослушивания", "open history", "tarixçəni göstər") -> action(MusicIntent.OpenHistory, language, "Открываю историю.", "Tarixçəni açıram.", "Opening history.")
-        matchesAny(text, "похожее", "ещё такое", "что-то похожее", "похожие песни", "похожую музыку", "similar music", "more like this", "oxşar musiqi") -> action(MusicIntent.Similar, language, "Подбираю похожее.", "Oxşar musiqi seçirəm.", "Finding similar music.")
-        matchesAny(text, "режим машины", "автомобильный режим", "режим вождения", "я за рулём", "в машине", "car mode", "driving mode", "maşın rejimi") -> action(MusicIntent.CarMode, language, "Включаю автомобильный режим.", "Avtomobil rejimini açıram.", "Turning on car mode.")
+        matchesAny(text, "мой микс", "включи мой микс", "музыка для меня", "подбери мне музыку", "my mix", "play my mix", "mənim miksim") -> action(MusicIntent.MyMix, language, "Собираю твой микс.", "Sənin miksini hazırlayıram.", "Building your mix.")
+        matchesAny(text, "продолжить прослушивание", "продолжи слушать", "возобнови прослушивание", "continue listening", "resume listening", "musiqini davam etdir") -> action(MusicIntent.ContinueListening, language, "Продолжаю с того, что тебе нравится.", "Sevdiyin musiqidən davam edirəm.", "Continuing with music you like.")
+        matchesAny(text, "пауза", "поставь на паузу", "приостанови", "останови воспроизведение", "останови музыку", "выключи музыку", "выключи песню", "стоп музыка", "pauza", "стоп", "pause", "pause the music", "stop the music", "stop playback", "dayandır") -> action(MusicIntent.Pause, language, "Ставлю на паузу.", "Pauza edirəm.", "Pausing.")
+        matchesAny(text, "продолжи", "играй дальше", "возобнови", "сними с паузы", "включи воспроизведение", "resume", "resume music", "continue playing", "davam et") -> action(MusicIntent.Play, language, "Продолжаю.", "Davam edirəm.", "Resuming.")
+        matchesAny(text, "следующая", "следующий", "следующий трек", "дальше", "переключи песню", "переключи трек", "next", "next song", "next track", "növbəti mahnı") -> action(MusicIntent.Next, language, "Следующий трек.", "Növbəti mahnı.", "Next track.")
+        matchesAny(text, "предыдущая", "предыдущий", "предыдущий трек", "назад", "верни предыдущий", "previous", "previous track", "previous song", "əvvəlki mahnı") -> action(MusicIntent.Previous, language, "Возвращаю предыдущий трек.", "Əvvəlki mahnıya qayıdıram.", "Going back one track.")
+        matchesAny(text, "громче", "прибавь звук", "увеличь громкость", "сделай погромче", "louder", "turn it up", "volume up", "səsi artır") -> action(MusicIntent.Louder, language, "Делаю громче.", "Səsi artırıram.", "Turning it up.")
+        matchesAny(text, "тише", "убавь звук", "уменьши громкость", "сделай потише", "quieter", "turn it down", "volume down", "səsi azalt") -> action(MusicIntent.Quieter, language, "Делаю тише.", "Səsi azaldıram.", "Turning it down.")
+        matchesAny(text, "без звука", "выключи звук", "заглуши", "mute", "mute music", "səsi söndür") -> action(MusicIntent.Mute, language, "Выключаю звук.", "Səsi söndürürəm.", "Muting.")
+        matchesAny(text, "включи звук", "верни звук", "сними без звука", "unmute", "unmute music", "səsi aç") -> action(MusicIntent.Unmute, language, "Включаю звук.", "Səsi açıram.", "Unmuting.")
+        matchesAny(text, "убери из любимых", "убери из избранного", "сними лайк", "не нравится", "dislike", "unlike", "remove from favorites", "xoşum gəlmir") -> action(MusicIntent.Unlike, language, "Убрала из любимых.", "Seçilmişlərdən sildim.", "Removed from favorites.")
+        matchesAny(text, "добавь в любимые", "добавь в избранное", "сохрани эту песню", "мне нравится", "лайк", "add to favorites", "add this to favorites", "like this", "xoşuma gəlir") -> action(MusicIntent.Like, language, "Добавила в любимые.", "Seçilmişlərə əlavə etdim.", "Added to favorites.")
+        matchesAny(text, "повтор", "повторяй", "повтори песню", "зацикли", "repeat", "repeat this", "repeat song", "təkrar et") -> action(MusicIntent.Repeat, language, "Переключаю режим повтора.", "Təkrar rejimini dəyişirəm.", "Changing repeat mode.")
+        matchesAny(text, "случайный порядок", "в случайном порядке", "перемешай", "перемешай песни", "шаффл", "shuffle", "shuffle the queue", "qarışdır") -> action(MusicIntent.Shuffle, language, "Перемешиваю очередь.", "Növbəni qarışdırıram.", "Shuffling the queue.")
+        matchesAny(text, "что сейчас играет", "что играет", "какая песня играет", "что за трек", "what is playing", "what's playing", "now playing", "nə səslənir") -> action(MusicIntent.NowPlaying, language, "Сейчас играет.", "Hazırda səslənir.", "Now playing.")
+        matchesAny(text, "открой историю", "покажи историю", "история прослушивания", "open history", "show history", "listening history", "tarixçəni göstər") -> action(MusicIntent.OpenHistory, language, "Открываю историю.", "Tarixçəni açıram.", "Opening history.")
+        matchesAny(text, "похожее", "ещё такое", "что-то похожее", "похожие песни", "похожую музыку", "similar music", "more like this", "find similar", "oxşar musiqi") -> action(MusicIntent.Similar, language, "Подбираю похожее.", "Oxşar musiqi seçirəm.", "Finding similar music.")
+        matchesAny(text, "режим машины", "автомобильный режим", "режим вождения", "я за рулём", "в машине", "car mode", "driving mode", "driving", "maşın rejimi") -> action(MusicIntent.CarMode, language, "Включаю автомобильный режим.", "Avtomobil rejimini açıram.", "Turning on car mode.")
         else -> null
     }
 
@@ -143,7 +143,7 @@ class LocalIntentEngine {
 
     private fun explicitMusicSearch(text: String, language: AssistantLanguage): AssistantReply? {
         // Mixed speech is common in ASR; command cues must not depend on one detected language.
-        val musicCue = Regex("\\b(включи|поставь|сыграй|найди|cal|qos|seslendir|tap|play|put on|find)\\b")
+        val musicCue = Regex("\\b(включи|поставь|сыграй|найди|cal|qos|qoş|seslendir|tap|play|put on|find)\\b")
         if (!musicCue.containsMatchIn(text)) return null
 
         val mood = detectMood(text)
@@ -163,6 +163,7 @@ class LocalIntentEngine {
     }
 
     private fun detectMood(text: String): Mood? = when {
+        matchesAny(text, "колыбельн", "баю", "усып", "песн для сна ребен", "детск песн на ночь", "lullaby", "bedtime", "nursery song", "sleep song", "baby sleep", "layla", "beşik", "uşaq yuxu") -> Mood.LULLABY
         matchesAny(text, "спокойн", "расслаб", "релакс", "calm", "relax", "sakit") -> Mood.CALM
         matchesAny(text, "дорог", "поездк", "за рул", "driving", "road", "yol") -> Mood.DRIVE
         matchesAny(text, "работ", "концентрац", "фокус", "focus", "work", "diqqət") -> Mood.FOCUS

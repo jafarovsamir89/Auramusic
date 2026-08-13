@@ -17,9 +17,16 @@ data class MusicSearchRequest(
     val preferredProviderId: String? = null,
     val limit: Int = 10,
     val autoPlay: Boolean = true,
-    val mediaKind: SearchMediaKind = SearchMediaKind.TRACK
+    val mediaKind: SearchMediaKind = SearchMediaKind.TRACK,
+    /** Optional provider-facing query produced by the music-search brain. */
+    val providerQuery: String? = null,
+    /** Positive semantic hints used by candidate ranking (for example, lullaby or bedtime). */
+    val semanticTags: Set<String> = emptySet(),
+    /** Variants that should be down-ranked unless explicitly requested. */
+    val excludedTerms: Set<String> = emptySet()
 ) {
-    val query: String get() = listOfNotNull(artist, title).joinToString(" ").ifBlank { rawQuery }
+    val query: String get() = providerQuery?.takeIf(String::isNotBlank)
+        ?: listOfNotNull(artist, title).joinToString(" ").ifBlank { rawQuery }
 }
 
 data class TrackCandidate(

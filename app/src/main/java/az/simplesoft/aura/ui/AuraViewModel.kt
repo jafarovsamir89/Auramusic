@@ -810,6 +810,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         "night", "ночное", "ночь" -> Mood.NIGHT
         "sad", "грустное", "грусть", "печаль" -> Mood.SAD
         "happy", "весёлое", "радость" -> Mood.HAPPY
+        "lullaby", "колыбельное", "колыбельная", "баю", "bedtime", "nursery", "layla", "beşik" -> Mood.LULLABY
         else -> null
     }
 
@@ -2142,7 +2143,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     private fun String.isGenericMoodQuery(mood: Mood): Boolean {
         val withoutMoodWords = lowercase()
-            .replace(Regex("спокойн\\p{L}*|расслаб\\p{L}*|релакс\\p{L}*|дорог\\p{L}*|поездк\\p{L}*|энерг\\p{L}*|трениров\\p{L}*|груст\\p{L}*|печал\\p{L}*|вес[её]л\\p{L}*|радост\\p{L}*|ночн\\p{L}*|вечерн\\p{L}*|calm|relax|drive|focus|energy|sad|happy|night|sakit|kədərli|şad|gecə"), " ")
+            .replace(Regex("спокойн\\p{L}*|расслаб\\p{L}*|релакс\\p{L}*|дорог\\p{L}*|поездк\\p{L}*|энерг\\p{L}*|трениров\\p{L}*|груст\\p{L}*|печал\\p{L}*|вес[её]л\\p{L}*|радост\\p{L}*|ночн\\p{L}*|вечерн\\p{L}*|колыбельн\\p{L}*|баю|усып\\p{L}*|lullaby|bedtime|nursery|calm|relax|drive|focus|energy|sad|happy|night|sakit|kədərli|şad|gecə|beşik"), " ")
             .replace(Regex("музык\\p{L}*|песн\\p{L}*|трек\\p{L}*|music|song|track|musiqi|mahnı"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()

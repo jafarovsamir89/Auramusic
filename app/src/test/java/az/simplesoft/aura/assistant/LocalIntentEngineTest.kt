@@ -120,6 +120,20 @@ class LocalIntentEngineTest {
     }
 
     @Test
+    fun `lullaby is not reduced to generic calm music`() {
+        val search = engine.understand("Поставь настоящую колыбельную для ребёнка").intent as MusicIntent.Search
+
+        assertEquals(Mood.LULLABY, search.mood)
+        assertTrue(search.query.contains("колыбельн"))
+    }
+
+    @Test
+    fun `azerbaijani and english lullaby phrases are understood`() {
+        assertEquals(Mood.LULLABY, (engine.understand("qoş uşaq yuxu mahnısı").intent as MusicIntent.Search).mood)
+        assertEquals(Mood.LULLABY, (engine.understand("play a lullaby").intent as MusicIntent.Search).mood)
+    }
+
+    @Test
     fun `azerbaijani and english conversations do not search`() {
         val az = engine.understand("Salam")
         val en = engine.understand("How are you?")
