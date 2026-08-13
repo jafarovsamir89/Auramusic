@@ -110,8 +110,16 @@ class AuraWakeWordService : Service() {
             }
             commandAfterWakeWord == null -> Unit
             commandAfterWakeWord.isBlank() -> {
-                waitingForFollowUp = true
-                followUpExpiresAt = System.currentTimeMillis() + FOLLOW_UP_WINDOW_MS
+                if (AuraWakeWordBus.submitActivation()) {
+                    waitingForFollowUp = false
+                    followUpExpiresAt = 0L
+                    cooldownAfterCommand = true
+                    state = WakeWordServiceState.EXECUTING
+                    Log.i(TAG, "Wake-word activation routed to active AURA session")
+                } else {
+                    waitingForFollowUp = true
+                    followUpExpiresAt = System.currentTimeMillis() + FOLLOW_UP_WINDOW_MS
+                }
             }
             else -> {
                 cooldownAfterCommand = true

@@ -255,7 +255,12 @@ fun AuraApp(
     }
     LaunchedEffect(Unit) {
         vm.resumeWakeWordServiceIfNeeded()
-        AuraWakeWordBus.commands.collect { command -> vm.handleWakeWordCommand(command) }
+        AuraWakeWordBus.events.collect { event ->
+            when (event) {
+                AuraWakeWordBus.Event.Activated -> voiceInput()
+                is AuraWakeWordBus.Event.Command -> vm.handleWakeWordCommand(event.text)
+            }
+        }
     }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -563,7 +568,7 @@ private fun HomeScreen(
             )
             Spacer(Modifier.height(10.dp))
             AuraReferenceOrb(
-                listening = state.isListening,
+                listening = state.isListening || state.isVoiceSessionActive,
                 onClick = onVoice,
                 modifier = Modifier.fillMaxWidth().height(224.dp)
             )

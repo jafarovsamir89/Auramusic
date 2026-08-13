@@ -138,6 +138,8 @@ data class AuraUiState(
     val assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics? = null,
     val voiceEngineMode: VoiceEngineMode = VoiceEngineMode.VERIFIED_SILERO,
     val isListening: Boolean = false,
+    /** True while the conversational voice window is armed, including its 4 s idle grace period. */
+    val isVoiceSessionActive: Boolean = false,
     val voiceInputState: VoiceInputState = VoiceInputState.Idle,
     val recognitionBackend: RecognitionBackend = RecognitionBackend.Unavailable,
     val voiceDiagnostics: VoiceCaptureDiagnostics? = null,
@@ -467,6 +469,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun setQuery(value: String) = _state.update { it.copy(query = value) }
 
     fun setVoiceInputState(value: VoiceInputState, backend: RecognitionBackend) {
+        val sessionActive = value !is VoiceInputState.Idle &&
+            value !is VoiceInputState.TranscriptReady &&
+            value !is VoiceInputState.PermissionRequired &&
+            value !is VoiceInputState.ModelRequired &&
+            value !is VoiceInputState.NoSpeech &&
+            value !is VoiceInputState.Failed
         _state.update { current ->
             val status = when (value) {
                 VoiceInputState.Idle -> current.assistantText
@@ -482,6 +490,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             current.copy(
                 assistantText = status,
                 isListening = value is VoiceInputState.Listening,
+                isVoiceSessionActive = sessionActive,
                 voiceInputState = value,
                 recognitionBackend = backend
             )
@@ -511,6 +520,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             it.copy(
                 assistantText = "Smart Voice подключается…",
                 isListening = false,
+                isVoiceSessionActive = true,
                 isAssistantThinking = true,
                 voiceInputState = VoiceInputState.CheckingAvailability,
                 recognitionBackend = RecognitionBackend.Unavailable
@@ -527,34 +537,60 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 geminiAudioInput.start(
                     scope = viewModelScope,
                     onChunk = geminiSession::sendAudio,
-                    onSpeechEnd = geminiSession::markSpeechEnded,
+                    onSpeechEnd = {
+                        geminiSession.markSpeechEnded()
+                        _state.update {
+                            it.copy(
+                                isListening = false,
+                                isVoiceSessionActive = true,
+                                isAssistantThinking = true,
+                                voiceInputState = VoiceInputState.Processing
+                            )
+                        }
+                        armGeminiIdleTimeout()
+                    },
                     onSpeechStart = {
                         geminiIdleJob?.cancel()
+                        _state.update {
+                            it.copy(
+                                isListening = true,
+                                isVoiceSessionActive = true,
+                                isAssistantThinking = false,
+                                voiceInputState = VoiceInputState.Listening
+                            )
+                        }
                         if (geminiSession.state.value == GeminiSessionState.MODEL_SPEAKING) geminiSession.interrupt()
                     },
                     onState = { listening ->
-                        _state.update {
-                            it.copy(
-                                isListening = listening,
-                                isAssistantThinking = !listening,
-                                voiceInputState = if (listening) VoiceInputState.Listening else VoiceInputState.Processing
-                            )
-                        }
-                        if (!listening) {
-                            geminiSession.markSpeechEnded()
-                            geminiIdleJob?.cancel()
-                            geminiIdleJob = viewModelScope.launch {
-                                delay(GeminiLiveConfig.IDLE_TIMEOUT_MS)
-                                geminiAudioInput.stop()
-                                geminiSession.close()
-                                resumeWakeWordServiceIfNeeded()
+                        if (listening) {
+                            _state.update {
+                                it.copy(
+                                    isListening = true,
+                                    isVoiceSessionActive = true,
+                                    isAssistantThinking = false,
+                                    voiceInputState = VoiceInputState.Listening
+                                )
                             }
                         }
                     }
                 )
+                // The wake word itself opens a four-second conversational
+                // window, even when the user has not spoken the command yet.
+                armGeminiIdleTimeout()
             }.onFailure { error ->
-                _state.update { it.copy(isListening = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Failed(error.message ?: "Gemini Voice недоступен", error)) }
+                _state.update { it.copy(isListening = false, isVoiceSessionActive = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Failed(error.message ?: "Gemini Voice недоступен", error)) }
             }
+        }
+    }
+
+    private fun armGeminiIdleTimeout() {
+        geminiIdleJob?.cancel()
+        geminiIdleJob = viewModelScope.launch {
+            delay(GeminiLiveConfig.IDLE_TIMEOUT_MS)
+            geminiAudioInput.stop()
+            geminiSession.close()
+            _state.update { it.copy(isListening = false, isVoiceSessionActive = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Idle) }
+            resumeWakeWordServiceIfNeeded()
         }
     }
 
@@ -563,7 +599,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         geminiAudioInput.stop()
         geminiSession.markSpeechEnded()
         resumeWakeWordServiceIfNeeded()
-        _state.update { it.copy(isListening = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Idle) }
+        _state.update { it.copy(isListening = false, isVoiceSessionActive = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Idle) }
     }
 
     fun setGeminiVoice(voice: String) {
