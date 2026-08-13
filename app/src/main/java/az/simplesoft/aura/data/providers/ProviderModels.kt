@@ -25,7 +25,9 @@ data class MusicSearchRequest(
     /** Variants that should be down-ranked unless explicitly requested. */
     val excludedTerms: Set<String> = emptySet(),
     /** True only for a resolved artist command; provider results are filtered before playback. */
-    val artistStrict: Boolean = false
+    val artistStrict: Boolean = false,
+    /** Permit a result with generic/missing artist metadata only when its title contains the requested artist. */
+    val allowUnattributedArtistMetadata: Boolean = false
 ) {
     val query: String get() = providerQuery?.takeIf(String::isNotBlank)
         ?: listOfNotNull(artist, title).joinToString(" ").ifBlank { rawQuery }

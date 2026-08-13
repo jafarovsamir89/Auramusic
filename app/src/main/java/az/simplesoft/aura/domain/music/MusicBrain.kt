@@ -12,6 +12,10 @@ import az.simplesoft.aura.data.search.RankingContext
 import az.simplesoft.aura.data.search.TrackIdentityResolver
 import az.simplesoft.aura.data.search.UnifiedTrack
 import az.simplesoft.aura.domain.artist.ArtistSearchResultValidator
+import az.simplesoft.aura.domain.artist.ArtistQueryVariants
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlin.math.abs
 
 class MusicBrain(
@@ -32,16 +36,34 @@ class MusicBrain(
 
     suspend fun search(request: MusicSearchRequest): SearchOutcome {
         val interpreted = searchBrain.interpret(request)
-        return when (val result = providerManager.search(interpreted)) {
-            is PluginResult.Success -> {
+        val searchRequests = if (interpreted.artistStrict && !interpreted.artist.isNullOrBlank()) {
+            ArtistQueryVariants.forSearch(interpreted.rawQuery, interpreted.artist).map { variant ->
+                interpreted.copy(rawQuery = variant, providerQuery = variant)
+            }
+        } else listOf(interpreted)
+        val providerResults = coroutineScope {
+            searchRequests.map { query -> async { providerManager.search(query) } }.awaitAll()
+        }
+        val successful = providerResults.filterIsInstance<PluginResult.Success<List<TrackCandidate>>>()
+        if (successful.isEmpty()) {
+            val failure = providerResults.filterIsInstance<PluginResult.Failure>().firstOrNull()
+                ?: return SearchOutcome.Failure(az.simplesoft.aura.data.plugins.core.PluginFailureReason.NOT_FOUND, "No tracks found")
+            return SearchOutcome.Failure(failure.reason, failure.message)
+        }
+        val candidates = successful.flatMap { it.value }.distinctBy { "${it.providerId}:${it.id}" }
+        return run {
                 val reliability = providerManager.stats().mapValues { (_, value) -> value.successRate }
                 val ranked = candidateRanker.rank(
                     interpreted,
-                    result.value,
+                    candidates,
                     RankingContext(providerReliability = reliability)
                 )
                 val validated = if (interpreted.artistStrict && !interpreted.artist.isNullOrBlank()) {
-                    val validation = artistValidator.validate(interpreted.artist, ranked.map { it.candidate })
+                    val validation = artistValidator.validate(
+                        interpreted.artist,
+                        ranked.map { it.candidate },
+                        allowUnattributed = interpreted.allowUnattributedArtistMetadata
+                    )
                     if (validation.accepted.isEmpty()) {
                         return SearchOutcome.Failure(
                             az.simplesoft.aura.data.plugins.core.PluginFailureReason.NOT_FOUND,
@@ -53,11 +75,10 @@ class MusicBrain(
                 val unified = identityResolver.unify(validated)
                 SearchOutcome.Success(
                     unified,
-                    result.diagnostics + if (interpreted.artistStrict) mapOf("artistValidator" to "${validated.size}/${ranked.size}") else emptyMap()
+                    successful.first().diagnostics + mapOf("artistSearchVariants" to searchRequests.size.toString()) +
+                        if (interpreted.artistStrict) mapOf("artistValidator" to "${validated.size}/${ranked.size}") else emptyMap()
                 )
             }
-            is PluginResult.Failure -> SearchOutcome.Failure(result.reason, result.message)
-        }
     }
 
     suspend fun searchAndPlay(request: MusicSearchRequest): PlaybackOutcome {

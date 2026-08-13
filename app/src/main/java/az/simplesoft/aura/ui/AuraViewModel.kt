@@ -829,7 +829,15 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     is ArtistResolveResult.Resolved -> JSONObject().put("canonicalArtist", artist).put("artistId", resolved.candidate.artistId).put("matchType", resolved.candidate.matchType.name).put("confidence", resolved.candidate.score)
                     else -> JSONObject().put("canonicalArtist", artist)
                 }
-                searchTracks(MusicSearchRequest(rawQuery = artist, artist = artist, autoPlay = true, artistStrict = true)).join()
+                searchTracks(
+                    MusicSearchRequest(
+                        rawQuery = artist,
+                        artist = artist,
+                        autoPlay = true,
+                        artistStrict = true,
+                        allowUnattributedArtistMetadata = true
+                    )
+                ).join()
                 val searchTrack = state.value.searchResults.firstOrNull()
                 val track = state.value.nowTrack.takeIf {
                     it.id != DemoCatalog.tracks.first().id &&

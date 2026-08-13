@@ -62,6 +62,34 @@ class ArtistResolverTest {
     }
 
     @Test
+    fun `unattributed YouTube result is accepted when title carries requested artist`() {
+        val candidate = TrackCandidate(
+            "youtube", "title-evidence", "Aygun Kazimova - Mahnı", "YouTube Music",
+            "https://example/title-evidence", channel = "YouTube Music"
+        )
+        val result = validator.validate("Aygün Kazımova", listOf(candidate), allowUnattributed = true)
+        assertEquals(listOf(candidate), result.accepted)
+    }
+
+    @Test
+    fun `explicitly conflicting channel is rejected even when title mentions requested artist`() {
+        val candidate = TrackCandidate(
+            "youtube", "wrong-channel", "Aygun Kazimova cover", "Teymur Əmrah",
+            "https://example/wrong-channel", channel = "Teymur Əmrah"
+        )
+        val result = validator.validate("Aygün Kazımova", listOf(candidate), allowUnattributed = true)
+        assertEquals(listOf(candidate), result.rejected)
+    }
+
+    @Test
+    fun `search variants remove Azerbaijani endings and add folded spelling`() {
+        val variants = ArtistQueryVariants.forSearch("Aygün Kazımovanın")
+        assertTrue("variants=$variants", "Aygün Kazımova" in variants)
+        assertTrue("aygun kazimova" in variants)
+        assertTrue(variants.size <= 4)
+    }
+
+    @Test
     fun `corpus has 300 deterministic lookup cases`() = runBlocking {
         val base = listOf(
             "Aygün Kazımova", "Aygun Kazimova", "Röya", "Roya", "Miri Yusuf", "Eyyub Yagubov",

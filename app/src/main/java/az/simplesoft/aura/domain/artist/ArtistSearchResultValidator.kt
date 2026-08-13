@@ -10,19 +10,45 @@ data class ArtistValidationResult(
 
 /** Guardrail for provider metadata: an artist-specific request may never play an unrelated result. */
 class ArtistSearchResultValidator {
-    fun validate(requestedArtist: String, candidates: List<TrackCandidate>): ArtistValidationResult {
+    fun validate(
+        requestedArtist: String,
+        candidates: List<TrackCandidate>,
+        allowUnattributed: Boolean = false
+    ): ArtistValidationResult {
         val requested = ArtistNameNormalizer.folded(requestedArtist)
         if (requested.isBlank()) return ArtistValidationResult(emptyList(), candidates, emptyMap())
+        val requestedForms = (ArtistQueryVariants.forSearch(requestedArtist) + requested)
+            .map(ArtistNameNormalizer::folded)
+            .filter(String::isNotBlank)
+            .distinct()
         val accepted = mutableListOf<TrackCandidate>()
         val rejected = mutableListOf<TrackCandidate>()
         val scores = linkedMapOf<String, Float>()
         candidates.forEach { candidate ->
-            val score = artistSimilarity(requested, ArtistNameNormalizer.folded(candidate.artist))
+            val declaredArtist = ArtistNameNormalizer.folded(candidate.artist)
+            val channelArtist = ArtistNameNormalizer.folded(candidate.channel.orEmpty())
+            val declaredScore = requestedForms.maxOf { artistSimilarity(it, declaredArtist) }
+            val channelScore = requestedForms.maxOf { artistSimilarity(it, channelArtist) }
+            val titleScore = requestedForms.maxOf { titleEvidence(it, candidate.title) }
+            val hasConflict = listOf(declaredArtist, channelArtist)
+                .filter { it.isNotBlank() && !isGenericMetadata(it) }
+                .any { requestedForms.maxOf { form -> artistSimilarity(form, it) } < CONFLICT_THRESHOLD }
+            val unattributedEvidence = allowUnattributed &&
+                listOf(declaredArtist, channelArtist).all { it.isBlank() || isGenericMetadata(it) } &&
+                titleScore >= TITLE_EVIDENCE_THRESHOLD
+            val score = maxOf(declaredScore, channelScore, titleScore)
             scores["${candidate.providerId}:${candidate.id}"] = score
-            if (score >= ACCEPT_THRESHOLD) accepted += candidate else rejected += candidate
+            if ((!hasConflict && score >= ACCEPT_THRESHOLD) || unattributedEvidence) accepted += candidate else rejected += candidate
         }
         return ArtistValidationResult(accepted, rejected, scores)
     }
+
+    private fun titleEvidence(requested: String, title: String): Float {
+        val actual = ArtistNameNormalizer.folded(title)
+        return if (actual.contains(requested)) TITLE_EVIDENCE_THRESHOLD else artistSimilarity(requested, actual) * .75f
+    }
+
+    private fun isGenericMetadata(value: String): Boolean = value in GENERIC_METADATA
 
     private fun artistSimilarity(requested: String, actual: String): Float {
         if (requested == actual) return 1f
@@ -47,5 +73,10 @@ class ArtistSearchResultValidator {
         return (1f - previous[b.length].toFloat() / maxOf(a.length, b.length, 1)).coerceIn(0f, 1f)
     }
 
-    companion object { private const val ACCEPT_THRESHOLD = 0.82f }
+    companion object {
+        private const val ACCEPT_THRESHOLD = 0.82f
+        private const val CONFLICT_THRESHOLD = 0.45f
+        private const val TITLE_EVIDENCE_THRESHOLD = 0.92f
+        private val GENERIC_METADATA = setOf("youtube", "youtube music", "music", "official audio", "official artist channel")
+    }
 }
