@@ -17,6 +17,7 @@ sealed interface MusicIntent {
     data object Quieter : MusicIntent
     data object Mute : MusicIntent
     data object Unmute : MusicIntent
+    data class SetVolume(val percent: Int) : MusicIntent
     data object Repeat : MusicIntent
     data object Shuffle : MusicIntent
     data object NowPlaying : MusicIntent
@@ -30,6 +31,14 @@ sealed interface MusicIntent {
     data class CreatePlaylist(val name: String, val includeQueue: Boolean) : MusicIntent
     data class PlayPlaylist(val name: String, val shuffled: Boolean = false) : MusicIntent
     data object Similar : MusicIntent
+    data object MoreLikeThis : MusicIntent
+    data object NotThis : MusicIntent
+    data class SleepTimer(val minutes: Int) : MusicIntent
+    data object CancelSleepTimer : MusicIntent
+    data object StopAfterTrack : MusicIntent
+    data object RemoveLastFromQueue : MusicIntent
+    data object ClearMemory : MusicIntent
+    data class Composite(val commands: List<MusicIntent>) : MusicIntent
     data object MyMix : MusicIntent
     data object ContinueListening : MusicIntent
     data object CarMode : MusicIntent

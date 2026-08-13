@@ -23,4 +23,21 @@ class MusicSearchBrainTest {
         assertTrue("nursery" in interpreted.query)
         assertTrue("bedtime" in interpreted.semanticTags)
     }
+
+    @Test
+    fun `sleep request excludes energetic mixes`() {
+        val interpreted = brain.interpret(MusicSearchRequest(rawQuery = "музыка чтобы уснуть"))
+
+        assertTrue("sleep" in interpreted.semanticTags)
+        assertTrue("hardstyle" in interpreted.excludedTerms)
+    }
+
+    @Test
+    fun `sad request prefers acoustic piano and rejects party`() {
+        val interpreted = brain.interpret(MusicSearchRequest(rawQuery = "поставь грустную песню"))
+
+        assertTrue("acoustic" in interpreted.query)
+        assertTrue("piano" in interpreted.semanticTags)
+        assertTrue("party" in interpreted.excludedTerms)
+    }
 }

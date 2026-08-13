@@ -63,6 +63,30 @@ class MusicSearchBrain {
                 semanticTags = setOf("rain", "nature", "ambient")
             ),
             Profile(
+                triggers = setOf("для сна", "уснуть", "сон", "sleep music", "music for sleep", "yuxu musiqisi"),
+                providerTerms = "sleep soft piano bedtime music",
+                semanticTags = setOf("sleep", "bedtime", "soft", "piano"),
+                excludedTerms = setOf("workout", "hardstyle", "party", "remix")
+            ),
+            Profile(
+                triggers = setOf("спокойн", "расслаб", "релакс", "calm music", "relaxing", "sakit musiqi"),
+                providerTerms = "calm relaxing soft music",
+                semanticTags = setOf("calm", "relaxing", "soft"),
+                excludedTerms = setOf("hardstyle", "screamo", "reaction")
+            ),
+            Profile(
+                triggers = setOf("грустн", "печаль", "sad music", "melancholy", "kədərli musiqi"),
+                providerTerms = "melancholic acoustic piano sad song",
+                semanticTags = setOf("sad", "melancholy", "acoustic", "piano"),
+                excludedTerms = setOf("happy", "party", "workout", "comedy")
+            ),
+            Profile(
+                triggers = setOf("для концентрации", "фокус", "focus music", "study music", "diqqət musiqisi"),
+                providerTerms = "focus study instrumental music",
+                semanticTags = setOf("focus", "study", "instrumental"),
+                excludedTerms = setOf("lyrics", "party", "reaction")
+            ),
+            Profile(
                 triggers = setOf("для тренировки", "тренировоч", "workout", "gym music", "məşq musiqisi"),
                 providerTerms = "workout gym energetic music",
                 semanticTags = setOf("workout", "gym", "energy")

@@ -81,6 +81,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -153,6 +154,8 @@ data class AuraUiState(
     val repeatMode: AuraRepeatMode = AuraRepeatMode.OFF,
     val isRecommendationLoading: Boolean = false,
     val autoContinueEnabled: Boolean = true,
+    val sleepTimerEndsAt: Long? = null,
+    val stopAfterTrack: Boolean = false,
     val searchPhase: SearchPhase = SearchPhase.IDLE,
     val diagnostics: ProviderDiagnostics = ProviderDiagnostics(),
     val queue: List<Track> = DemoCatalog.tracks,
@@ -345,6 +348,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         viewModelScope.launch {
             while (isActive) {
                 delay(500L)
+                val timer = state.value.sleepTimerEndsAt
+                if (timer != null && System.currentTimeMillis() >= timer) {
+                    playback.pause()
+                    _state.update { it.copy(sleepTimerEndsAt = null, assistantText = "Таймер сна остановил музыку.") }
+                }
                 val position = playback.currentPositionMs()
                 val duration = playback.durationMs()
                 if (!hasPreparedMedia && position == 0L && duration == 0L) continue
@@ -743,6 +751,14 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             "resume_music" -> { playCurrent(); ok("Воспроизведение продолжено") }
             "open_radio" -> { openRadio(); ok("Открываю радио по странам") }
             "clear_queue" -> { clearQueue(); ok("Очередь очищена") }
+            "remove_last_queue_track" -> { removeLastFromQueue(); ok("Последний трек удалён из очереди") }
+            "set_sleep_timer" -> {
+                val minutes = args.optInt("minutes", -1)
+                if (minutes !in 1..240) GeminiToolResult("error", "Таймер должен быть от 1 до 240 минут")
+                else { setSleepTimer(minutes); ok("Остановлю музыку через $minutes минут") }
+            }
+            "cancel_sleep_timer" -> { cancelSleepTimer(); ok("Таймер сна выключен") }
+            "stop_after_track" -> { setStopAfterTrack(true); ok("Остановлюсь после текущей песни") }
             "volume_up" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 0); ok("Громкость увеличена") }
             "volume_down" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, 0); ok("Громкость уменьшена") }
             "set_volume" -> {
@@ -773,6 +789,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             "get_queue" -> ok("Очередь получена", JSONObject().put("tracks", state.value.queue.take(10).joinToString { "${it.title} — ${it.artist}" }))
             "get_recent_history" -> ok("История получена", JSONObject().put("tracks", state.value.history.takeLast(10).joinToString { "${it.title} — ${it.artist}" }))
             "find_similar_music" -> { playSimilarMix(); ok("Ищу похожую музыку") }
+            "more_like_this" -> { playSimilarMix(); ok("Подбираю ещё похожее") }
+            "reject_current_track" -> { rejectCurrentTrack(); ok("Трек пропущен и учтён") }
+            "clear_memory" -> { assistantMemory.clear(); geminiUserContext = ""; ok("Локальная память очищена") }
             "play_mood_mix" -> {
                 val mood = moodFromGemini(args.optString("mood"))
                     ?: return GeminiToolResult("error", "Не знаю такое настроение")
@@ -1030,6 +1049,14 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     private fun dispatchAssistantReply(answer: AssistantReply): Job? {
+        if (answer.intent is MusicIntent.Composite) {
+            val commands = answer.intent.commands
+            return viewModelScope.launch {
+                commands.map { command ->
+                    dispatchAssistantReply(answer.copy(intent = command, text = ""))
+                }.filterNotNull().joinAll()
+            }
+        }
         when (val intent = answer.intent) {
             MusicIntent.OpenPlaylists -> {
                 _state.update {
@@ -1123,8 +1150,42 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             return searchTracks(MusicSearchRequest(rawQuery = query, artist = requestedSearch.artist))
         }
 
-        if (answer.intent == MusicIntent.Similar) {
+        if (answer.intent == MusicIntent.MoreLikeThis || answer.intent == MusicIntent.Similar) {
             playSimilarMix()
+            return null
+        }
+
+        if (answer.intent == MusicIntent.NotThis) {
+            rejectCurrentTrack()
+            return null
+        }
+
+        if (answer.intent is MusicIntent.SleepTimer) {
+            setSleepTimer(answer.intent.minutes)
+            return null
+        }
+
+        if (answer.intent == MusicIntent.CancelSleepTimer) {
+            cancelSleepTimer()
+            return null
+        }
+
+        if (answer.intent == MusicIntent.StopAfterTrack) {
+            setStopAfterTrack(true)
+            return null
+        }
+
+        if (answer.intent == MusicIntent.RemoveLastFromQueue) {
+            removeLastFromQueue()
+            return null
+        }
+
+        if (answer.intent == MusicIntent.ClearMemory) {
+            viewModelScope.launch {
+                assistantMemory.clear()
+                geminiUserContext = ""
+                _state.update { it.copy(assistantText = "Локальная память очищена.") }
+            }
             return null
         }
 
@@ -1209,6 +1270,10 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 MusicIntent.Unmute -> current.copy(assistantText = answer.text).also {
                     audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
                 }
+                is MusicIntent.SetVolume -> current.copy(assistantText = answer.text).also {
+                    val level = (audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * answer.intent.percent / 100.0).toInt()
+                    audio.setStreamVolume(AudioManager.STREAM_MUSIC, level, 0)
+                }
                 MusicIntent.CarMode -> current.copy(isCarMode = true, assistantText = answer.text)
                 MusicIntent.NowPlaying -> current.copy(
                     assistantText = "Сейчас играет ${current.nowTrack.title} — ${current.nowTrack.artist}."
@@ -1225,7 +1290,15 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 MusicIntent.OpenQueue,
                 MusicIntent.ClearQueue,
                 is MusicIntent.QueueTrack,
-                is MusicIntent.AutoContinue -> current
+                is MusicIntent.AutoContinue,
+                MusicIntent.MoreLikeThis,
+                MusicIntent.NotThis,
+                is MusicIntent.SleepTimer,
+                MusicIntent.CancelSleepTimer,
+                MusicIntent.StopAfterTrack,
+                MusicIntent.RemoveLastFromQueue,
+                MusicIntent.ClearMemory,
+                is MusicIntent.Composite -> current
                 MusicIntent.Similar,
                 MusicIntent.MyMix,
                 MusicIntent.ContinueListening,
@@ -1325,6 +1398,40 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         QueueEditor.remove(state.value.queue, state.value.currentIndex, track.id),
         "Убрано из очереди: ${track.title}"
     )
+
+    fun removeLastFromQueue() = applyQueueEdit(
+        QueueEditor.removeLast(state.value.queue, state.value.currentIndex),
+        "Последний трек удалён из очереди"
+    )
+
+    fun setSleepTimer(minutes: Int) {
+        val safeMinutes = minutes.coerceIn(1, 240)
+        _state.update {
+            it.copy(
+                sleepTimerEndsAt = System.currentTimeMillis() + safeMinutes * 60_000L,
+                assistantText = "Остановлю музыку через $safeMinutes минут."
+            )
+        }
+    }
+
+    fun cancelSleepTimer() = _state.update {
+        it.copy(sleepTimerEndsAt = null, assistantText = "Таймер сна выключен.")
+    }
+
+    fun setStopAfterTrack(enabled: Boolean) = _state.update {
+        it.copy(
+            stopAfterTrack = enabled,
+            assistantText = if (enabled) "Остановлюсь после этой песни." else "Продолжу после этой песни."
+        )
+    }
+
+    fun rejectCurrentTrack() {
+        val current = state.value.nowTrack
+        if (current.id == DemoCatalog.tracks.first().id) return
+        recordRecommendationEvent(current, RecommendationEventType.SKIP)
+        _state.update { it.copy(skippedTrackIds = it.skippedTrackIds + current.id, assistantText = "Убрала этот вариант.") }
+        if (hasPreparedMedia) next()
+    }
 
     fun moveQueueTrack(from: Int, to: Int) = applyQueueEdit(
         QueueEditor.move(state.value.queue, state.value.currentIndex, from, to),
@@ -2044,6 +2151,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     override fun onTrackChanged(trackId: String) {
+        val shouldStopAfterPrevious = state.value.stopAfterTrack && state.value.nowTrack.id != trackId
         _state.update { current ->
             val index = current.queue.indexOfFirst { it.id == trackId }
             if (index < 0) current else current.copy(
@@ -2060,6 +2168,10 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
         state.value.queue.find { it.id == trackId }?.let {
             recordRecommendationEvent(it, RecommendationEventType.PLAY)
+        }
+        if (shouldStopAfterPrevious) {
+            playback.pause()
+            _state.update { it.copy(stopAfterTrack = false, assistantText = "Музыка остановлена после песни.") }
         }
         maybeExtendQueue()
     }

@@ -12,6 +12,29 @@ class LocalIntentEngine {
         val language = AssistantLanguage.detect(text)
         if (text.isBlank()) return conversation(language, phrase(language, "Я тебя не расслышала.", "Səni eşidə bilmədim.", "I didn't catch that."))
 
+        val compoundParts = text.split(Regex("\\s+(?:и|and|həm|sonra)\\s+"))
+            .map(String::trim)
+            .filter(String::isNotBlank)
+        if (compoundParts.size in 2..3) {
+            val commands = compoundParts.map { part -> understand(part).intent }
+                .filter { it != MusicIntent.Unknown && it !is MusicIntent.Search }
+            if (commands.size >= 2) {
+                return action(
+                    MusicIntent.Composite(commands), language,
+                    "Выполняю несколько команд.", "Bir neçə əmri yerinə yetirirəm.", "Running a few commands."
+                )
+            }
+        }
+
+        Regex("(?:громкость|звук)\\s+(?:на\\s+)?(\\d{1,3})\\s*(?:%|процент(?:ов|а)?)?").find(text)
+            ?.groupValues?.getOrNull(1)?.toIntOrNull()?.takeIf { it in 0..100 }?.let { percent ->
+                return action(MusicIntent.SetVolume(percent), language, "Громкость $percent процентов.", "Səs $percent faizdir.", "Volume set to $percent percent.")
+            }
+        Regex("(?:volume|səs)\\s+(?:to|at|\\s)?(\\d{1,3})\\s*%?").find(text)
+            ?.groupValues?.getOrNull(1)?.toIntOrNull()?.takeIf { it in 0..100 }?.let { percent ->
+                return action(MusicIntent.SetVolume(percent), language, "Громкость $percent процентов.", "Səs $percent faizdir.", "Volume set to $percent percent.")
+            }
+
         explicitQueueIntent(text, language)?.let { return it }
         explicitLibraryIntent(text, language)?.let { return it }
         localPlaybackIntent(text, language)?.let { return it }
@@ -33,6 +56,24 @@ class LocalIntentEngine {
     }
 
     private fun explicitQueueIntent(text: String, language: AssistantLanguage): AssistantReply? {
+        listOf(
+            Regex("таймер\\s+сна\\s+(\\d{1,3})"),
+            Regex("выключи\\s+через\\s+(\\d{1,3})"),
+            Regex("sleep\\s+timer\\s+(\\d{1,3})"),
+            Regex("yuxu\\s+taymeri\\s+(\\d{1,3})")
+        ).firstNotNullOfOrNull { regex -> regex.find(text)?.groupValues?.getOrNull(1)?.toIntOrNull() }
+            ?.takeIf { it in 1..240 }?.let { minutes ->
+                return action(MusicIntent.SleepTimer(minutes), language, "Выключу через $minutes минут.", "$minutes dəqiqəyə söndürəcəyəm.", "I'll stop in $minutes minutes.")
+            }
+        if (matchesAny(text, "отмени таймер", "выключи таймер сна", "cancel sleep timer", "stop sleep timer", "yuxu taymerini ləğv et")) {
+            return action(MusicIntent.CancelSleepTimer, language, "Таймер сна выключен.", "Yuxu taymeri söndürüldü.", "Sleep timer cancelled.")
+        }
+        if (matchesAny(text, "останови после этой песни", "выключись после трека", "stop after this song", "stop after the track", "mahnıdan sonra dayan")) {
+            return action(MusicIntent.StopAfterTrack, language, "Остановлюсь после этой песни.", "Bu mahnıdan sonra dayanacağam.", "I'll stop after this song.")
+        }
+        if (matchesAny(text, "удали последний трек", "удали последнюю песню", "remove last track", "remove the last song", "son mahnını sil")) {
+            return action(MusicIntent.RemoveLastFromQueue, language, "Удаляю последний трек из очереди.", "Son mahnını növbədən silirəm.", "Removing the last track from the queue.")
+        }
         listOf(
             Regex("(?:включи|поставь|сыграй)\\s+следующим\\s+(.+)"),
             Regex("(?:play|put)\\s+(.+?)\\s+next"),
@@ -121,12 +162,17 @@ class LocalIntentEngine {
         matchesAny(text, "случайный порядок", "в случайном порядке", "перемешай", "перемешай песни", "шаффл", "shuffle", "shuffle the queue", "qarışdır") -> action(MusicIntent.Shuffle, language, "Перемешиваю очередь.", "Növbəni qarışdırıram.", "Shuffling the queue.")
         matchesAny(text, "что сейчас играет", "что играет", "какая песня играет", "что за трек", "what is playing", "what's playing", "now playing", "nə səslənir") -> action(MusicIntent.NowPlaying, language, "Сейчас играет.", "Hazırda səslənir.", "Now playing.")
         matchesAny(text, "открой историю", "покажи историю", "история прослушивания", "open history", "show history", "listening history", "tarixçəni göstər") -> action(MusicIntent.OpenHistory, language, "Открываю историю.", "Tarixçəni açıram.", "Opening history.")
-        matchesAny(text, "похожее", "ещё такое", "что-то похожее", "похожие песни", "похожую музыку", "similar music", "more like this", "find similar", "oxşar musiqi") -> action(MusicIntent.Similar, language, "Подбираю похожее.", "Oxşar musiqi seçirəm.", "Finding similar music.")
+        matchesAny(text, "больше такого", "ещё такого", "мне нравится такое", "more like this", "play more like this", "daha belə") -> action(MusicIntent.MoreLikeThis, language, "Подбираю ещё похожее.", "Buna oxşar daha çox musiqi seçirəm.", "Finding more like this.")
+        matchesAny(text, "не это", "не такое", "убери эту песню", "не нравится эта песня", "not this", "don't play this", "bu deyil", "bunu istəmirəm") -> action(MusicIntent.NotThis, language, "Убираю этот вариант и подберу другой.", "Bu variantı silib başqasını seçirəm.", "I'll skip this and find another option.")
+        matchesAny(text, "похожее", "что-то похожее", "похожие песни", "похожую музыку", "similar music", "find similar", "oxşar musiqi") -> action(MusicIntent.Similar, language, "Подбираю похожее.", "Oxşar musiqi seçirəm.", "Finding similar music.")
         matchesAny(text, "режим машины", "автомобильный режим", "режим вождения", "я за рулём", "в машине", "car mode", "driving mode", "driving", "maşın rejimi") -> action(MusicIntent.CarMode, language, "Включаю автомобильный режим.", "Avtomobil rejimini açıram.", "Turning on car mode.")
         else -> null
     }
 
     private fun localConversation(text: String, language: AssistantLanguage): AssistantReply? {
+        if (matchesAny(text, "забудь всё обо мне", "забудь все обо мне", "удали мою память", "forget everything about me", "clear my memory", "məni unut")) {
+            return action(MusicIntent.ClearMemory, language, "Удаляю сохранённую память о тебе.", "Sənin haqqındakı yaddaşı silirəm.", "Clearing the memory saved about you.")
+        }
         val response = when {
             text.matches(Regex("(?:привет|здравствуй|доброе утро|добрый вечер|salam|sabahın xeyir|hello|hi|hey)[!. ]*")) ->
                 phrase(language, "Привет! Как настроение? Что будем слушать?", "Salam! Əhvalın necədir? Nə dinləyək?", "Hi! How are you feeling? What shall we listen to?")

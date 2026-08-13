@@ -703,6 +703,17 @@ private fun AuraHero(
         Text("Твоя музыка.\nВ нужный момент.", style = MaterialTheme.typography.displayLarge)
         Spacer(Modifier.height(9.dp))
         Text(state.assistantText, color = SecondaryText, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (state.sleepTimerEndsAt != null || state.stopAfterTrack) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                when {
+                    state.stopAfterTrack -> "⏹ Остановка после текущей песни"
+                    else -> "⏱ Таймер сна активен"
+                },
+                color = AuraMint,
+                fontSize = 12.sp
+            )
+        }
         Spacer(Modifier.height(18.dp))
         SearchField(state.query, onQuery, onSubmit, onVoice, state.isListening)
         Spacer(Modifier.height(14.dp))

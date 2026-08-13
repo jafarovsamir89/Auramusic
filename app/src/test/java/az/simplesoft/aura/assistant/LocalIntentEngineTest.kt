@@ -134,6 +134,28 @@ class LocalIntentEngineTest {
     }
 
     @Test
+    fun recognizes_feedback_and_timer_commands() {
+        assertEquals(MusicIntent.MoreLikeThis, engine.understand("Больше такого").intent)
+        assertEquals(MusicIntent.NotThis, engine.understand("Не это").intent)
+        assertEquals(MusicIntent.SleepTimer(30), engine.understand("Таймер сна 30 минут").intent)
+        assertEquals(MusicIntent.CancelSleepTimer, engine.understand("cancel sleep timer").intent)
+        assertEquals(MusicIntent.StopAfterTrack, engine.understand("stop after this song").intent)
+        assertEquals(MusicIntent.RemoveLastFromQueue, engine.understand("remove the last song").intent)
+        assertEquals(MusicIntent.SetVolume(40), engine.understand("громкость 40 процентов").intent)
+        assertEquals(MusicIntent.ClearMemory, engine.understand("forget everything about me").intent)
+    }
+
+    @Test
+    fun recognizes_compound_commands() {
+        val intent = engine.understand("включи радио и сделай тише").intent
+
+        assertEquals(
+            MusicIntent.Composite(listOf(MusicIntent.OpenRadio, MusicIntent.Quieter)),
+            intent
+        )
+    }
+
+    @Test
     fun `azerbaijani and english conversations do not search`() {
         val az = engine.understand("Salam")
         val en = engine.understand("How are you?")
