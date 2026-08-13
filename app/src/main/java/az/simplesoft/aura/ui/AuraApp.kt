@@ -21,6 +21,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -81,6 +82,7 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
@@ -130,15 +132,21 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -154,6 +162,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
 import az.simplesoft.aura.assistant.DefaultVoiceInputController
+import az.simplesoft.aura.R
 import az.simplesoft.aura.assistant.OfflineModelManager
 import az.simplesoft.aura.assistant.OfflineModelState
 import az.simplesoft.aura.assistant.VoicePackManager
@@ -176,20 +185,22 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.sin
 
-private val AuraBlack = Color(0xFF050A11)
-private val DeepSurface = Color(0xFF0D131B)
-private val ElevatedSurface = Color(0xFF171D27)
-private val PrimaryText = Color(0xFFF7F6FC)
-private val SecondaryText = Color(0xFFA9AFBB)
-private val AccentSilver = Color(0xFFDCCBFF)
-private val AuraAccent = Color(0xFF7C3CFF)
-private val AuraAccentSoft = Color(0xFFC076FF)
-private val AuraMint = Color(0xFF6FE3D1)
-private val AuraBorder = Color.White.copy(.09f)
-private val ReferencePurple = Color(0xFF7C3CFF)
-private val ReferenceMagenta = Color(0xFFC13DFF)
-private val ReferenceBlue = Color(0xFF2467FF)
+private val AuraBlack = Color(0xFF28282F)
+private val DeepSurface = Color(0xFF24242C)
+private val ElevatedSurface = Color(0xFF303039)
+private val PrimaryText = Color(0xFFF2EFF7)
+private val SecondaryText = Color(0xFFB5B1BD)
+private val AccentSilver = Color(0xFFCBB9FF)
+private val AuraAccent = Color(0xFFB9A3F2)
+private val AuraAccentSoft = Color(0xFFD7CAFA)
+private val AuraMint = Color(0xFF9FD8CF)
+private val AuraBorder = Color.White.copy(.11f)
+private val ReferencePurple = Color(0xFFA990E8)
+private val ReferenceMagenta = Color(0xFFC2A8DA)
+private val ReferenceBlue = Color(0xFF8E91B5)
 
 @Composable
 fun AuraApp(
@@ -214,7 +225,6 @@ fun AuraApp(
     var micPermissionGranted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
     }
-    var autoVoiceStarted by rememberSaveable { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -236,12 +246,6 @@ fun AuraApp(
     DisposableEffect(Unit) { onDispose(voiceController::destroy) }
     LaunchedEffect(Unit) {
         if (!micPermissionGranted) permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-    }
-    LaunchedEffect(micPermissionGranted, state.onboardingComplete) {
-        if (micPermissionGranted && state.onboardingComplete && !autoVoiceStarted) {
-            autoVoiceStarted = true
-            voiceInput()
-        }
     }
     LaunchedEffect(voiceState, voiceBackend) {
         if (!state.geminiConfigured) vm.setVoiceInputState(voiceState, voiceBackend)
@@ -419,7 +423,13 @@ private fun MainShell(
                     onQueue = vm::openQueue,
                     onRadio = vm::openRadio,
                     onAddToPlaylist = onAddToPlaylist,
-                    onDiagnostics = { vm.navigate(AuraDestination.DIAGNOSTICS) }
+                    onDiagnostics = { vm.navigate(AuraDestination.DIAGNOSTICS) },
+                    onPlay = vm::togglePlay,
+                    onPrevious = vm::previous,
+                    onNext = vm::next,
+                    onOpenPlayer = vm::openPlayer,
+                    onLike = vm::toggleLike,
+                    onSeek = vm::seekTo
                 )
                 AuraDestination.SEARCH -> SearchScreen(
                     state = state,
@@ -493,7 +503,7 @@ private fun MainShell(
                 .padding(horizontal = 14.dp)
                 .padding(top = 14.dp, bottom = 8.dp)
         ) {
-            if (state.nowTrack.id != DemoCatalog.tracks.first().id) {
+            if (state.nowTrack.id != DemoCatalog.tracks.first().id && state.destination != AuraDestination.HOME) {
                 MiniPlayer(
                     state = state,
                     onOpen = vm::openPlayer,
@@ -517,94 +527,77 @@ private fun HomeScreen(
     onQueue: () -> Unit,
     onRadio: () -> Unit,
     onAddToPlaylist: (Track) -> Unit,
-    onDiagnostics: () -> Unit
+    onDiagnostics: () -> Unit,
+    onPlay: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onOpenPlayer: () -> Unit,
+    onLike: () -> Unit,
+    onSeek: (Long) -> Unit
 ) {
-    val recent = state.history.ifEmpty { state.queue }
-        .filterNot { it.id == DemoCatalog.tracks.first().id }
-        .take(4)
+    val tracks = (state.personalMix + state.history + state.queue)
+        .filterNot { it.id == DemoCatalog.tracks.first().id || it.sourceId == "local" }
+        .distinctBy(Track::id)
+    val hasCurrentTrack = state.nowTrack.id != DemoCatalog.tracks.first().id
     LazyColumn(
         modifier = Modifier.fillMaxSize().statusBarsPadding(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 16.dp, end = 16.dp, top = 10.dp, bottom = 174.dp
+            start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp
         ),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(22.dp)
     ) {
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onDiagnostics, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Rounded.Menu, "Меню", tint = PrimaryText)
+                IconButton(onClick = onDiagnostics, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.Rounded.Menu, "Меню", tint = PrimaryText, modifier = Modifier.size(25.dp))
                 }
                 Text(
                     "A U R A",
                     modifier = Modifier.weight(1f),
                     textAlign = TextAlign.Center,
-                    color = PrimaryText,
-                    letterSpacing = 3.sp,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium
+                    color = AccentSilver,
+                    letterSpacing = 4.sp,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Light
                 )
-                IconButton(onClick = onVoice, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Rounded.GraphicEq, "Голос AURA", tint = ReferenceMagenta)
+                IconButton(onClick = onVoice, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.Rounded.AutoAwesome, "Голос AURA", tint = AccentSilver, modifier = Modifier.size(25.dp))
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "${greeting()}${state.userName?.let { ", $it" } ?: ""}",
-                fontSize = 22.sp,
-                lineHeight = 27.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Готова подобрать музыку\nпод твоё настроение",
-                color = SecondaryText,
-            fontSize = 14.sp,
-            lineHeight = 19.sp
-            )
-            Spacer(Modifier.height(10.dp))
+        }
+        item {
             AuraReferenceOrb(
                 listening = state.isListening || state.isVoiceSessionActive,
                 onClick = onVoice,
-                modifier = Modifier.fillMaxWidth().height(224.dp)
+                modifier = Modifier.fillMaxWidth().height(280.dp)
             )
+            Text(
+                if (state.isListening || state.isVoiceSessionActive) "Слушаю тебя…" else "Нажми, чтобы поговорить с AURA",
+                modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                color = AccentSilver, fontSize = 17.sp
+            )
+            Spacer(Modifier.height(4.dp))
+            Text("Твой музыкальный помощник", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = SecondaryText, fontSize = 14.sp)
         }
-        item {
-            Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
-                    .background(Color(0xB51A202B))
-                    .border(1.dp, Color.White.copy(.06f), RoundedCornerShape(18.dp))
-                    .padding(12.dp)
-            ) {
-                Text("Быстрые действия", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    HomeQuickAction(Icons.Rounded.AutoAwesome, "Мой микс", Modifier.weight(1f), onMyMix)
-                    HomeQuickAction(Icons.AutoMirrored.Rounded.PlaylistPlay, "Плейлисты", Modifier.weight(1f), onPlaylists)
-                    HomeQuickAction(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь", Modifier.weight(1f), onQueue)
-                    HomeQuickAction(Icons.Rounded.Radio, "Радио", Modifier.weight(1f), onRadio)
-                }
+        if (hasCurrentTrack) {
+            item {
+                AuraCurrentTrackCard(state, onPlay, onPrevious, onNext, onLike, onSeek, onOpenPlayer)
             }
         }
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Недавно слушал", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                Text("Ещё", color = ReferenceMagenta, fontSize = 13.sp)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Для твоей атмосферы", color = PrimaryText, fontSize = 17.sp, modifier = Modifier.weight(1f))
+                Text("Смотреть всё", color = AccentSilver, fontSize = 13.sp)
             }
-            Spacer(Modifier.height(8.dp))
-            Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
-                    .background(Color(0xB5121720)).padding(horizontal = 10.dp, vertical = 4.dp)
-            ) {
-                if (recent.isEmpty()) {
-                    Text("Здесь появятся последние треки", color = SecondaryText, modifier = Modifier.padding(16.dp))
-                } else recent.forEach { track ->
-                    TrackRow(
-                        track = track,
-                        liked = track.id in state.likedIds,
-                        onClick = { onTrack(track) },
-                        onAddPlaylist = { onAddToPlaylist(track) },
-                        compact = true
-                    )
+            Spacer(Modifier.height(12.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                if (tracks.isEmpty()) {
+                    item { AuraAtmospherePresetCard("Парить", "Мой микс", 0, onMyMix) }
+                    item { AuraAtmospherePresetCard("Эфир", "Радио", 1, onRadio) }
+                    item { AuraAtmospherePresetCard("Внутри", "Плейлисты", 2, onPlaylists) }
+                    item { AuraAtmospherePresetCard("Лёгкость", "AURA", 3, onVoice) }
+                } else {
+                    items(tracks.take(8), key = { it.id }) { track -> AuraAtmosphereCard(track) { onTrack(track) } }
                 }
             }
         }
@@ -612,64 +605,153 @@ private fun HomeScreen(
 }
 
 @Composable
-private fun HomeQuickAction(
-    icon: ImageVector,
-    label: String,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
+private fun AuraCurrentTrackCard(
+    state: AuraUiState,
+    onPlay: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onLike: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onOpen: () -> Unit
 ) {
-    Column(
-        modifier.height(72.dp).clip(RoundedCornerShape(14.dp)).background(Color.White.copy(.045f))
-            .clickable(onClick = onClick).padding(horizontal = 4.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
-    ) {
-        Icon(icon, label, Modifier.size(22.dp), tint = PrimaryText)
-        Text(label, fontSize = 9.sp, color = PrimaryText, maxLines = 1)
+    val duration = state.playbackDurationMs.coerceAtLeast(state.nowTrack.durationMs ?: 0L)
+    val progress = if (duration > 0) (state.positionMs.toFloat() / duration).coerceIn(0f, 1f) else 0f
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Color(0xD934343E)).border(1.dp, Color.White.copy(.13f), RoundedCornerShape(24.dp)).clickable(onClick = onOpen).padding(18.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Artwork(state.nowTrack, Modifier.size(96.dp), 18.dp)
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(state.nowTrack.title, fontSize = 19.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(5.dp))
+                Text(state.nowTrack.artist, color = PrimaryText.copy(.88f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(4.dp))
+                Text(state.nowTrack.genre ?: sourceLabel(state.nowTrack).lowercase(), color = AccentSilver, fontSize = 14.sp, maxLines = 1)
+            }
+            IconButton(onClick = onPlay, modifier = Modifier.size(52.dp).background(Color.White.copy(.07f), CircleShape)) {
+                Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Воспроизведение", tint = AccentSilver, modifier = Modifier.size(25.dp))
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Slider(value = progress, onValueChange = { value -> if (duration > 0) onSeek((duration * value).toLong()) }, colors = SliderDefaults.colors(thumbColor = AccentSilver, activeTrackColor = AccentSilver, inactiveTrackColor = Color.White.copy(.16f)), modifier = Modifier.height(22.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(formatDuration(state.positionMs), color = SecondaryText, fontSize = 12.sp)
+            Text(formatDuration(duration), color = SecondaryText, fontSize = 12.sp)
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onLike) { Icon(if (state.liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, "В избранное", tint = AccentSilver) }
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = onPrevious) { Icon(Icons.Rounded.SkipPrevious, "Предыдущий трек", tint = PrimaryText) }
+            IconButton(onClick = onNext) { Icon(Icons.Rounded.SkipNext, "Следующий трек", tint = PrimaryText) }
+        }
+    }
+}
+
+@Composable
+private fun AuraAtmosphereCard(track: Track, onClick: () -> Unit) {
+    Column(Modifier.width(80.dp).clickable(onClick = onClick)) {
+        Artwork(track, Modifier.size(80.dp), 15.dp)
+        Spacer(Modifier.height(8.dp))
+        Text(track.title, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(track.artist, color = SecondaryText, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun AuraAtmospherePresetCard(title: String, subtitle: String, variant: Int, onClick: () -> Unit) {
+    val palettes = listOf(
+        listOf(Color(0xFFE0D8F0), Color(0xFFA394C6), Color(0xFF665F7B)),
+        listOf(Color(0xFFC5C5D2), Color(0xFF8E91AA), Color(0xFF565968)),
+        listOf(Color(0xFFD4C5DD), Color(0xFF9C829E), Color(0xFF645466)),
+        listOf(Color(0xFFD8D1EA), Color(0xFFAAA0C9), Color(0xFF6A647E))
+    )
+    Column(Modifier.width(80.dp).clickable(onClick = onClick)) {
+        Canvas(
+            Modifier.size(80.dp).clip(RoundedCornerShape(15.dp))
+                .background(Brush.linearGradient(palettes[variant % palettes.size]))
+        ) {
+            val glow = if (variant == 1) Offset(size.width * .72f, size.height * .30f) else Offset(size.width * .32f, size.height * .32f)
+            drawCircle(Brush.radialGradient(listOf(Color.White.copy(.68f), Color.Transparent), glow, size.minDimension * .55f), size.minDimension * .55f, glow)
+            drawCircle(Color.White.copy(.10f), size.minDimension * .34f, Offset(size.width * .72f, size.height * .72f))
+            repeat(3) { line ->
+                val path = Path()
+                val y = size.height * (.58f + line * .045f)
+                path.moveTo(-8f, y)
+                path.cubicTo(size.width * .25f, y - 24f - line * 5f, size.width * .68f, y + 24f, size.width + 8f, y - 8f)
+                drawPath(path, Color.White.copy(.25f - line * .055f), style = androidx.compose.ui.graphics.drawscope.Stroke(1.4f, cap = StrokeCap.Round))
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(title, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(subtitle, color = SecondaryText, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable
 private fun AuraReferenceOrb(listening: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val transition = rememberInfiniteTransition(label = "auraOrb")
-    val pulse by transition.animateFloat(.94f, 1.04f, infiniteRepeatable(tween(1000), RepeatMode.Reverse), label = "orbPulse")
-    Canvas(modifier.clickable(onClick = onClick)) {
-        val center = Offset(size.width / 2f, size.height / 2f)
-        val base = size.minDimension * .30f * if (listening) pulse else 1f
-        drawCircle(
-            brush = Brush.radialGradient(listOf(ReferenceMagenta.copy(.26f), Color.Transparent), center, base * 1.8f),
-            radius = base * 1.8f,
-            center = center
-        )
-        repeat(6) { ring ->
+    val wave by transition.animateFloat(0f, 6.28f, infiniteRepeatable(tween(3600), RepeatMode.Restart), label = "orbWave")
+    val wavePaths = remember { List(9) { Path() } }
+    Box(
+        modifier.semantics {
+            contentDescription = if (listening) "AURA слушает" else "Поговорить с AURA"
+            role = Role.Button
+        }.clickable(onClick = onClick)
+    ) {
+        Canvas(Modifier.align(Alignment.Center).size(250.dp)) {
             drawCircle(
-                color = if (ring % 2 == 0) ReferenceMagenta.copy(.40f - ring * .045f)
-                    else ReferenceBlue.copy(.34f - ring * .04f),
-                radius = base * (.72f + ring * .16f),
-                center = center,
-                style = androidx.compose.ui.graphics.drawscope.Stroke(width = if (ring < 2) 2.5f else 1.2f)
+                brush = Brush.radialGradient(
+                    listOf(Color(0xFFD8CAFF).copy(.18f), Color(0xFFB9A4EA).copy(.07f), Color.Transparent),
+                    center = center,
+                    radius = size.minDimension / 2f
+                ),
+                radius = size.minDimension / 2f
             )
         }
-        drawCircle(
-            brush = Brush.radialGradient(
-                listOf(Color(0xFFBD75FF), ReferencePurple, Color(0xFF19102E)),
-                center = Offset(center.x - base * .25f, center.y - base * .25f),
-                radius = base
-            ),
-            radius = base * .52f,
-            center = center
-        )
-        drawCircle(Color.White, radius = base * .055f, center = Offset(center.x - base * .16f, center.y - base * .04f))
-        drawCircle(Color.White, radius = base * .055f, center = Offset(center.x + base * .16f, center.y - base * .04f))
-        drawArc(
-            color = Color.White,
-            startAngle = 18f,
-            sweepAngle = 144f,
-            useCenter = false,
-            topLeft = Offset(center.x - base * .16f, center.y - base * .02f),
-            size = androidx.compose.ui.geometry.Size(base * .32f, base * .24f),
-            style = androidx.compose.ui.graphics.drawscope.Stroke(width = base * .035f)
-        )
+        Box(Modifier.align(Alignment.Center).size(210.dp).clip(CircleShape)) {
+            Image(
+                painter = painterResource(R.drawable.aura_glass_orb),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    scaleX = 1.735f
+                    scaleY = 1.735f
+                },
+                contentScale = ContentScale.Fit
+            )
+            Canvas(Modifier.fillMaxSize()) {
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val radius = size.minDimension / 2f
+                val startX = center.x - radius * 1.04f
+                val endX = center.x + radius * 1.04f
+                val waveBrush = Brush.horizontalGradient(
+                    listOf(Color.Transparent, Color(0xFFB49BE9).copy(.56f), Color(0xFFF4EEFF).copy(.94f), Color(0xFFC2A8F1).copy(.68f), Color.Transparent),
+                    startX = center.x - radius,
+                    endX = center.x + radius
+                )
+                wavePaths.forEachIndexed { line, path ->
+                    path.reset()
+                    val lineOffset = line - 4
+                    val midY = center.y + lineOffset * radius * .022f
+                    val amplitude = radius * (.105f + line * .007f) * if (listening) 1.24f else 1f
+                    val points = 72
+                    for (point in 0..points) {
+                        val progress = point.toFloat() / points
+                        val normalized = progress * 2f - 1f
+                        val envelope = .28f + (1f - abs(normalized)) * .72f
+                        val x = startX + (endX - startX) * progress
+                        val primary = sin(progress * 8.2f + wave + line * .48f)
+                        val secondary = sin(progress * 14.8f - wave * .58f + line * .27f) * .24f
+                        val y = midY + (primary + secondary) * amplitude * envelope
+                        if (point == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                    }
+                    drawPath(
+                        path = path,
+                        brush = waveBrush,
+                        alpha = .28f + line * .065f,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.4f + line * .28f, cap = StrokeCap.Round)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -2259,39 +2341,25 @@ private fun BottomNavigation(
     onQueue: () -> Unit
 ) {
     Row(
-        Modifier.fillMaxWidth().height(62.dp).clip(RoundedCornerShape(20.dp)).background(Color(0xF20A1017))
-            .border(1.dp, Color.White.copy(.07f), RoundedCornerShape(20.dp)).padding(horizontal = 3.dp, vertical = 4.dp),
+        Modifier.fillMaxWidth().height(62.dp).clip(RoundedCornerShape(20.dp)).background(Color(0xE62A2A32))
+            .border(1.dp, Color.White.copy(.10f), RoundedCornerShape(20.dp)).padding(horizontal = 3.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceAround,
         verticalAlignment = Alignment.CenterVertically
     ) {
         listOf(
             Triple(AuraDestination.HOME, Icons.Rounded.Home, "Главная"),
-            Triple(AuraDestination.SEARCH, Icons.Rounded.Search, "Поиск"),
-            Triple(AuraDestination.ASSISTANT, Icons.Rounded.Mic, "AURA"),
-            Triple(null, Icons.AutoMirrored.Rounded.QueueMusic, "Очередь"),
-            Triple(AuraDestination.LIBRARY, Icons.Rounded.LibraryMusic, "Библиотека")
+            Triple(AuraDestination.SEARCH, Icons.Rounded.Search, "Открыть"),
+            Triple(AuraDestination.LIBRARY, Icons.Rounded.Person, "Профиль")
         ).forEach { (destination, icon, title) ->
             val active = destination == selected
             Column(
                 Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
-                    .background(if (active && destination != AuraDestination.ASSISTANT) ReferencePurple.copy(.14f) else Color.Transparent)
-                    .clickable { if (destination == null) onQueue() else onSelect(destination) }.padding(vertical = 5.dp),
+                    .background(if (active) AccentSilver.copy(.12f) else Color.Transparent)
+                    .clickable { onSelect(destination) }.padding(vertical = 5.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                if (destination == AuraDestination.ASSISTANT) {
-                    Box(
-                        Modifier.size(34.dp).background(
-                            Brush.radialGradient(listOf(ReferenceMagenta, ReferencePurple, Color(0xFF24134A))),
-                            CircleShape
-                        ).border(1.dp, Color.White.copy(.22f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) { Icon(icon, title, Modifier.size(18.dp), tint = Color.White) }
-                } else {
-                    Icon(icon, title, Modifier.size(20.dp), tint = if (active) ReferencePurple else SecondaryText.copy(.72f))
-                }
-                if (destination != AuraDestination.ASSISTANT) {
-                    Text(title, color = if (active) ReferencePurple else SecondaryText.copy(.72f), fontSize = 8.sp, maxLines = 1)
-                }
+                Icon(icon, title, Modifier.size(22.dp), tint = if (active) AccentSilver else SecondaryText.copy(.72f))
+                Text(title, color = if (active) AccentSilver else SecondaryText.copy(.72f), fontSize = 9.sp, maxLines = 1)
             }
         }
     }
@@ -2672,19 +2740,30 @@ private fun CircleIconButton(
 
 @Composable
 private fun AuraBackground() {
-    Canvas(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF07101A), AuraBlack)))) {
+    Canvas(
+        Modifier.fillMaxSize().background(
+            Brush.verticalGradient(
+                colorStops = arrayOf(
+                    0f to Color(0xFF3B3C44),
+                    .25f to Color(0xFF454554),
+                    .55f to Color(0xFF393843),
+                    1f to Color(0xFF28282F)
+                )
+            )
+        )
+    ) {
         drawCircle(
-            Brush.radialGradient(listOf(ReferenceBlue.copy(.14f), Color.Transparent)),
+            Brush.radialGradient(listOf(Color(0xFFB8AED3).copy(.12f), Color.Transparent)),
             radius = size.minDimension * .72f,
-            center = Offset(size.width * .92f, size.height * .08f)
+            center = Offset(size.width * .50f, size.height * .21f)
         )
         drawCircle(
-            Brush.radialGradient(listOf(ReferencePurple.copy(.12f), Color.Transparent)),
+            Brush.radialGradient(listOf(ReferencePurple.copy(.08f), Color.Transparent)),
             radius = size.minDimension * .82f,
             center = Offset(size.width * .05f, size.height * .52f)
         )
         drawCircle(
-            Brush.radialGradient(listOf(ReferenceMagenta.copy(.08f), Color.Transparent)),
+            Brush.radialGradient(listOf(ReferenceMagenta.copy(.05f), Color.Transparent)),
             radius = size.minDimension * .68f,
             center = Offset(size.width, size.height * .82f)
         )
