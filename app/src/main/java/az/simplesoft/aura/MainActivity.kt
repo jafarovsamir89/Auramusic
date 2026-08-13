@@ -12,7 +12,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.util.Log
 import az.simplesoft.aura.assistant.AssistantLanguage
 import az.simplesoft.aura.assistant.AuraSpeechSynthesizer
-import az.simplesoft.aura.assistant.AuraWakeWordService
 import az.simplesoft.aura.ui.AuraApp
 import az.simplesoft.aura.ui.theme.AuraTheme
 
@@ -27,17 +26,12 @@ class MainActivity : ComponentActivity() {
             Log.i("AuraDeviceCheck", "Starting Russian Silero verification")
             AuraSpeechSynthesizer(this).speak("Привет! Я АУРА, рада тебе.", AssistantLanguage.RUSSIAN)
         }
-        if (BuildConfig.DEBUG && intent.getBooleanExtra("aura_verify_wake_word", false)) {
-            Log.i("AuraDeviceCheck", "Starting wake-word service verification")
-            AuraWakeWordService.start(this)
-        }
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
         )
         permissions.launch(
             buildList {
-                add(Manifest.permission.RECORD_AUDIO)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     add(Manifest.permission.POST_NOTIFICATIONS)
                     add(Manifest.permission.READ_MEDIA_AUDIO)

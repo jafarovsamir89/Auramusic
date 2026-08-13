@@ -17,15 +17,6 @@ data class VoicePerformanceMetrics(
     val bargeInCount: Int = 0
 )
 
-data class WakeWordSettings(
-    val enabled: Boolean = false,
-    val sensitivity: Float = 0.72f,
-    val followUpEnabled: Boolean = true,
-    val followUpWindowMs: Long = 6_000L
-) {
-    init { require(sensitivity in 0f..1f) }
-}
-
 /** Pure state guard used by UI/service integrations to prevent speaking over listening. */
 class VoiceTurnStateMachine {
     var state: VoiceSessionState = VoiceSessionState.IDLE

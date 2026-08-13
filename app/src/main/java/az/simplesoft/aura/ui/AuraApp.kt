@@ -161,7 +161,6 @@ import az.simplesoft.aura.assistant.VoiceLabCatalog
 import az.simplesoft.aura.assistant.VoiceEngineMode
 import az.simplesoft.aura.assistant.VoicePackStatus
 import az.simplesoft.aura.assistant.AssistantRole
-import az.simplesoft.aura.assistant.AuraWakeWordBus
 import az.simplesoft.aura.assistant.VoiceInputState
 import az.simplesoft.aura.assistant.gemini.GeminiDiagnostics
 import az.simplesoft.aura.assistant.gemini.GeminiLiveConfig
@@ -212,11 +211,15 @@ fun AuraApp(
     }
     val voiceState by voiceController.state.collectAsStateWithLifecycle()
     val voiceBackend by voiceController.backend.collectAsStateWithLifecycle()
+    var micPermissionGranted by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+    }
+    var autoVoiceStarted by rememberSaveable { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) vm.startPushToTalk(voiceController::start)
-        else vm.setVoiceInputState(VoiceInputState.PermissionRequired(Manifest.permission.RECORD_AUDIO), voiceBackend)
+        micPermissionGranted = granted
+        if (!granted) vm.setVoiceInputState(VoiceInputState.PermissionRequired(Manifest.permission.RECORD_AUDIO), voiceBackend)
     }
     val voiceInput = {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -231,16 +234,17 @@ fun AuraApp(
     var onboardingName by rememberSaveable { mutableStateOf(state.userName.orEmpty()) }
     var onboardingLanguage by rememberSaveable { mutableStateOf(state.preferredLanguage) }
     DisposableEffect(Unit) { onDispose(voiceController::destroy) }
+    LaunchedEffect(Unit) {
+        if (!micPermissionGranted) permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+    LaunchedEffect(micPermissionGranted, state.onboardingComplete) {
+        if (micPermissionGranted && state.onboardingComplete && !autoVoiceStarted) {
+            autoVoiceStarted = true
+            voiceInput()
+        }
+    }
     LaunchedEffect(voiceState, voiceBackend) {
         if (!state.geminiConfigured) vm.setVoiceInputState(voiceState, voiceBackend)
-        when (voiceState) {
-            is VoiceInputState.TranscriptReady,
-            is VoiceInputState.PermissionRequired,
-            is VoiceInputState.ModelRequired,
-            is VoiceInputState.NoSpeech,
-            is VoiceInputState.Failed -> vm.resumeWakeWordAfterPushToTalk()
-            else -> Unit
-        }
     }
     LaunchedEffect(initialCommand, speakInitialCommand) {
         initialCommand?.takeIf(String::isNotBlank)?.let {
@@ -251,15 +255,6 @@ fun AuraApp(
     LaunchedEffect(initialVoicePreview, initialVoicePreviewLanguage) {
         initialVoicePreview?.takeIf(String::isNotBlank)?.let {
             vm.previewVoice(it, if (initialVoicePreviewLanguage == "ru") az.simplesoft.aura.assistant.AssistantLanguage.RUSSIAN else az.simplesoft.aura.assistant.AssistantLanguage.AZERBAIJANI)
-        }
-    }
-    LaunchedEffect(Unit) {
-        vm.resumeWakeWordServiceIfNeeded()
-        AuraWakeWordBus.events.collect { event ->
-            when (event) {
-                AuraWakeWordBus.Event.Activated -> voiceInput()
-                is AuraWakeWordBus.Event.Command -> vm.handleWakeWordCommand(event.text)
-            }
         }
     }
     DisposableEffect(lifecycleOwner) {
@@ -470,7 +465,6 @@ private fun MainShell(
                     state = state,
                     onVoice = onVoice,
                     onCommand = if (state.geminiConfigured) vm::sendGeminiText else vm::submit,
-                    onWakeWord = vm::setWakeWordEnabled,
                     onOpenSettings = onOpenSettings
                 )
                 AuraDestination.DIAGNOSTICS -> DiagnosticsScreen(
@@ -1535,7 +1529,6 @@ private fun AssistantScreen(
     state: AuraUiState,
     onVoice: () -> Unit,
     onCommand: (String) -> Unit,
-    onWakeWord: (Boolean) -> Unit,
     onOpenSettings: () -> Unit
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
@@ -1592,33 +1585,6 @@ private fun AssistantScreen(
                 }
             }
             else -> Unit
-        }
-        Spacer(Modifier.height(12.dp))
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = ElevatedSurface,
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Rounded.Mic, contentDescription = null, tint = if (state.wakeWordEnabled) AuraMint else SecondaryText)
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Слушать «АУРА»", fontSize = 13.sp)
-                    Text(
-                        if (state.wakeWordEnabled) "Активно в фоне и при выключенном экране" else "Включается с постоянным уведомлением",
-                        color = SecondaryText,
-                        fontSize = 10.sp
-                    )
-                }
-                Switch(
-                    checked = state.wakeWordEnabled,
-                    onCheckedChange = onWakeWord,
-                    colors = SwitchDefaults.colors(checkedThumbColor = PrimaryText, checkedTrackColor = AuraAccent)
-                )
-            }
         }
         Spacer(Modifier.height(12.dp))
         LazyColumn(

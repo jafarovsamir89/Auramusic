@@ -15,7 +15,6 @@ import az.simplesoft.aura.assistant.AssistantTrackContext
 import az.simplesoft.aura.assistant.AuraAiContext
 import az.simplesoft.aura.assistant.AuraAiEngine
 import az.simplesoft.aura.assistant.AuraSpeechSynthesizer
-import az.simplesoft.aura.assistant.AuraWakeWordService
 import az.simplesoft.aura.assistant.VoiceStyle
 import az.simplesoft.aura.assistant.SpeechResponsePolicy
 import az.simplesoft.aura.assistant.ResponseVerbosity
@@ -31,7 +30,6 @@ import az.simplesoft.aura.assistant.gemini.GeminiAudioOutput
 import az.simplesoft.aura.assistant.gemini.GeminiAuthProvider
 import az.simplesoft.aura.assistant.gemini.GeminiDiagnostics
 import az.simplesoft.aura.assistant.gemini.GeminiLiveSession
-import az.simplesoft.aura.assistant.gemini.GeminiLiveConfig
 import az.simplesoft.aura.assistant.gemini.LocalDebugApiKeyProvider
 import az.simplesoft.aura.assistant.gemini.GeminiSessionState
 import az.simplesoft.aura.assistant.gemini.GeminiToolExecutor
@@ -143,7 +141,6 @@ data class AuraUiState(
     val voiceInputState: VoiceInputState = VoiceInputState.Idle,
     val recognitionBackend: RecognitionBackend = RecognitionBackend.Unavailable,
     val voiceDiagnostics: VoiceCaptureDiagnostics? = null,
-    val wakeWordEnabled: Boolean = false,
     val isLoading: Boolean = false,
     val isBuffering: Boolean = false,
     val isPlaying: Boolean = false,
@@ -195,7 +192,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     @Volatile private var geminiUserContext: String = ""
     private var lastGeminiUserText = ""
     private var geminiMemoryJob: Job? = null
-    private var geminiIdleJob: Job? = null
     private val geminiSession: GeminiLiveSession by lazy {
         GeminiLiveSession(
         authProvider = LocalDebugApiKeyProvider(),
@@ -250,7 +246,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val initialLiked = preferences.getStringSet("liked", emptySet()).orEmpty().toSet()
     private val initialHistory = preferences.getString("history", "")
         .orEmpty().split('|').filter(String::isNotBlank)
-    private val initialWakeWordEnabled = preferences.getBoolean("wake_word_enabled", false)
     private val initialOnboardingComplete = preferences.getBoolean("onboarding_complete", false)
     private val initialUserName = preferences.getString("user_name", null)?.takeIf(String::isNotBlank)
     private val initialPreferredLanguage = preferences.getString("preferred_language", "ru").orEmpty().ifBlank { "ru" }
@@ -264,7 +259,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         AuraUiState(
             likedIds = initialLiked,
             historyIds = initialHistory,
-            wakeWordEnabled = initialWakeWordEnabled,
             onboardingComplete = initialOnboardingComplete,
             userName = initialUserName,
             preferredLanguage = initialPreferredLanguage,
@@ -506,15 +500,13 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             _state.update { it.copy(assistantText = "Gemini Smart Voice не настроен. Добавь GEMINI_API_KEY в local.properties.") }
             return
         }
-        if (geminiSession.state.value == GeminiSessionState.USER_SPEAKING ||
+        if (state.value.isVoiceSessionActive ||
+            geminiSession.state.value == GeminiSessionState.USER_SPEAKING ||
             geminiSession.state.value == GeminiSessionState.MODEL_SPEAKING ||
             geminiSession.state.value == GeminiSessionState.MODEL_THINKING
         ) {
             stopGeminiVoice()
             return
-        }
-        if (state.value.wakeWordEnabled) {
-            runCatching { AuraWakeWordService.stop(getApplication()) }
         }
         _state.update {
             it.copy(
@@ -547,10 +539,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                                 voiceInputState = VoiceInputState.Processing
                             )
                         }
-                        armGeminiIdleTimeout()
                     },
                     onSpeechStart = {
-                        geminiIdleJob?.cancel()
                         _state.update {
                             it.copy(
                                 isListening = true,
@@ -574,37 +564,21 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         }
                     }
                 )
-                // The wake word itself opens a four-second conversational
-                // window, even when the user has not spoken the command yet.
-                armGeminiIdleTimeout()
             }.onFailure { error ->
                 _state.update { it.copy(isListening = false, isVoiceSessionActive = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Failed(error.message ?: "Gemini Voice недоступен", error)) }
             }
         }
     }
 
-    private fun armGeminiIdleTimeout() {
-        geminiIdleJob?.cancel()
-        geminiIdleJob = viewModelScope.launch {
-            delay(GeminiLiveConfig.IDLE_TIMEOUT_MS)
-            geminiAudioInput.stop()
-            geminiSession.close()
-            _state.update { it.copy(isListening = false, isVoiceSessionActive = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Idle) }
-            resumeWakeWordServiceIfNeeded()
-        }
-    }
-
     fun stopGeminiVoice() {
-        geminiIdleJob?.cancel()
         geminiAudioInput.stop()
         geminiSession.markSpeechEnded()
-        resumeWakeWordServiceIfNeeded()
         _state.update { it.copy(isListening = false, isVoiceSessionActive = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Idle) }
     }
 
     fun setGeminiVoice(voice: String) {
         val wasConnected = geminiSession.state.value != GeminiSessionState.DISCONNECTED
-        val wasActive = state.value.isListening || geminiSession.state.value in setOf(
+        val wasActive = state.value.isListening || state.value.isVoiceSessionActive || geminiSession.state.value in setOf(
             GeminiSessionState.USER_SPEAKING,
             GeminiSessionState.MODEL_SPEAKING,
             GeminiSessionState.MODEL_THINKING,
@@ -647,12 +621,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
-    /** Routes an on-device wake-word command into the active app session. */
-    fun handleWakeWordCommand(command: String) {
-        if (BuildConfig.GEMINI_API_KEY.isNotBlank()) sendGeminiText(command) else submitVoice(command)
-    }
-
     private fun onGeminiInputTranscription(text: String) {
+        if (isVoiceDisableCommand(text)) {
+            stopGeminiVoice()
+            return
+        }
         lastGeminiUserText = text.take(320)
         val timestamp = System.currentTimeMillis()
         _state.update { current ->
@@ -821,33 +794,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         viewModelScope.launch {
             // Barge-in: stop AURA immediately before opening the microphone.
             speech.stop()
-            if (state.value.wakeWordEnabled) {
-                runCatching { AuraWakeWordService.stop(getApplication()) }
-                delay(350L)
-            }
             start()
-        }
-    }
-
-    fun resumeWakeWordAfterPushToTalk() {
-        if (!state.value.wakeWordEnabled) return
-        runCatching { AuraWakeWordService.start(getApplication()) }
-    }
-
-    /** Must be invoked while the activity is visible: Android blocks background microphone starts. */
-    fun setWakeWordEnabled(enabled: Boolean) {
-        runCatching {
-            if (enabled) AuraWakeWordService.start(getApplication())
-            else AuraWakeWordService.stop(getApplication())
-        }.onSuccess {
-            preferences.edit { putBoolean("wake_word_enabled", enabled) }
-            _state.update { it.copy(wakeWordEnabled = enabled) }
-        }.onFailure {
-            _state.update { current ->
-                current.copy(
-                    assistantText = "Не удалось включить голосовую активацию. Проверь разрешение на микрофон."
-                )
-            }
         }
     }
 
@@ -892,22 +839,21 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         geminiSession.resetUsage()
     }
 
-    fun resumeWakeWordServiceIfNeeded() {
-        if (!state.value.wakeWordEnabled) return
-        runCatching { AuraWakeWordService.start(getApplication()) }
-            .onFailure {
-                _state.update { current ->
-                    current.copy(
-                        wakeWordEnabled = false,
-                        assistantText = "Голосовая активация выключена: разреши доступ к микрофону."
-                    )
-                }
-            }
-    }
-
     fun submit(text: String = state.value.query) = submitAssistant(text, speakResponse = false)
 
-    fun submitVoice(text: String) = submitAssistant(text, speakResponse = true)
+    fun submitVoice(text: String) {
+        if (isVoiceDisableCommand(text)) {
+            speech.stop()
+            stopGeminiVoice()
+            return
+        }
+        submitAssistant(text, speakResponse = true)
+    }
+
+    private fun isVoiceDisableCommand(text: String): Boolean = Regex(
+        "^\\s*(?:аура|aura)\\s*[,.:\\-]?\\s*(?:отключись|выключись|замолчи|стоп)\\s*$",
+        RegexOption.IGNORE_CASE
+    ).matches(text)
 
     /** Debug/device verification hook. Production voice turns still go through the AI agent. */
     fun previewAzerbaijaniVoice(text: String) = speech.speak(
