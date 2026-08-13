@@ -5,6 +5,7 @@ import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.domain.music.AuraRepeatMode
 import java.util.UUID
+import az.simplesoft.aura.domain.artist.ArtistNameNormalizer
 
 enum class RecommendationEventType { PLAY, SKIP, LIKE, UNLIKE }
 
@@ -154,6 +155,16 @@ class AuraStateRepository(
     suspend fun savePreference(key: String, value: String) {
         dao.upsertPreference(UserPreferenceEntity(key, value, now()))
     }
+
+    suspend fun rememberArtistAlias(alias: String, artistId: String, canonicalName: String, confirmed: Boolean = false) {
+        val normalized = ArtistNameNormalizer.folded(alias)
+        if (normalized.isBlank()) return
+        dao.upsertArtistAliasCorrection(
+            ArtistAliasCorrectionEntity(normalized, artistId, canonicalName, confirmed, now())
+        )
+    }
+
+    suspend fun artistAliasCorrections(limit: Int = 200): List<ArtistAliasCorrectionEntity> = dao.artistAliasCorrections(limit)
 
     suspend fun loadQueueHistory(): List<AuraQueueSnapshot> = dao.loadQueueSnapshots(HISTORY_LIMIT).map { entity ->
         val items = dao.loadQueueSnapshotItems(entity.id)

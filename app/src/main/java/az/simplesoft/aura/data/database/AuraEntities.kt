@@ -37,6 +37,16 @@ data class TrackSourceEntity(
 @Entity(tableName = "artists", primaryKeys = ["id"], indices = [Index("normalizedName", unique = true)])
 data class ArtistEntity(val id: String, val name: String, val normalizedName: String, val artworkUrl: String?)
 
+/** Local corrections learned from successful provider metadata or explicit user confirmation. */
+@Entity(tableName = "artist_alias_corrections", indices = [Index("artistId"), Index("updatedAt")])
+data class ArtistAliasCorrectionEntity(
+    @PrimaryKey val normalizedAlias: String,
+    val artistId: String,
+    val canonicalName: String,
+    val confirmed: Boolean,
+    val updatedAt: Long
+)
+
 @Entity(tableName = "albums", primaryKeys = ["id"], indices = [Index("artistId")])
 data class AlbumEntity(val id: String, val title: String, val artistId: String?, val year: Int?, val artworkUrl: String?)
 

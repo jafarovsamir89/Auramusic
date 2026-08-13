@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import androidx.annotation.RequiresApi
 import java.util.Locale
 
 /**
@@ -98,11 +99,15 @@ class OfflineSpeechRecognizer(
 
     private fun createRecognizer(context: Context): SpeechRecognizer {
         if (preferOnDevice) {
-            check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
-            ) { "On-device speech recognizer is unavailable" }
-            return SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return createOnDeviceRecognizer(context)
+            error("On-device speech recognizer requires Android 12+")
         }
         return SpeechRecognizer.createSpeechRecognizer(context)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.S)
+    private fun createOnDeviceRecognizer(context: Context): SpeechRecognizer {
+        check(SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) { "On-device speech recognizer is unavailable" }
+        return SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
     }
 }

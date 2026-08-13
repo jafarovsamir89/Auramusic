@@ -13,6 +13,9 @@ interface AuraStateDao {
     suspend fun upsertTracks(values: List<TrackEntity>)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertArtistAliasCorrection(value: ArtistAliasCorrectionEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertQueue(value: QueueEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -170,6 +173,12 @@ interface AuraStateDao {
 
     @Query("SELECT value FROM user_preferences WHERE `key` = :key LIMIT 1")
     suspend fun preference(key: String): String?
+
+    @Query("SELECT * FROM artist_alias_corrections WHERE normalizedAlias = :normalizedAlias LIMIT 1")
+    suspend fun artistAliasCorrection(normalizedAlias: String): ArtistAliasCorrectionEntity?
+
+    @Query("SELECT * FROM artist_alias_corrections ORDER BY updatedAt DESC LIMIT :limit")
+    suspend fun artistAliasCorrections(limit: Int = 200): List<ArtistAliasCorrectionEntity>
 
     @Query("SELECT * FROM recommendation_events ORDER BY createdAt DESC LIMIT :limit")
     suspend fun loadRecommendationEvents(limit: Int = 500): List<RecommendationEventEntity>

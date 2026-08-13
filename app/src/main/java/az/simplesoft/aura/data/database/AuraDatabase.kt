@@ -12,6 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TrackEntity::class,
         TrackSourceEntity::class,
         ArtistEntity::class,
+        ArtistAliasCorrectionEntity::class,
         AlbumEntity::class,
         FavoriteEntity::class,
         PlayHistoryEntity::class,
@@ -40,7 +41,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AssistantUnknownUtteranceEntity::class,
         AssistantResponseStatEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class AuraDatabase : RoomDatabase() {
@@ -54,7 +55,7 @@ abstract class AuraDatabase : RoomDatabase() {
                 context.applicationContext,
                 AuraDatabase::class.java,
                 "aura_music.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { instance = it }
         }
 
         internal val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -134,6 +135,14 @@ abstract class AuraDatabase : RoomDatabase() {
                 if (!hasColumn(db, "assistant_intent_patterns", "nodeId")) {
                     db.execSQL("ALTER TABLE assistant_intent_patterns ADD COLUMN nodeId TEXT NOT NULL DEFAULT ''")
                 }
+            }
+        }
+
+        internal val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS artist_alias_corrections (normalizedAlias TEXT NOT NULL PRIMARY KEY, artistId TEXT NOT NULL, canonicalName TEXT NOT NULL, confirmed INTEGER NOT NULL, updatedAt INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_artist_alias_corrections_artistId ON artist_alias_corrections(artistId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_artist_alias_corrections_updatedAt ON artist_alias_corrections(updatedAt)")
             }
         }
 

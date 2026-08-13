@@ -23,7 +23,9 @@ data class MusicSearchRequest(
     /** Positive semantic hints used by candidate ranking (for example, lullaby or bedtime). */
     val semanticTags: Set<String> = emptySet(),
     /** Variants that should be down-ranked unless explicitly requested. */
-    val excludedTerms: Set<String> = emptySet()
+    val excludedTerms: Set<String> = emptySet(),
+    /** True only for a resolved artist command; provider results are filtered before playback. */
+    val artistStrict: Boolean = false
 ) {
     val query: String get() = providerQuery?.takeIf(String::isNotBlank)
         ?: listOfNotNull(artist, title).joinToString(" ").ifBlank { rawQuery }

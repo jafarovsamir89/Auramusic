@@ -207,8 +207,10 @@ private class FakeAuraStateDao : AuraStateDao {
     val playlistItems = mutableListOf<PlaylistItemEntity>()
     val queueSnapshots = linkedMapOf<String, QueueSnapshotEntity>()
     val queueSnapshotItems = mutableListOf<QueueSnapshotItemEntity>()
+    val artistAliases = linkedMapOf<String, ArtistAliasCorrectionEntity>()
 
     override suspend fun upsertTracks(values: List<TrackEntity>) = values.forEach { tracks[it.id] = it }
+    override suspend fun upsertArtistAliasCorrection(value: ArtistAliasCorrectionEntity) { artistAliases[value.normalizedAlias] = value }
     override suspend fun upsertQueue(value: QueueEntity) { queue = value }
     override suspend fun insertQueueItems(values: List<QueueItemEntity>) { queueItems += values }
     override suspend fun insertFavorites(values: List<FavoriteEntity>) = values.forEach { favorites[it.trackId] = it }
@@ -252,6 +254,8 @@ private class FakeAuraStateDao : AuraStateDao {
     override suspend fun loadSearchHistory(limit: Int): List<SearchHistoryEntity> =
         searches.values.sortedByDescending(SearchHistoryEntity::searchedAt).take(limit)
     override suspend fun preference(key: String): String? = preferences[key]?.value
+    override suspend fun artistAliasCorrection(normalizedAlias: String): ArtistAliasCorrectionEntity? = artistAliases[normalizedAlias]
+    override suspend fun artistAliasCorrections(limit: Int): List<ArtistAliasCorrectionEntity> = artistAliases.values.take(limit)
     override suspend fun dialogueVariants(nodeId: String, language: String): List<AssistantDialogueVariantEntity> = emptyList()
     override suspend fun conversationState(): AssistantConversationStateEntity? = null
     override suspend fun intentPatterns(language: String): List<AssistantIntentPatternEntity> = emptyList()

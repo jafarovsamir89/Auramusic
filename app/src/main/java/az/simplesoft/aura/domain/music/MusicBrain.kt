@@ -11,6 +11,7 @@ import az.simplesoft.aura.data.search.CandidateRankerV2
 import az.simplesoft.aura.data.search.RankingContext
 import az.simplesoft.aura.data.search.TrackIdentityResolver
 import az.simplesoft.aura.data.search.UnifiedTrack
+import az.simplesoft.aura.domain.artist.ArtistSearchResultValidator
 import kotlin.math.abs
 
 class MusicBrain(
@@ -19,7 +20,8 @@ class MusicBrain(
     private val identityResolver: TrackIdentityResolver,
     private val recommendationEngine: RecommendationEngine,
     private val playbackCoordinator: PlaybackCoordinator,
-    private val searchBrain: MusicSearchBrain = MusicSearchBrain()
+    private val searchBrain: MusicSearchBrain = MusicSearchBrain(),
+    private val artistValidator: ArtistSearchResultValidator = ArtistSearchResultValidator()
 ) {
     private data class ResolvedAlternative(
         val candidate: TrackCandidate,
@@ -38,8 +40,21 @@ class MusicBrain(
                     result.value,
                     RankingContext(providerReliability = reliability)
                 )
-                val unified = identityResolver.unify(ranked)
-                SearchOutcome.Success(unified, result.diagnostics)
+                val validated = if (interpreted.artistStrict && !interpreted.artist.isNullOrBlank()) {
+                    val validation = artistValidator.validate(interpreted.artist, ranked.map { it.candidate })
+                    if (validation.accepted.isEmpty()) {
+                        return SearchOutcome.Failure(
+                            az.simplesoft.aura.data.plugins.core.PluginFailureReason.NOT_FOUND,
+                            "No confident track found for ${interpreted.artist}"
+                        )
+                    }
+                    ranked.filter { rankedCandidate -> validation.accepted.any { it.providerId == rankedCandidate.candidate.providerId && it.id == rankedCandidate.candidate.id } }
+                } else ranked
+                val unified = identityResolver.unify(validated)
+                SearchOutcome.Success(
+                    unified,
+                    result.diagnostics + if (interpreted.artistStrict) mapOf("artistValidator" to "${validated.size}/${ranked.size}") else emptyMap()
+                )
             }
             is PluginResult.Failure -> SearchOutcome.Failure(result.reason, result.message)
         }

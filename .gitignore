@@ -9,3 +9,7 @@ local.properties
 .externalNativeBuild/
 .cxx/
 captures/
+# MusicBrainz raw dumps and local generated work files
+tools/musicbrainz/cache/
+tools/musicbrainz/raw/
+*.tar.xz

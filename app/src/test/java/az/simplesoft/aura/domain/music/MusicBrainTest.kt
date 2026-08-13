@@ -73,6 +73,29 @@ class MusicBrainTest {
         assertEquals(PluginFailureReason.NETWORK, result.reason)
     }
 
+    @Test
+    fun strictArtistSearchRejectsWrongProviderArtist() = runBlocking {
+        val youtube = SearchOnlyPlugin(
+            "youtube",
+            200,
+            listOf(
+                candidate("youtube", "good", 180_000, true).copy(artist = "Aygün Kazımova"),
+                candidate("youtube", "wrong", 180_000, true).copy(artist = "Teymur Əmrah")
+            )
+        )
+        val brain = MusicBrain(
+            ProviderManager(setOf(youtube)), CandidateRankerV2(), TrackIdentityResolver(),
+            EmptyRecommendationEngine, RecordingPlaybackCoordinator()
+        )
+
+        val result = brain.search(
+            MusicSearchRequest("Aygun Kazimova", artist = "Aygün Kazımova", artistStrict = true)
+        ) as SearchOutcome.Success
+
+        assertEquals(1, result.tracks.size)
+        assertEquals("Aygün Kazımova", result.tracks.single().alternatives.single().artist)
+    }
+
     private fun candidate(provider: String, id: String, duration: Long, official: Boolean) = TrackCandidate(
         providerId = provider,
         id = id,

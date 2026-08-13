@@ -66,6 +66,10 @@ import az.simplesoft.aura.data.providers.TrackCandidate
 import az.simplesoft.aura.data.search.CandidateRankerV2
 import az.simplesoft.aura.data.search.TrackIdentityResolver
 import az.simplesoft.aura.data.search.UnifiedTrackSession
+import az.simplesoft.aura.data.artistindex.CompositeArtistResolver
+import az.simplesoft.aura.domain.artist.ArtistResolveContext
+import az.simplesoft.aura.domain.artist.ArtistResolveResult
+import az.simplesoft.aura.domain.artist.ArtistSearchResultValidator
 import az.simplesoft.aura.domain.music.MusicBrain
 import az.simplesoft.aura.domain.music.AuraRepeatMode
 import az.simplesoft.aura.domain.music.PersonalRecommendationEngine
@@ -112,7 +116,8 @@ data class ProviderDiagnostics(
     val mimeType: String = "—",
     val expiresAt: Long? = null,
     val validationStatus: String = "—",
-    val fallbackReason: String = "—"
+    val fallbackReason: String = "—",
+    val artistResolver: String = "—"
 )
 
 data class AuraUiState(
@@ -188,6 +193,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val radioProvider = RadioBrowserProvider()
     private val preferences = application.getSharedPreferences("aura_state", Context.MODE_PRIVATE)
     private val stateRepository = AuraStateRepository(application)
+    private val artistResolver = CompositeArtistResolver(application)
+    private val artistSearchValidator = ArtistSearchResultValidator()
     private val assistantMemory = CompactAssistantMemory(RoomAssistantMemoryPersistence(stateRepository))
     private val assistantCommandCoordinator = AssistantCommandCoordinator(application)
     private val auraAi = AuraAiEngine(
@@ -780,13 +787,59 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 else ok("Найдено ${results.size} результатов", JSONObject().put("count", results.size).put("tracks", results.take(5).joinToString { "${it.title} — ${it.artist}" }))
             }
             "play_artist" -> {
-                val artist = args.optString("artist").trim()
-                if (artist.isBlank()) return GeminiToolResult("error", "Не указан исполнитель")
+                val rawArtist = args.optString("artist").trim()
+                if (rawArtist.isBlank()) return GeminiToolResult("error", "Не указан исполнитель")
                 if (!stateRestored) return GeminiToolResult("error", "Музыка ещё восстанавливается")
-                searchTracks(MusicSearchRequest(rawQuery = artist, artist = artist, autoPlay = true)).join()
-                val track = state.value.nowTrack.takeIf { it.id != DemoCatalog.tracks.first().id }
-                if (track == null) GeminiToolResult("not_found", "Не нашла музыку исполнителя $artist")
-                else ok("Музыка исполнителя запущена", JSONObject().put("title", track.title).put("artist", track.artist))
+                val learnedAliases = stateRepository.artistAliasCorrections().mapNotNull { correction ->
+                    correction.artistId.toLongOrNull()?.let { correction.normalizedAlias to it }
+                }.toMap()
+                val resolved = artistResolver.resolve(
+                    rawArtist,
+                    ArtistResolveContext(
+                        preferredCountry = if (state.value.preferredLanguage.equals("az", true)) "AZ" else null,
+                        language = state.value.preferredLanguage,
+                        userAliases = learnedAliases
+                    )
+                )
+                val artist = when (resolved) {
+                    is ArtistResolveResult.Resolved -> resolved.candidate.canonicalName
+                    is ArtistResolveResult.NotFound -> rawArtist
+                    is ArtistResolveResult.Ambiguous -> {
+                        val names = resolved.candidates.take(3).joinToString(" или ") { it.canonicalName }
+                        return GeminiToolResult("ambiguous", "Уточни исполнителя: $names?", JSONObject().put("candidates", names))
+                    }
+                }
+                _state.update { current ->
+                    current.copy(
+                        diagnostics = current.diagnostics.copy(
+                            artistResolver = when (resolved) {
+                                is ArtistResolveResult.Resolved -> "raw=\"$rawArtist\" → ${resolved.candidate.canonicalName} (${resolved.candidate.matchType}, ${resolved.candidate.score})"
+                                is ArtistResolveResult.NotFound -> "raw=\"$rawArtist\" → not_found"
+                                is ArtistResolveResult.Ambiguous -> "raw=\"$rawArtist\" → ambiguous(${resolved.candidates.joinToString { it.canonicalName }})"
+                            }
+                        )
+                    )
+                }
+                if (resolved is ArtistResolveResult.Resolved) {
+                    viewModelScope.launch {
+                        stateRepository.rememberArtistAlias(rawArtist, resolved.candidate.artistId.toString(), resolved.candidate.canonicalName)
+                    }
+                }
+                val resolverData = when (resolved) {
+                    is ArtistResolveResult.Resolved -> JSONObject().put("canonicalArtist", artist).put("artistId", resolved.candidate.artistId).put("matchType", resolved.candidate.matchType.name).put("confidence", resolved.candidate.score)
+                    else -> JSONObject().put("canonicalArtist", artist)
+                }
+                searchTracks(MusicSearchRequest(rawQuery = artist, artist = artist, autoPlay = true, artistStrict = true)).join()
+                val searchTrack = state.value.searchResults.firstOrNull()
+                val track = state.value.nowTrack.takeIf {
+                    it.id != DemoCatalog.tracks.first().id &&
+                        searchTrack != null &&
+                        state.value.searchPhase != SearchPhase.ERROR &&
+                        state.value.searchResults.any { result -> result.id == it.id } &&
+                        artistSearchValidator.validate(artist, listOf(TrackCandidate("state", it.id, it.title, it.artist, it.sourcePageUrl))).accepted.isNotEmpty()
+                }
+                if (track == null) GeminiToolResult("not_found", "Не нашла уверенный трек исполнителя $artist", resolverData)
+                else ok("Музыка исполнителя запущена", resolverData.put("title", track.title).put("artist", track.artist))
             }
             "play_track" -> {
                 val index = args.optInt("index", -1)
