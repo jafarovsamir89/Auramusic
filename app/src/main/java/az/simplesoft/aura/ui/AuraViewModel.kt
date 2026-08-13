@@ -67,6 +67,8 @@ import az.simplesoft.aura.data.search.UnifiedTrackSession
 import az.simplesoft.aura.domain.music.MusicBrain
 import az.simplesoft.aura.domain.music.AuraRepeatMode
 import az.simplesoft.aura.domain.music.PersonalRecommendationEngine
+import az.simplesoft.aura.domain.music.RadioPlaybackSelector
+import az.simplesoft.aura.domain.music.VolumeMath
 import az.simplesoft.aura.domain.music.QueueEditResult
 import az.simplesoft.aura.domain.music.QueueEditor
 import az.simplesoft.aura.domain.music.RecommendationContext
@@ -391,14 +393,18 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         )
     }
 
-    fun openRadio() {
+    fun openRadio(autoPlayFirst: Boolean = false) {
         _state.update { it.copy(destination = AuraDestination.RADIO, isPlayerExpanded = false, isQueueOpen = false) }
-        if (state.value.radioCountries.isEmpty()) loadRadioCountries() else if (state.value.radioStations.isEmpty()) {
-            state.value.selectedRadioCountry?.let(::selectRadioCountry)
+        if (state.value.radioCountries.isEmpty()) {
+            loadRadioCountries(autoPlayFirst)
+        } else if (state.value.radioStations.isEmpty()) {
+            state.value.selectedRadioCountry?.let { selectRadioCountry(it, autoPlayFirst) }
+        } else if (autoPlayFirst) {
+            RadioPlaybackSelector.firstPlayable(state.value.radioStations)?.let(::startPlayback)
         }
     }
 
-    fun loadRadioCountries() {
+    fun loadRadioCountries(autoPlayFirst: Boolean = false) {
         if (state.value.isRadioLoading) return
         _state.update { it.copy(isRadioLoading = true, radioError = null) }
         viewModelScope.launch {
@@ -416,7 +422,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                             radioError = if (countries.isEmpty()) "Страны пока недоступны" else null
                         )
                     }
-                    if (selected != null) loadRadioStations(selected)
+                    if (selected != null) loadRadioStations(selected, autoPlayFirst)
                 }
                 .onFailure {
                     android.util.Log.w("AuraRadio", "Country catalog request failed", it)
@@ -430,9 +436,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
-    fun selectRadioCountry(country: RadioCountry) {
+    fun selectRadioCountry(country: RadioCountry, autoPlayFirst: Boolean = false) {
         _state.update { it.copy(selectedRadioCountry = country, isRadioLoading = true, radioError = null) }
-        loadRadioStations(country)
+        loadRadioStations(country, autoPlayFirst)
     }
 
     fun refreshRadio() {
@@ -440,7 +446,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         if (country == null) loadRadioCountries() else selectRadioCountry(country)
     }
 
-    private fun loadRadioStations(country: RadioCountry) {
+    private fun loadRadioStations(country: RadioCountry, autoPlayFirst: Boolean = false) {
         viewModelScope.launch {
             runCatching { radioProvider.byCountry(country.code) }
                 .onSuccess { stations ->
@@ -452,6 +458,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                                 "Для ${country.name} сейчас нет доступных HTTPS-станций."
                             } else null
                         )
+                    }
+                    if (autoPlayFirst) {
+                        RadioPlaybackSelector.firstPlayable(stations)?.let(::startPlayback)
                     }
                 }
                 .onFailure {
@@ -699,6 +708,29 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
+    private fun currentMusicVolumePercent(): Int = VolumeMath.percentForLevel(
+        audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC),
+        audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+    )
+
+    private fun setMusicVolume(percent: Int): Int {
+        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        if (max <= 0 || audio.isVolumeFixed) return currentMusicVolumePercent()
+        audio.setStreamVolume(
+            AudioManager.STREAM_MUSIC,
+            VolumeMath.levelForPercent(max, percent),
+            AudioManager.FLAG_SHOW_UI
+        )
+        return currentMusicVolumePercent()
+    }
+
+    private fun adjustMusicVolume(direction: Int): Int {
+        if (!audio.isVolumeFixed) {
+            audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI)
+        }
+        return currentMusicVolumePercent()
+    }
+
     private suspend fun executeGeminiTool(name: String, args: JSONObject): GeminiToolResult {
         fun ok(message: String, data: JSONObject = JSONObject()) = GeminiToolResult("success", message, data)
         fun unsupported() = GeminiToolResult("unsupported", "Эта функция пока недоступна в AURA.")
@@ -708,8 +740,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 val query = args.optString("query").trim().ifBlank { args.optString("mood") }
                 if (query.isBlank()) return GeminiToolResult("error", "Не указан запрос")
                 if (query.equals("радио", true) || query.equals("радиостанции", true) || query.equals("radio", true) || query.equals("radio stations", true)) {
-                    openRadio()
+                    openRadio(autoPlayFirst = true)
                     return ok("Открываю радио по странам")
+                }
+                if (query.contains("микс", true) || query.contains("mix", true)) {
+                    playMyMix()
+                    return ok("Запускаю твой микс")
                 }
                 if (!stateRestored) return GeminiToolResult("error", "Музыка ещё восстанавливается")
                 if (requestedMood != null && args.optString("query").isBlank()) {
@@ -749,7 +785,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             "pause_music" -> { playback.pause(); ok("Воспроизведение поставлено на паузу") }
             "resume_music" -> { playCurrent(); ok("Воспроизведение продолжено") }
-            "open_radio" -> { openRadio(); ok("Открываю радио по странам") }
+            "open_radio" -> { openRadio(autoPlayFirst = true); ok("Запускаю радио") }
             "clear_queue" -> { clearQueue(); ok("Очередь очищена") }
             "remove_last_queue_track" -> { removeLastFromQueue(); ok("Последний трек удалён из очереди") }
             "set_sleep_timer" -> {
@@ -759,14 +795,15 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             "cancel_sleep_timer" -> { cancelSleepTimer(); ok("Таймер сна выключен") }
             "stop_after_track" -> { setStopAfterTrack(true); ok("Остановлюсь после текущей песни") }
-            "volume_up" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 0); ok("Громкость увеличена") }
-            "volume_down" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, 0); ok("Громкость уменьшена") }
+            "volume_up" -> ok("Громкость ${adjustMusicVolume(AudioManager.ADJUST_RAISE)}%")
+            "volume_down" -> ok("Громкость ${adjustMusicVolume(AudioManager.ADJUST_LOWER)}%")
             "set_volume" -> {
                 val requested = args.optInt("percent", -1)
-                if (requested !in 0..100) GeminiToolResult("error", "Громкость должна быть от 0 до 100") else { audio.setStreamVolume(AudioManager.STREAM_MUSIC, (audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * requested / 100.0).toInt(), 0); ok("Громкость установлена") }
+                if (requested !in 0..100) GeminiToolResult("error", "Громкость должна быть от 0 до 100")
+                else ok("Громкость ${setMusicVolume(requested)}%")
             }
-            "mute_music" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0); ok("Звук выключен") }
-            "unmute_music" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0); ok("Звук включён") }
+            "mute_music" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, AudioManager.FLAG_SHOW_UI); ok("Звук выключен") }
+            "unmute_music" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, AudioManager.FLAG_SHOW_UI); ok("Звук включён") }
             "set_car_mode" -> {
                 val enabled = args.optBoolean("enabled", true)
                 _state.update { it.copy(isCarMode = enabled) }
@@ -1107,7 +1144,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 return null
             }
             MusicIntent.OpenRadio -> {
-                openRadio()
+                openRadio(autoPlayFirst = true)
                 _state.update { it.copy(assistantText = answer.text) }
                 return null
             }
@@ -1197,6 +1234,35 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         if (answer.intent == MusicIntent.ContinueListening) {
             continueListening()
             return null
+        }
+
+        when (answer.intent) {
+            MusicIntent.Louder -> {
+                val actual = adjustMusicVolume(AudioManager.ADJUST_RAISE)
+                _state.update { it.copy(assistantText = "Громкость $actual%") }
+                return null
+            }
+            MusicIntent.Quieter -> {
+                val actual = adjustMusicVolume(AudioManager.ADJUST_LOWER)
+                _state.update { it.copy(assistantText = "Громкость $actual%") }
+                return null
+            }
+            MusicIntent.Mute -> {
+                audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, AudioManager.FLAG_SHOW_UI)
+                _state.update { it.copy(assistantText = answer.text) }
+                return null
+            }
+            MusicIntent.Unmute -> {
+                audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, AudioManager.FLAG_SHOW_UI)
+                _state.update { it.copy(assistantText = answer.text) }
+                return null
+            }
+            is MusicIntent.SetVolume -> {
+                val actual = setMusicVolume(answer.intent.percent)
+                _state.update { it.copy(assistantText = "Громкость $actual%") }
+                return null
+            }
+            else -> Unit
         }
 
         when (answer.intent) {

@@ -65,4 +65,15 @@ class LocalAssistantEngineTest {
         assertTrue(name.memoryInsights.any { it.category == "identity" && it.key == "name" && it.value == "Самир" })
         assertTrue(preference.memoryInsights.any { it.category == "preference" && it.key == "genre" && it.value == "рок" })
     }
+
+    @Test
+    fun naturalMixRequestStartsMusicMixInsteadOfConversation() {
+        assertEquals(MusicIntent.MyMix, engine.decide("Поставь микс песен").action)
+    }
+
+    @Test
+    fun naturalVolumePhrasesStayLocalActions() {
+        assertEquals(MusicIntent.Louder, engine.decide("Сделай звук погромче").action)
+        assertEquals(MusicIntent.Quieter, engine.decide("Сделай звук потише").action)
+    }
 }

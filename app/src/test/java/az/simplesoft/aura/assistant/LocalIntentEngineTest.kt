@@ -143,6 +143,8 @@ class LocalIntentEngineTest {
         assertEquals(MusicIntent.RemoveLastFromQueue, engine.understand("remove the last song").intent)
         assertEquals(MusicIntent.SetVolume(40), engine.understand("громкость 40 процентов").intent)
         assertEquals(MusicIntent.ClearMemory, engine.understand("forget everything about me").intent)
+        assertEquals(MusicIntent.MyMix, engine.understand("Поставить микс песен").intent)
+        assertEquals(MusicIntent.Louder, engine.understand("Увеличить громкость").intent)
     }
 
     @Test
