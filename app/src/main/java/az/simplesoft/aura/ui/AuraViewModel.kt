@@ -699,6 +699,10 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 val requestedMood = moodFromGemini(args.optString("mood"))
                 val query = args.optString("query").trim().ifBlank { args.optString("mood") }
                 if (query.isBlank()) return GeminiToolResult("error", "Не указан запрос")
+                if (query.equals("радио", true) || query.equals("радиостанции", true) || query.equals("radio", true) || query.equals("radio stations", true)) {
+                    openRadio()
+                    return ok("Открываю радио по странам")
+                }
                 if (!stateRestored) return GeminiToolResult("error", "Музыка ещё восстанавливается")
                 if (requestedMood != null && args.optString("query").isBlank()) {
                     playMoodMix(requestedMood)
@@ -737,15 +741,33 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             "pause_music" -> { playback.pause(); ok("Воспроизведение поставлено на паузу") }
             "resume_music" -> { playCurrent(); ok("Воспроизведение продолжено") }
+            "open_radio" -> { openRadio(); ok("Открываю радио по странам") }
+            "clear_queue" -> { clearQueue(); ok("Очередь очищена") }
             "volume_up" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 0); ok("Громкость увеличена") }
             "volume_down" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, 0); ok("Громкость уменьшена") }
             "set_volume" -> {
                 val requested = args.optInt("percent", -1)
                 if (requested !in 0..100) GeminiToolResult("error", "Громкость должна быть от 0 до 100") else { audio.setStreamVolume(AudioManager.STREAM_MUSIC, (audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * requested / 100.0).toInt(), 0); ok("Громкость установлена") }
             }
+            "mute_music" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0); ok("Звук выключен") }
+            "unmute_music" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0); ok("Звук включён") }
+            "set_car_mode" -> {
+                val enabled = args.optBoolean("enabled", true)
+                _state.update { it.copy(isCarMode = enabled) }
+                ok(if (enabled) "Автомобильный режим включён" else "Автомобильный режим выключен")
+            }
+            "disable_voice_mode" -> {
+                stopGeminiVoice()
+                ok("Голосовой режим выключен")
+            }
             "like_current_track" -> { if (!state.value.liked) toggleLike(); ok("Трек добавлен в любимые") }
             "unlike_current_track" -> { if (state.value.liked) toggleLike(); ok("Трек убран из любимых") }
             "add_current_to_queue" -> { addToQueue(state.value.nowTrack); ok("Трек добавлен в очередь") }
+            "save_queue_as_playlist" -> {
+                val name = args.optString("name").trim().ifBlank { "Сохранённая очередь" }
+                saveQueueAsPlaylist(name)
+                ok("Очередь сохранена в плейлист $name", JSONObject().put("name", name))
+            }
             "play_next" -> { val query = args.optString("query").trim(); if (query.isBlank()) GeminiToolResult("error", "Не указан трек") else { searchAndQueue(query, playNext = true).join(); ok("Трек добавлен следующим") } }
             "get_now_playing" -> ok("Текущее состояние", JSONObject().put("title", state.value.nowTrack.title).put("artist", state.value.nowTrack.artist).put("isPlaying", state.value.isPlaying))
             "get_queue" -> ok("Очередь получена", JSONObject().put("tracks", state.value.queue.take(10).joinToString { "${it.title} — ${it.artist}" }))
@@ -763,7 +785,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 val mode = when (args.optString("mode").lowercase()) {
                     "one" -> AuraRepeatMode.ONE
                     "all" -> AuraRepeatMode.ALL
-                    else -> AuraRepeatMode.OFF
+                    "off" -> AuraRepeatMode.OFF
+                    else -> return GeminiToolResult("error", "Режим повтора должен быть off, one или all")
                 }
                 _state.update { it.copy(repeatMode = mode) }; playback.setRepeat(mode); ok("Повтор изменён")
             }
@@ -853,7 +876,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private fun isVoiceDisableCommand(text: String): Boolean = Regex(
         "^\\s*(?:аура|aura)\\s*[,.:\\-]?\\s*(?:отключись|выключись|замолчи|стоп)\\s*$",
         RegexOption.IGNORE_CASE
-    ).matches(text)
+    ).matches(text) || az.simplesoft.aura.assistant.VoiceModeCommand.isDisable(text)
 
     /** Debug/device verification hook. Production voice turns still go through the AI agent. */
     fun previewAzerbaijaniVoice(text: String) = speech.speak(
@@ -883,6 +906,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private fun submitAssistant(text: String, speakResponse: Boolean, pendingCommandId: String? = null) {
         val input = text.trim()
         if (input.isBlank()) return
+        if (isVoiceDisableCommand(input)) {
+            speech.stop()
+            stopGeminiVoice()
+            pendingCommandId?.let { viewModelScope.launch { assistantCommandCoordinator.complete(it) } }
+            return
+        }
         if (!stateRestored) {
             pendingCommand = input
             pendingCommandShouldSpeak = speakResponse
@@ -1175,6 +1204,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 }
                 MusicIntent.Mute -> current.copy(assistantText = answer.text).also {
                     audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
+                }
+                MusicIntent.Unmute -> current.copy(assistantText = answer.text).also {
+                    audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
                 }
                 MusicIntent.CarMode -> current.copy(isCarMode = true, assistantText = answer.text)
                 MusicIntent.NowPlaying -> current.copy(

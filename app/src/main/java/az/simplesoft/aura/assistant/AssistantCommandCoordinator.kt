@@ -64,6 +64,7 @@ class LocalCommandClassifier {
             Rule(MusicIntent.Louder, listOf("громче", "прибавь звук", "louder", "volume up")),
             Rule(MusicIntent.Quieter, listOf("тише", "убавь звук", "quieter", "volume down")),
             Rule(MusicIntent.Mute, listOf("без звука", "выключи звук", "mute")),
+            Rule(MusicIntent.Unmute, listOf("включи звук", "верни звук", "unmute")),
             Rule(MusicIntent.Like, listOf("поставь лайк", "лайкни", "like this")),
             Rule(MusicIntent.Unlike, listOf("убери лайк", "дизлайк", "unlike")),
             Rule(MusicIntent.Shuffle, listOf("перемешай очередь", "перемешай треки", "shuffle queue")),
@@ -295,6 +296,7 @@ class BackgroundMusicActionExecutor(context: Context) : AssistantActionExecutor 
             MusicIntent.Louder -> audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 0)
             MusicIntent.Quieter -> audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, 0)
             MusicIntent.Mute -> audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
+            MusicIntent.Unmute -> audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
             MusicIntent.Shuffle -> {
                 val enabled = !preferences.getBoolean("shuffle", false)
                 preferences.edit().putBoolean("shuffle", enabled).apply()

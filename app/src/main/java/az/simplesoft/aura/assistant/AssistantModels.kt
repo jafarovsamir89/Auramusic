@@ -16,6 +16,7 @@ sealed interface MusicIntent {
     data object Louder : MusicIntent
     data object Quieter : MusicIntent
     data object Mute : MusicIntent
+    data object Unmute : MusicIntent
     data object Repeat : MusicIntent
     data object Shuffle : MusicIntent
     data object NowPlaying : MusicIntent

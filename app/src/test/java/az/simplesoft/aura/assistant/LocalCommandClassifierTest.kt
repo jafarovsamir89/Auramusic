@@ -44,6 +44,7 @@ class LocalCommandClassifierTest {
         assertEquals(MusicIntent.Shuffle, classifier.classify("shuffle queue").intent)
         assertEquals(MusicIntent.Repeat, classifier.classify("repeat track").intent)
         assertEquals(MusicIntent.NowPlaying, classifier.classify("now playing").intent)
+        assertEquals(MusicIntent.Unmute, classifier.classify("включи звук").intent)
     }
 
     @Test

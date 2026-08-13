@@ -313,6 +313,8 @@ class LocalAssistantEngine(
         "quieter" -> AssistantReply(MusicIntent.Quieter, localized(language, "Делаю тише.", "Səsi azaldıram.", "Turning it down."), language)
         "pause" -> AssistantReply(MusicIntent.Pause, localized(language, "Ставлю на паузу.", "Pauza edirəm.", "Pausing."), language)
         "play" -> AssistantReply(MusicIntent.Play, localized(language, "Продолжаю.", "Davam edirəm.", "Resuming."), language)
+        "mute" -> AssistantReply(MusicIntent.Mute, localized(language, "Выключаю звук.", "Səsi söndürürəm.", "Muting."), language)
+        "unmute" -> AssistantReply(MusicIntent.Unmute, localized(language, "Включаю звук.", "Səsi açıram.", "Unmuting."), language)
         "like" -> AssistantReply(MusicIntent.Like, localized(language, "Добавляю в любимые.", "Sevimlilərə əlavə edirəm.", "Adding to favorites."), language)
         "unlike" -> AssistantReply(MusicIntent.Unlike, localized(language, "Убираю из любимых.", "Sevimlilərdən silirəm.", "Removing from favorites."), language)
         "repeat" -> AssistantReply(MusicIntent.Repeat, localized(language, "Переключаю повтор.", "Təkrar rejimini dəyişirəm.", "Changing repeat mode."), language)

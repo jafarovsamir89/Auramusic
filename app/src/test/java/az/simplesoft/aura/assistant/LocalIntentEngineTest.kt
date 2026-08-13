@@ -10,11 +10,22 @@ class LocalIntentEngineTest {
     @Test
     fun `opens country radio catalog`() {
         assertEquals(MusicIntent.OpenRadio, engine.understand("радио").intent)
+        assertEquals(MusicIntent.OpenRadio, engine.understand("включи радио").intent)
+        assertEquals(MusicIntent.OpenRadio, engine.understand("запусти радиостанции").intent)
     }
 
     @Test
     fun recognizesPersonalMixBeforeGenericSearch() {
         assertEquals(MusicIntent.MyMix, engine.understand("Включи мой микс").intent)
+    }
+
+    @Test
+    fun recognizesNaturalPlaybackAliases() {
+        assertEquals(MusicIntent.Pause, engine.understand("Останови музыку").intent)
+        assertEquals(MusicIntent.Play, engine.understand("Сними с паузы").intent)
+        assertEquals(MusicIntent.Next, engine.understand("Дальше").intent)
+        assertEquals(MusicIntent.Previous, engine.understand("Верни предыдущий").intent)
+        assertEquals(MusicIntent.NowPlaying, engine.understand("Что за трек").intent)
     }
 
     @Test
