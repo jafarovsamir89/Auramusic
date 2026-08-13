@@ -61,7 +61,9 @@ def download(url: str, output: Path) -> None:
 def iter_artists(archive: Path):
     with tarfile.open(archive, "r:xz") as tar:
         for member in tar:
-            if not member.isfile() or not member.name.endswith((".json", ".jsonl")):
+            if not member.isfile() or not (
+                member.name.endswith((".json", ".jsonl")) or member.name.endswith("/artist") or member.name == "artist"
+            ):
                 continue
             stream = tar.extractfile(member)
             if stream is None:

@@ -11,7 +11,7 @@ python3 tools/musicbrainz/build_artist_index.py build \
   --snapshot 2026-08-13
 ```
 
-The builder keeps musical artist entities, canonical fields and aliases, creates indexed normalized/folded columns, and attempts an FTS5 table. Its report includes parsed/retained artists, aliases, duplicate removal, database bytes, checksum and build time. It never extracts raw JSON to disk.
+The builder keeps musical artist entities, canonical fields and aliases, creates indexed normalized/folded columns, and attempts an FTS5 table. It supports the official `mbdump/artist` member as well as JSON/JSONL members. Its report includes parsed/retained artists, aliases, duplicate removal, database bytes, checksum and build time. It never extracts raw JSON to disk.
 
 Benchmark generated files without loading the artist table into memory:
 
@@ -20,3 +20,5 @@ python3 tools/musicbrainz/benchmark_artist_index.py app/src/main/assets/aura_art
 ```
 
 The committed app asset is a small seed database for development and offline smoke tests. Generate the full index locally from the latest official artist dump when the APK/AAB size budget is approved. Do not commit the dump or generated files under `tools/musicbrainz/cache/`.
+
+The first full-dump measurement is recorded in [full-index-report-2026-08-13.md](full-index-report-2026-08-13.md).

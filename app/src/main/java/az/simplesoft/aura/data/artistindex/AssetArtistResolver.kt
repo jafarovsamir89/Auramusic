@@ -57,6 +57,29 @@ class AssetArtistResolver(
         val normalized = ArtistNameNormalizer.normalize(raw)
         val folded = ArtistNameNormalizer.folded(raw)
         val rows = linkedMapOf<Long, MutableEntry>()
+        val ftsIds = queryFtsIds(db, normalized, folded)
+        if (ftsIds.isNotEmpty()) {
+            val placeholders = ftsIds.joinToString(",") { "?" }
+            val args = ftsIds.map(Long::toString).toTypedArray()
+            db.rawQuery(
+                "SELECT id, mbid, canonical_name, sort_name, country, type, disambiguation FROM artists WHERE id IN ($placeholders)",
+                args
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    rows[cursor.getLong(0)] = MutableEntry(
+                        cursor.getLong(0), cursor.getString(1), cursor.getString(2), cursor.getString(3),
+                        cursor.getString(4), cursor.getString(5), cursor.getString(6)
+                    )
+                }
+            }
+            if (rows.isNotEmpty()) {
+                val aliasArgs = ftsIds.map(Long::toString).toTypedArray()
+                db.rawQuery("SELECT artist_id, alias FROM artist_aliases WHERE artist_id IN ($placeholders)", aliasArgs).use { cursor ->
+                    while (cursor.moveToNext()) rows[cursor.getLong(0)]?.aliases?.add(cursor.getString(1))
+                }
+                return rows.values.map { it.toModel() }
+            }
+        }
         val sql = """
             SELECT a.id, a.mbid, a.canonical_name, a.sort_name, a.country, a.type, a.disambiguation,
                    NULL AS alias FROM artists a
@@ -83,6 +106,15 @@ class AssetArtistResolver(
         }
         return rows.values.map { it.toModel() }
     }
+
+    private fun queryFtsIds(db: SQLiteDatabase, normalized: String, folded: String): List<Long> = runCatching {
+        if (db.rawQuery("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'artist_search' LIMIT 1", null).use { !it.moveToFirst() }) return emptyList()
+        val terms = folded.ifBlank { normalized }.split(' ').filter { it.length >= 2 }.joinToString(" AND ") { "\"${it.replace("\"", "") }\"" }
+        if (terms.isBlank()) return emptyList()
+        db.rawQuery("SELECT rowid FROM artist_search WHERE artist_search MATCH ? LIMIT 100", arrayOf(terms)).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getLong(0)) }
+        }
+    }.getOrDefault(emptyList())
 
     private data class MutableEntry(
         val id: Long,

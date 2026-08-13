@@ -24,7 +24,7 @@ def main() -> int:
     db = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     methods = {
         "normal-index": lambda q: db.execute("SELECT id FROM artists WHERE normalized_name = ? OR folded_name = ? LIMIT 20", (q, q)).fetchall(),
-        "prefix-index": lambda q: db.execute("SELECT id FROM artists WHERE normalized_name LIKE ? OR folded_name LIKE ? LIMIT 20", (q + "%", q + "%")).fetchall(),
+        "prefix-index": lambda q: db.execute("SELECT id FROM artists WHERE normalized_name LIKE ? UNION SELECT id FROM artists WHERE folded_name LIKE ? LIMIT 20", (q + "%", q + "%")).fetchall(),
     }
     if db.execute("SELECT 1 FROM sqlite_master WHERE name='artist_search'").fetchone():
         methods["fts5"] = lambda q: db.execute("SELECT rowid FROM artist_search WHERE artist_search MATCH ? LIMIT 20", (q.replace(" ", " AND "),)).fetchall()
