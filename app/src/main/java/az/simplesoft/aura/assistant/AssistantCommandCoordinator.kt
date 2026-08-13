@@ -59,8 +59,8 @@ class LocalCommandClassifier {
         val rules = listOf(
             Rule(MusicIntent.Pause, listOf("пауза", "поставь на паузу", "останови музыку", "pause", "stop the music")),
             Rule(MusicIntent.Play, listOf("продолжи", "продолжить музыку", "возобнови", "resume", "continue playing")),
-            Rule(MusicIntent.Next, listOf("следующий трек", "следующая песня", "переключи песню", "next track", "next song")),
-            Rule(MusicIntent.Previous, listOf("предыдущий трек", "предыдущая песня", "previous track", "previous song")),
+            Rule(MusicIntent.Next, listOf("следующий трек", "следующая песня", "следующий канал", "переключи канал", "переключи песню", "next track", "next song", "next station", "change channel")),
+            Rule(MusicIntent.Previous, listOf("предыдущий трек", "предыдущая песня", "предыдущий канал", "previous track", "previous song", "previous station")),
             Rule(MusicIntent.Louder, listOf("громче", "прибавь звук", "louder", "volume up")),
             Rule(MusicIntent.Quieter, listOf("тише", "убавь звук", "quieter", "volume down")),
             Rule(MusicIntent.Mute, listOf("без звука", "выключи звук", "mute")),

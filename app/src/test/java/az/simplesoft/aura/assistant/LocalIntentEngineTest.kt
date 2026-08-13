@@ -145,6 +145,10 @@ class LocalIntentEngineTest {
         assertEquals(MusicIntent.ClearMemory, engine.understand("forget everything about me").intent)
         assertEquals(MusicIntent.MyMix, engine.understand("Поставить микс песен").intent)
         assertEquals(MusicIntent.Louder, engine.understand("Увеличить громкость").intent)
+        assertEquals(MusicIntent.Next, engine.understand("Следующий канал").intent)
+        assertEquals(MusicIntent.Previous, engine.understand("Предыдущий канал").intent)
+        assertEquals(MusicIntent.SetEqualizer(EqualizerPreset.ROCK), engine.understand("Эквалайзер рок").intent)
+        assertEquals(MusicIntent.DisableEqualizer, engine.understand("Выключи эквалайзер").intent)
     }
 
     @Test

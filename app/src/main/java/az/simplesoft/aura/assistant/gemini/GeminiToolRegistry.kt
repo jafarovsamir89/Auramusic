@@ -45,6 +45,8 @@ object GeminiToolRegistry {
             put(declaration("volume_up", "Raise Android media/music volume and confirm the resulting percentage."))
             put(declaration("volume_down", "Lower Android media/music volume and confirm the resulting percentage."))
             put(declaration("set_volume", "Set Android media/music volume percentage from 0 to 100.", JSONObject().put("percent", integer("Volume percent, 0..100")), listOf("percent")))
+            put(declaration("set_equalizer", "Apply a music equalizer preset: flat, bass, vocal, rock, or acoustic.", JSONObject().put("preset", string("One of flat, bass, vocal, rock, acoustic")), listOf("preset")))
+            put(declaration("disable_equalizer", "Turn off the music equalizer."))
             put(declaration("mute_music", "Mute media playback without changing the voice session."))
             put(declaration("unmute_music", "Unmute media playback."))
             put(declaration("set_car_mode", "Turn AURA driving mode on or off.", JSONObject().put("enabled", boolean("Whether driving mode should be enabled")), listOf("enabled")))

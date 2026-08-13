@@ -23,6 +23,7 @@ class PlaybackConnection(
         fun onPlaybackChanged(isPlaying: Boolean, isBuffering: Boolean)
         fun onTrackChanged(trackId: String)
         fun onPlaybackError(trackId: String?, message: String)
+        fun onAudioSessionIdChanged(sessionId: Int) = Unit
     }
 
     private val appContext = context.applicationContext
@@ -36,6 +37,10 @@ class PlaybackConnection(
                 isPlaying = player.isPlaying,
                 isBuffering = player.playbackState == Player.STATE_BUFFERING
             )
+        }
+
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            listener.onAudioSessionIdChanged(audioSessionId)
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {

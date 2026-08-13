@@ -18,6 +18,9 @@ sealed interface MusicIntent {
     data object Mute : MusicIntent
     data object Unmute : MusicIntent
     data class SetVolume(val percent: Int) : MusicIntent
+    data class SetEqualizer(val preset: EqualizerPreset) : MusicIntent
+    data object DisableEqualizer : MusicIntent
+    data object CycleEqualizer : MusicIntent
     data object Repeat : MusicIntent
     data object Shuffle : MusicIntent
     data object NowPlaying : MusicIntent
@@ -43,6 +46,20 @@ sealed interface MusicIntent {
     data object ContinueListening : MusicIntent
     data object CarMode : MusicIntent
     data object Unknown : MusicIntent
+}
+
+enum class EqualizerPreset(val label: String, val aliases: Set<String>) {
+    FLAT("Плоский", setOf("плоский", "flat", "обычный")),
+    BASS("Бас", setOf("бас", "басовый", "bass", "низкие")),
+    VOCAL("Вокал", setOf("вокал", "голос", "vocal", "voice")),
+    ROCK("Рок", setOf("рок", "rock")),
+    ACOUSTIC("Акустика", setOf("акустика", "acoustic"));
+
+    companion object {
+        fun fromText(text: String): EqualizerPreset? = entries.firstOrNull { preset ->
+            preset.aliases.any { alias -> text == alias || text.contains(alias) }
+        }
+    }
 }
 
 enum class AssistantLanguage(val tag: String) {

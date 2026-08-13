@@ -2,6 +2,7 @@ package az.simplesoft.aura.ui
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -38,6 +39,7 @@ import az.simplesoft.aura.assistant.gemini.GeminiUsageStore
 import az.simplesoft.aura.assistant.LocalIntentEngine
 import az.simplesoft.aura.assistant.MusicIntent
 import az.simplesoft.aura.assistant.Mood
+import az.simplesoft.aura.assistant.EqualizerPreset
 import az.simplesoft.aura.assistant.RoomAssistantMemoryPersistence
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.LocalMusicProvider
@@ -74,7 +76,9 @@ import az.simplesoft.aura.domain.music.QueueEditor
 import az.simplesoft.aura.domain.music.RecommendationContext
 import az.simplesoft.aura.domain.music.SearchOutcome
 import az.simplesoft.aura.playback.PlaybackConnection
+import az.simplesoft.aura.playback.AudioEffectsController
 import az.simplesoft.aura.playback.PlaybackConnectionCoordinator
+import az.simplesoft.aura.voice.AuraVoiceForegroundService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
@@ -156,6 +160,7 @@ data class AuraUiState(
     val repeatMode: AuraRepeatMode = AuraRepeatMode.OFF,
     val isRecommendationLoading: Boolean = false,
     val autoContinueEnabled: Boolean = true,
+    val equalizerPreset: EqualizerPreset = EqualizerPreset.FLAT,
     val sleepTimerEndsAt: Long? = null,
     val stopAfterTrack: Boolean = false,
     val searchPhase: SearchPhase = SearchPhase.IDLE,
@@ -213,6 +218,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         )
     }
     private val playback = PlaybackConnection(application, this)
+    private val audioEffects = AudioEffectsController()
     private val providerManager = ProviderManager(
         setOf(
             LocalMusicPlugin(localProvider),
@@ -259,6 +265,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }.getOrDefault(VoiceEngineMode.VERIFIED_SILERO).let {
         if (it == VoiceEngineMode.SYSTEM) VoiceEngineMode.VERIFIED_SILERO else it
     }
+    private val initialEqualizerPreset = EqualizerPreset.fromText(
+        preferences.getString("equalizer_preset", EqualizerPreset.FLAT.name).orEmpty()
+    ) ?: EqualizerPreset.FLAT
 
     private val _state = MutableStateFlow(
         AuraUiState(
@@ -270,7 +279,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             isOfflineOnly = BuildConfig.GEMINI_API_KEY.isBlank(),
             geminiConfigured = BuildConfig.GEMINI_API_KEY.isNotBlank(),
             geminiDiagnostics = geminiSession.diagnostics.value,
-            voiceEngineMode = initialVoiceEngineMode
+            voiceEngineMode = initialVoiceEngineMode,
+            equalizerPreset = initialEqualizerPreset
         )
     )
     val state = _state.asStateFlow()
@@ -535,6 +545,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 recognitionBackend = RecognitionBackend.Unavailable
             )
         }
+        startVoiceForegroundService()
         if (geminiSession.state.value == GeminiSessionState.DISCONNECTED || geminiSession.state.value == GeminiSessionState.ERROR) {
             geminiSession.connect()
         }
@@ -590,7 +601,18 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun stopGeminiVoice() {
         geminiAudioInput.stop()
         geminiSession.markSpeechEnded()
+        stopVoiceForegroundService()
         _state.update { it.copy(isListening = false, isVoiceSessionActive = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Idle) }
+    }
+
+    private fun startVoiceForegroundService() {
+        val intent = Intent(getApplication<Application>(), AuraVoiceForegroundService::class.java)
+            .setAction(AuraVoiceForegroundService.ACTION_START)
+        androidx.core.content.ContextCompat.startForegroundService(getApplication(), intent)
+    }
+
+    private fun stopVoiceForegroundService() {
+        getApplication<Application>().stopService(Intent(getApplication(), AuraVoiceForegroundService::class.java))
     }
 
     fun setGeminiVoice(voice: String) {
@@ -802,6 +824,13 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 if (requested !in 0..100) GeminiToolResult("error", "Громкость должна быть от 0 до 100")
                 else ok("Громкость ${setMusicVolume(requested)}%")
             }
+            "set_equalizer" -> {
+                val preset = EqualizerPreset.fromText(args.optString("preset"))
+                    ?: return GeminiToolResult("error", "Пресет: flat, bass, vocal, rock или acoustic")
+                setEqualizer(preset)
+                ok("Эквалайзер: ${preset.label}")
+            }
+            "disable_equalizer" -> { disableEqualizer(); ok("Эквалайзер выключен") }
             "mute_music" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, AudioManager.FLAG_SHOW_UI); ok("Звук выключен") }
             "unmute_music" -> { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, AudioManager.FLAG_SHOW_UI); ok("Звук включён") }
             "set_car_mode" -> {
@@ -1262,6 +1291,18 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 _state.update { it.copy(assistantText = "Громкость $actual%") }
                 return null
             }
+            is MusicIntent.SetEqualizer -> {
+                setEqualizer(answer.intent.preset)
+                return null
+            }
+            MusicIntent.DisableEqualizer -> {
+                disableEqualizer()
+                return null
+            }
+            MusicIntent.CycleEqualizer -> {
+                cycleEqualizer()
+                return null
+            }
             else -> Unit
         }
 
@@ -1340,6 +1381,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     val level = (audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * answer.intent.percent / 100.0).toInt()
                     audio.setStreamVolume(AudioManager.STREAM_MUSIC, level, 0)
                 }
+                is MusicIntent.SetEqualizer,
+                MusicIntent.DisableEqualizer,
+                MusicIntent.CycleEqualizer -> current
                 MusicIntent.CarMode -> current.copy(isCarMode = true, assistantText = answer.text)
                 MusicIntent.NowPlaying -> current.copy(
                     assistantText = "Сейчас играет ${current.nowTrack.title} — ${current.nowTrack.artist}."
@@ -1394,6 +1438,10 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun next() {
         if (!hasPreparedMedia) return
         val current = state.value
+        if (current.nowTrack.sourceId == "radio_browser") {
+            RadioPlaybackSelector.next(current.radioStations, current.nowTrack.id)?.let(::startPlayback)
+            return
+        }
         val earlySkip = current.positionMs in 1 until EARLY_SKIP_THRESHOLD_MS &&
             (current.playbackDurationMs == 0L || current.positionMs * 4 < current.playbackDurationMs)
         if (earlySkip) recordRecommendationEvent(current.nowTrack, RecommendationEventType.SKIP)
@@ -1401,7 +1449,13 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     fun previous() {
-        if (hasPreparedMedia) playback.previous()
+        if (!hasPreparedMedia) return
+        val current = state.value
+        if (current.nowTrack.sourceId == "radio_browser") {
+            RadioPlaybackSelector.previous(current.radioStations, current.nowTrack.id)?.let(::startPlayback)
+            return
+        }
+        playback.previous()
     }
 
     fun toggleLike() {
@@ -1429,6 +1483,28 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             playback.setRepeat(next.repeatMode)
             persist(next)
         }
+    }
+
+    override fun onAudioSessionIdChanged(sessionId: Int) {
+        audioEffects.setSessionId(sessionId)
+        audioEffects.apply(state.value.equalizerPreset)
+    }
+
+    fun setEqualizer(preset: EqualizerPreset) {
+        audioEffects.apply(preset)
+        preferences.edit { putString("equalizer_preset", preset.name.lowercase()) }
+        _state.update { it.copy(equalizerPreset = preset, assistantText = "Эквалайзер: ${preset.label}") }
+    }
+
+    fun disableEqualizer() {
+        audioEffects.disable()
+        preferences.edit { putString("equalizer_preset", EqualizerPreset.FLAT.name.lowercase()) }
+        _state.update { it.copy(equalizerPreset = EqualizerPreset.FLAT, assistantText = "Эквалайзер выключен") }
+    }
+
+    fun cycleEqualizer() {
+        val next = EqualizerPreset.entries[(state.value.equalizerPreset.ordinal + 1) % EqualizerPreset.entries.size]
+        if (next == EqualizerPreset.FLAT) disableEqualizer() else setEqualizer(next)
     }
 
     fun toggleCarMode() = _state.update { it.copy(isCarMode = !it.isCarMode) }
@@ -2281,6 +2357,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         geminiSession.close()
         speech.shutdown()
         playback.release()
+        audioEffects.release()
+        stopVoiceForegroundService()
         super.onCleared()
     }
 

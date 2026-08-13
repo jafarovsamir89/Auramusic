@@ -369,6 +369,7 @@ fun AuraApp(
                 onQueue = vm::openQueue,
                 onSeek = vm::seekTo,
                 onCar = vm::toggleCarMode,
+                onEqualizer = vm::cycleEqualizer,
                 onAddToPlaylist = { playlistTarget = state.nowTrack }
             )
                 else -> MainShell(
@@ -1767,6 +1768,7 @@ private fun PlayerScreen(
     onQueue: () -> Unit,
     onSeek: (Long) -> Unit,
     onCar: () -> Unit,
+    onEqualizer: () -> Unit,
     onAddToPlaylist: () -> Unit
 ) {
     val track = state.nowTrack
@@ -1871,6 +1873,7 @@ private fun PlayerScreen(
             ) {
                 PlayerAction(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь", onQueue)
                 PlayerAction(Icons.AutoMirrored.Rounded.PlaylistAdd, "В плейлист", onAddToPlaylist)
+                PlayerAction(Icons.Rounded.Equalizer, "EQ: ${state.equalizerPreset.label}", onEqualizer)
                 PlayerAction(Icons.Rounded.DirectionsCar, "В машине", onCar)
             }
             Spacer(Modifier.height(10.dp))

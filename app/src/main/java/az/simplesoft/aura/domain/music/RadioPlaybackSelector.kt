@@ -9,4 +9,16 @@ object RadioPlaybackSelector {
             station.isPlayable &&
             !station.streamUrl.isNullOrBlank()
     }
+
+    fun next(stations: List<Track>, currentId: String): Track? = step(stations, currentId, 1)
+
+    fun previous(stations: List<Track>, currentId: String): Track? = step(stations, currentId, -1)
+
+    private fun step(stations: List<Track>, currentId: String, delta: Int): Track? {
+        val playable = stations.filter { it.sourceId == "radio_browser" && it.isPlayable && !it.streamUrl.isNullOrBlank() }
+        if (playable.isEmpty()) return null
+        val currentIndex = playable.indexOfFirst { it.id == currentId }
+        val target = if (currentIndex < 0) 0 else (currentIndex + delta).mod(playable.size)
+        return playable[target]
+    }
 }
