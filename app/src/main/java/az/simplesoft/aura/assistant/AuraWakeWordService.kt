@@ -35,6 +35,7 @@ enum class WakeWordServiceState {
 class AuraWakeWordService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var recognizer: OfflineSpeechRecognizer
+    private lateinit var audioGate: WakeWordAudioGate
     private lateinit var coordinator: AssistantCommandCoordinator
     private lateinit var actionExecutor: BackgroundMusicActionExecutor
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -50,6 +51,7 @@ class AuraWakeWordService : Service() {
         state = WakeWordServiceState.STARTING
         coordinator = AssistantCommandCoordinator(this)
         actionExecutor = BackgroundMusicActionExecutor(this)
+        audioGate = WakeWordAudioGate(this)
         recognizer = OfflineSpeechRecognizer(
             context = this,
             onCommand = ::handleUtterance,
@@ -62,6 +64,8 @@ class AuraWakeWordService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             state = WakeWordServiceState.DISABLED
+            audioGate.stop()
+            recognizer.stop()
             stopSelf()
             return START_NOT_STICKY
         }
@@ -82,6 +86,7 @@ class AuraWakeWordService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        audioGate.stop()
         recognizer.destroy()
         actionExecutor.release()
         serviceScope.cancel()
@@ -145,11 +150,21 @@ class AuraWakeWordService : Service() {
     private fun beginListening(delayMs: Long) {
         handler.removeCallbacksAndMessages(null)
         handler.postDelayed({
-            runCatching { recognizer.start() }
+            runCatching {
+                audioGate.start(
+                    scope = serviceScope,
+                    onSpeech = ::onSpeechDetected,
+                    onFailure = { error ->
+                        serviceScope.launch {
+                            handleGateFailure(error)
+                        }
+                    }
+                )
+            }
                 .onSuccess { failureStreak = 0 }
                 .onFailure { error ->
                     failureStreak += 1
-                    Log.w(TAG, "Wake-word recognizer failed to start", error)
+                    Log.w(TAG, "Wake-word microphone gate failed to start", error)
                     if (failureStreak >= MAX_RETRY_STREAK) {
                         state = WakeWordServiceState.ERROR
                         beginListening(LONG_RECOVERY_DELAY_MS)
@@ -160,6 +175,32 @@ class AuraWakeWordService : Service() {
                     }
                 }
         }, delayMs)
+    }
+
+    private fun onSpeechDetected() {
+        serviceScope.launch {
+            state = WakeWordServiceState.LISTENING_FOR_COMMAND
+            runCatching { recognizer.start() }
+                .onSuccess { failureStreak = 0 }
+                .onFailure { error ->
+                    failureStreak += 1
+                    Log.w(TAG, "Wake-word recognizer failed after speech gate", error)
+                    handleTerminal()
+                }
+        }
+    }
+
+    private fun handleGateFailure(error: Throwable) {
+        failureStreak += 1
+        Log.w(TAG, "Wake-word microphone gate stopped unexpectedly", error)
+        state = WakeWordServiceState.RECOVERING
+        val delay = if (failureStreak >= MAX_RETRY_STREAK) {
+            failureStreak = 0
+            LONG_RECOVERY_DELAY_MS
+        } else {
+            RETRY_DELAY_MS * failureStreak
+        }
+        beginListening(delay)
     }
 
     private fun promoteToForeground() {
