@@ -42,6 +42,7 @@ class AuraWakeWordService : Service() {
     private var waitingForFollowUp = false
     private var followUpExpiresAt = 0L
     private var cooldownAfterCommand = false
+    private var activationDispatched = false
     private var failureStreak = 0
     @Volatile var state: WakeWordServiceState = WakeWordServiceState.DISABLED
         private set
@@ -54,6 +55,7 @@ class AuraWakeWordService : Service() {
         audioGate = WakeWordAudioGate(this)
         recognizer = OfflineSpeechRecognizer(
             context = this,
+            onPartialText = ::handlePartialText,
             onCommand = ::handleUtterance,
             onState = { listening -> state = if (listening) WakeWordServiceState.LISTENING_FOR_COMMAND else WakeWordServiceState.WAITING_FOR_WAKE_WORD },
             onTerminal = ::handleTerminal,
@@ -96,6 +98,7 @@ class AuraWakeWordService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun handleUtterance(utterance: String) {
+        if (activationDispatched) return
         val commandAfterWakeWord = WakeWordMatcher.commandAfterWakeWord(utterance)
         when {
             waitingForFollowUp && System.currentTimeMillis() <= followUpExpiresAt -> {
@@ -110,13 +113,7 @@ class AuraWakeWordService : Service() {
             }
             commandAfterWakeWord == null -> Unit
             commandAfterWakeWord.isBlank() -> {
-                if (AuraWakeWordBus.submitActivation()) {
-                    waitingForFollowUp = false
-                    followUpExpiresAt = 0L
-                    cooldownAfterCommand = true
-                    state = WakeWordServiceState.EXECUTING
-                    Log.i(TAG, "Wake-word activation routed to active AURA session")
-                } else {
+                if (!dispatchWakeActivation()) {
                     waitingForFollowUp = true
                     followUpExpiresAt = System.currentTimeMillis() + FOLLOW_UP_WINDOW_MS
                 }
@@ -126,6 +123,28 @@ class AuraWakeWordService : Service() {
                 submitToCoordinator(commandAfterWakeWord)
             }
         }
+    }
+
+    private fun handlePartialText(text: String) {
+        if (activationDispatched) return
+        val commandAfterWakeWord = WakeWordMatcher.commandAfterWakeWord(text)
+        if (commandAfterWakeWord?.isBlank() == true && dispatchWakeActivation()) {
+            // Stop the one-shot recognizer as soon as the wake word is heard;
+            // otherwise Android waits for final silence before the avatar reacts.
+            recognizer.stop()
+        }
+    }
+
+    private fun dispatchWakeActivation(): Boolean {
+        if (activationDispatched) return true
+        if (!AuraWakeWordBus.submitActivation()) return false
+        activationDispatched = true
+        waitingForFollowUp = false
+        followUpExpiresAt = 0L
+        cooldownAfterCommand = true
+        state = WakeWordServiceState.EXECUTING
+        Log.i(TAG, "Wake-word activation routed to active AURA session")
+        return true
     }
 
     private fun submitToCoordinator(command: String) {
@@ -187,6 +206,7 @@ class AuraWakeWordService : Service() {
 
     private fun onSpeechDetected() {
         serviceScope.launch {
+            activationDispatched = false
             state = WakeWordServiceState.LISTENING_FOR_COMMAND
             runCatching { recognizer.start() }
                 .onSuccess { failureStreak = 0 }
