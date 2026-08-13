@@ -255,7 +255,7 @@ fun AuraApp(
     }
     LaunchedEffect(Unit) {
         vm.resumeWakeWordServiceIfNeeded()
-        AuraWakeWordBus.commands.collect { command -> if (state.geminiConfigured) vm.sendGeminiText(command) else vm.submitVoice(command) }
+        AuraWakeWordBus.commands.collect { command -> vm.handleWakeWordCommand(command) }
     }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->

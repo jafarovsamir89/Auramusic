@@ -504,6 +504,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             stopGeminiVoice()
             return
         }
+        if (state.value.wakeWordEnabled) {
+            runCatching { AuraWakeWordService.stop(getApplication()) }
+        }
         _state.update {
             it.copy(
                 assistantText = "Smart Voice подключается…",
@@ -544,6 +547,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                                 delay(GeminiLiveConfig.IDLE_TIMEOUT_MS)
                                 geminiAudioInput.stop()
                                 geminiSession.close()
+                                resumeWakeWordServiceIfNeeded()
                             }
                         }
                     }
@@ -558,11 +562,22 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         geminiIdleJob?.cancel()
         geminiAudioInput.stop()
         geminiSession.markSpeechEnded()
+        resumeWakeWordServiceIfNeeded()
         _state.update { it.copy(isListening = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Idle) }
     }
 
     fun setGeminiVoice(voice: String) {
+        val wasConnected = geminiSession.state.value != GeminiSessionState.DISCONNECTED
+        val wasActive = state.value.isListening || geminiSession.state.value in setOf(
+            GeminiSessionState.USER_SPEAKING,
+            GeminiSessionState.MODEL_SPEAKING,
+            GeminiSessionState.MODEL_THINKING,
+            GeminiSessionState.TOOL_EXECUTING
+        )
+        geminiAudioInput.stop()
         geminiSession.setVoice(voice)
+        if (wasActive) startGeminiVoice()
+        else if (wasConnected) geminiSession.connect()
     }
 
     fun sendGeminiText(text: String) {
@@ -570,6 +585,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         if (input.isBlank() || !state.value.geminiConfigured) return
         val timestamp = System.currentTimeMillis()
         lastGeminiUserText = input.take(320)
+        geminiAudioOutput.start()
         _state.update { current ->
             current.copy(
                 assistantText = current.assistantText,
@@ -593,6 +609,11 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         } else {
             geminiSession.sendText(input)
         }
+    }
+
+    /** Routes an on-device wake-word command into the active app session. */
+    fun handleWakeWordCommand(command: String) {
+        if (BuildConfig.GEMINI_API_KEY.isNotBlank()) sendGeminiText(command) else submitVoice(command)
     }
 
     private fun onGeminiInputTranscription(text: String) {

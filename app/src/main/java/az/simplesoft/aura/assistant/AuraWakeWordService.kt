@@ -71,10 +71,13 @@ class AuraWakeWordService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_START && state !in setOf(WakeWordServiceState.STARTING, WakeWordServiceState.DISABLED, WakeWordServiceState.ERROR)) {
+            return START_STICKY
+        }
         promoteToForeground()
         state = WakeWordServiceState.WAITING_FOR_WAKE_WORD
         beginListening(0L)
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -114,6 +117,11 @@ class AuraWakeWordService : Service() {
 
     private fun submitToCoordinator(command: String) {
         state = WakeWordServiceState.EXECUTING
+        if (AuraWakeWordBus.submit(command)) {
+            Log.i(TAG, "Wake-word command routed to active AURA session")
+            cooldownAfterCommand = true
+            return
+        }
         serviceScope.launch {
             val result = coordinator.submit(command, source = "wake_word", executor = actionExecutor)
             Log.i(TAG, "Background command result: ${result.javaClass.simpleName}")

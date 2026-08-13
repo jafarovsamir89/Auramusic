@@ -48,6 +48,7 @@ class GeminiLiveSession(
     private var reconnects = 0
     private var closedByUser = false
     private val countedUsage = mutableSetOf<String>()
+    private var usageSequence = 0L
     private var sessionId = UUID.randomUUID().toString()
     private val _diagnostics = MutableStateFlow(
         GeminiDiagnostics(
@@ -78,7 +79,6 @@ class GeminiLiveSession(
         _diagnostics.value = _diagnostics.value.copy(voice = value)
         if (mutableState.value != GeminiSessionState.DISCONNECTED) {
             close()
-            connect()
         }
     }
 
@@ -328,6 +328,7 @@ class GeminiLiveSession(
     private fun recordUsage(usage: GeminiTokenUsage) {
         _diagnostics.value = _diagnostics.value.copy(lastUsage = usage)
         val fingerprint = listOf(
+            ++usageSequence,
             usage.promptTokens, usage.responseTokens, usage.totalTokens,
             usage.inputAudioTokens, usage.outputAudioTokens, usage.toolUsePromptTokens
         ).joinToString(":")

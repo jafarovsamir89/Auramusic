@@ -8,7 +8,8 @@ internal object AuraWakeWordBus {
     private val mutableCommands = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val commands = mutableCommands.asSharedFlow()
 
-    fun submit(command: String) {
-        mutableCommands.tryEmit(command)
+    fun submit(command: String): Boolean {
+        if (mutableCommands.subscriptionCount.value == 0) return false
+        return mutableCommands.tryEmit(command)
     }
 }
