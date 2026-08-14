@@ -33,6 +33,7 @@ sealed interface MusicIntent {
     data class AutoContinue(val enabled: Boolean) : MusicIntent
     data class CreatePlaylist(val name: String, val includeQueue: Boolean) : MusicIntent
     data class PlayPlaylist(val name: String, val shuffled: Boolean = false) : MusicIntent
+    data class PlayWorldPlaylist(val query: String, val shuffled: Boolean = false) : MusicIntent
     data object Similar : MusicIntent
     data object MoreLikeThis : MusicIntent
     data object NotThis : MusicIntent

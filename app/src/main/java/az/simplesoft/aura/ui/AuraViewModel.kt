@@ -46,6 +46,7 @@ import az.simplesoft.aura.data.LocalMusicProvider
 import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.RadioBrowserProvider
 import az.simplesoft.aura.data.RadioCountry
+import az.simplesoft.aura.data.playlist.BundledWorldPlaylistCatalog
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.database.AuraPlaybackSnapshot
 import az.simplesoft.aura.data.database.AuraPlaylist
@@ -79,6 +80,8 @@ import az.simplesoft.aura.domain.music.QueueEditResult
 import az.simplesoft.aura.domain.music.QueueEditor
 import az.simplesoft.aura.domain.music.RecommendationContext
 import az.simplesoft.aura.domain.music.SearchOutcome
+import az.simplesoft.aura.domain.playlist.WorldPlaylist
+import az.simplesoft.aura.domain.playlist.WorldPlaylistCandidateMatcher
 import az.simplesoft.aura.playback.PlaybackConnection
 import az.simplesoft.aura.playback.AudioEffectsController
 import az.simplesoft.aura.playback.PlaybackConnectionCoordinator
@@ -91,10 +94,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.first
 import java.util.Calendar
 import kotlin.math.abs
@@ -133,6 +143,7 @@ data class AuraUiState(
     val radioError: String? = null,
     val personalMix: List<Track> = emptyList(),
     val playlists: List<AuraPlaylist> = emptyList(),
+    val worldPlaylists: List<WorldPlaylist> = emptyList(),
     val queueHistory: List<AuraQueueSnapshot> = emptyList(),
     val selectedPlaylistId: String? = null,
     val assistantText: String = "Привет. Я AURA.",
@@ -191,6 +202,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val intentEngine = LocalIntentEngine()
     private val localProvider = LocalMusicProvider(application)
     private val radioProvider = RadioBrowserProvider()
+    private val worldPlaylistCatalog = BundledWorldPlaylistCatalog(application).load()
+    private var worldPlaylistJob: Job? = null
     private val preferences = application.getSharedPreferences("aura_state", Context.MODE_PRIVATE)
     private val stateRepository = AuraStateRepository(application)
     private val artistResolver = CompositeArtistResolver(application)
@@ -287,7 +300,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             geminiConfigured = BuildConfig.GEMINI_API_KEY.isNotBlank(),
             geminiDiagnostics = geminiSession.diagnostics.value,
             voiceEngineMode = initialVoiceEngineMode,
-            equalizerPreset = initialEqualizerPreset
+            equalizerPreset = initialEqualizerPreset,
+            worldPlaylists = worldPlaylistCatalog.playlists.filter { it.items.isNotEmpty() && it.featured }
         )
     )
     val state = _state.asStateFlow()
@@ -316,12 +330,13 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 val queueHistory = stateRepository.loadQueueHistory()
                 val assistantMessages = auraAi.memorySnapshot().recentMessages
                 _state.update { current ->
+                    val chartIsBuilding = worldPlaylistJob?.isActive == true
                     current.copy(
-                        queue = restored.queue.ifEmpty { current.queue },
+                        queue = if (chartIsBuilding) current.queue else restored.queue.ifEmpty { current.queue },
                         memoryTracks = restored.memoryTracks,
-                        currentIndex = if (restored.queue.isEmpty()) current.currentIndex else restored.currentIndex,
-                        positionMs = restored.positionMs,
-                        playbackDurationMs = restored.queue.getOrNull(restored.currentIndex)?.durationMs ?: 0L,
+                        currentIndex = if (chartIsBuilding || restored.queue.isEmpty()) current.currentIndex else restored.currentIndex,
+                        positionMs = if (chartIsBuilding) current.positionMs else restored.positionMs,
+                        playbackDurationMs = if (chartIsBuilding) current.playbackDurationMs else restored.queue.getOrNull(restored.currentIndex)?.durationMs ?: 0L,
                         isShuffleEnabled = restored.shuffleEnabled,
                         repeatMode = restored.repeatMode,
                         autoContinueEnabled = restored.autoContinueEnabled,
@@ -1171,6 +1186,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             if (!exists) return ActionExecutionResult.NotFound("Плейлист $requested не найден")
         }
+        if (answer.intent is MusicIntent.PlayWorldPlaylist) {
+            val playlist = worldPlaylistCatalog.find(answer.intent.query)
+            if (playlist == null || playlist.items.isEmpty()) {
+                return ActionExecutionResult.NotFound("Мировая подборка пока обновляется")
+            }
+        }
         dispatchAssistantReply(answer)?.join()
         return ActionExecutionResult.Success()
     }
@@ -1229,6 +1250,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 }
                 return null
             }
+            is MusicIntent.PlayWorldPlaylist -> return playWorldPlaylist(intent.query, intent.shuffled)
             MusicIntent.OpenQueue -> {
                 _state.update { it.copy(isQueueOpen = true, isPlayerExpanded = false, assistantText = answer.text) }
                 return null
@@ -1458,6 +1480,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 MusicIntent.OpenRadio,
                 is MusicIntent.CreatePlaylist,
                 is MusicIntent.PlayPlaylist,
+                is MusicIntent.PlayWorldPlaylist,
                 MusicIntent.OpenQueue,
                 MusicIntent.ClearQueue,
                 is MusicIntent.QueueTrack,
@@ -1488,6 +1511,110 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             track.id != DemoCatalog.tracks.first().id -> submit("${track.artist} ${track.title}")
             else -> _state.update { it.copy(assistantText = "Сначала найди конкретную песню.") }
         }
+    }
+
+    /** Resolves chart metadata lazily through the configured provider; no audio is bundled in the catalog. */
+    /** Starts a catalog playlist directly; UI cards must not route through chat/search. */
+    fun playWorldPlaylist(playlist: WorldPlaylist) {
+        playWorldPlaylist(playlist.id, shuffled = false)
+    }
+
+    private fun playWorldPlaylist(query: String, shuffled: Boolean): Job = viewModelScope.launch {
+        worldPlaylistJob?.cancel()
+        worldPlaylistJob = coroutineContext[Job]
+        val playlist = worldPlaylistCatalog.find(query)
+        if (playlist == null || playlist.items.isEmpty()) {
+            _state.update { it.copy(assistantText = "Не нашла наполненную мировую подборку.") }
+            return@launch
+        }
+        // Do not leave the previous song visible while a new chart is resolving.
+        // Otherwise a failed search looks like every card starts the old track.
+        playback.pause()
+        _state.update {
+            it.copy(
+                queue = DemoCatalog.tracks,
+                currentIndex = 0,
+                isPlayerExpanded = false,
+                isQueueOpen = true,
+                positionMs = 0L,
+                playbackDurationMs = 0L,
+                isBuffering = false
+            )
+        }
+        _state.update { it.copy(isLoading = true, assistantText = "Собираю ${playlist.title}…") }
+        val items = playlist.items.let { if (shuffled) it.shuffled() else it }.take(MAX_WORLD_PLAYLIST_ITEMS)
+        // Resolve several chart positions at once, but keep a small limit so YouTube
+        // is not flooded and one slow/unavailable song cannot block the whole playlist.
+        val resolverSlots = Semaphore(WORLD_PLAYLIST_CONCURRENCY)
+        val resolved = coroutineScope {
+            items.map { item ->
+                async {
+                    resolverSlots.withPermit { item to resolveWorldPlaylistItem(item) }
+                }
+            }.awaitAll()
+        }.asSequence()
+            .mapNotNull { (_, track) -> track }
+            .distinctBy(Track::id)
+            .toList()
+        resolved.forEachIndexed { index, track ->
+            if (index == 0) {
+                startPlayback(track)
+                _state.update { it.copy(isLoading = false, assistantText = "Запускаю ${playlist.title}…") }
+            } else {
+                appendWorldPlaylistTrack(track)
+            }
+        }
+        if (resolved.isEmpty()) {
+            _state.update { it.copy(isLoading = false, assistantText = "Не удалось найти песни из этой подборки.") }
+            return@launch
+        }
+        _state.update { it.copy(isLoading = false, assistantText = "Запустила ${playlist.title}: ${resolved.size} треков.") }
+    }
+
+    private suspend fun resolveWorldPlaylistItem(item: az.simplesoft.aura.domain.playlist.WorldPlaylistItem): Track? =
+        withTimeoutOrNull(WORLD_PLAYLIST_ITEM_TIMEOUT_MS) {
+            try {
+                when (val result = providerManager.search(MusicSearchRequest(
+                    rawQuery = "${item.artist} ${item.title}",
+                    artist = item.artist,
+                    title = item.title,
+                    year = item.year,
+                    autoPlay = false,
+                    preferredProviderId = YouTubeMusicPlugin.ID,
+                    limit = 8
+                ))) {
+                    is PluginResult.Success -> {
+                        val candidates = WorldPlaylistCandidateMatcher.rank(item, result.value)
+                        candidates.take(5).firstNotNullOfOrNull { candidate ->
+                            when (val source = resolveCandidate(candidate)) {
+                                is ProviderResult.Success -> {
+                                    source.value.track
+                                }
+                                is ProviderResult.Failure -> {
+                                    null
+                                }
+                            }
+                        }
+                    }
+                    is PluginResult.Failure -> {
+                        null
+                    }
+                }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                null
+            }
+        }
+
+    private fun appendWorldPlaylistTrack(track: Track) {
+        _state.update { current ->
+            if (current.queue.any { it.id == track.id }) current
+            else current.copy(
+                queue = current.queue + track,
+                memoryTracks = (current.memoryTracks + track).distinctBy(Track::id).take(100)
+            )
+        }
+        playback.append(track)
     }
 
     fun togglePlay() {
@@ -2468,6 +2595,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     companion object {
+        private const val WORLD_PLAYLIST_ITEM_TIMEOUT_MS = 12_000L
+        private const val WORLD_PLAYLIST_CONCURRENCY = 3
+        private const val MAX_WORLD_PLAYLIST_ITEMS = 32
         private const val AUTO_PLAY_CONFIDENCE = 0.72
         private const val EARLY_SKIP_THRESHOLD_MS = 30_000L
         private const val AUTO_CONTINUE_THRESHOLD = 2

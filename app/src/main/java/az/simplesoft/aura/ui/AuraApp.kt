@@ -178,6 +178,7 @@ import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.RadioCountry
 import az.simplesoft.aura.data.database.AuraPlaylist
 import az.simplesoft.aura.data.database.AuraQueueSnapshot
+import az.simplesoft.aura.domain.playlist.WorldPlaylist
 import az.simplesoft.aura.domain.music.AuraRepeatMode
 import coil.compose.AsyncImage
 import java.text.SimpleDateFormat
@@ -205,6 +206,7 @@ private val ReferenceBlue = Color(0xFF8E91B5)
 @Composable
 fun AuraApp(
     initialCommand: String? = null,
+    forceLocalInitialCommand: Boolean = false,
     speakInitialCommand: Boolean = false,
     initialVoicePreview: String? = null,
     initialVoicePreviewLanguage: String? = null,
@@ -252,7 +254,8 @@ fun AuraApp(
     }
     LaunchedEffect(initialCommand, speakInitialCommand) {
         initialCommand?.takeIf(String::isNotBlank)?.let {
-            if (state.geminiConfigured) vm.sendGeminiText(it)
+            if (forceLocalInitialCommand) vm.submit(it)
+            else if (state.geminiConfigured) vm.sendGeminiText(it)
             else if (speakInitialCommand) vm.submitVoice(it) else vm.submit(it)
         }
     }
@@ -415,6 +418,8 @@ private fun MainShell(
                     state = state,
                     onVoice = onVoice,
                     onMyMix = vm::playMyMix,
+                    worldPlaylists = state.worldPlaylists,
+                    onWorldPlaylist = vm::playWorldPlaylist,
                     onTrack = vm::play,
                     onPlaylists = {
                         vm.setLibrarySection(LibrarySection.PLAYLISTS)
@@ -522,6 +527,8 @@ private fun HomeScreen(
     state: AuraUiState,
     onVoice: () -> Unit,
     onMyMix: () -> Unit,
+    worldPlaylists: List<WorldPlaylist>,
+    onWorldPlaylist: (WorldPlaylist) -> Unit,
     onTrack: (Track) -> Unit,
     onPlaylists: () -> Unit,
     onQueue: () -> Unit,
@@ -584,6 +591,17 @@ private fun HomeScreen(
                 AuraCurrentTrackCard(state, onPlay, onPrevious, onNext, onLike, onSeek, onOpenPlayer)
             }
         }
+        if (worldPlaylists.isNotEmpty()) {
+            item {
+                Text("Мировые подборки", color = PrimaryText, fontSize = 17.sp)
+                Spacer(Modifier.height(12.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(worldPlaylists, key = WorldPlaylist::id) { playlist ->
+                        WorldPlaylistCard(playlist, onWorldPlaylist)
+                    }
+                }
+            }
+        }
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Для твоей атмосферы", color = PrimaryText, fontSize = 17.sp, modifier = Modifier.weight(1f))
@@ -599,6 +617,59 @@ private fun HomeScreen(
                 } else {
                     items(tracks.take(8), key = { it.id }) { track -> AuraAtmosphereCard(track) { onTrack(track) } }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorldPlaylistCard(playlist: WorldPlaylist, onClick: (WorldPlaylist) -> Unit) {
+    val colors = when (playlist.visualKey.lowercase()) {
+        "gold" -> listOf(Color(0xFF5E4217), Color(0xFFD28A35))
+        "sunset" -> listOf(Color(0xFF6B233E), Color(0xFFE06B58))
+        "azeri" -> listOf(Color(0xFF123F5A), Color(0xFF2B8A9A))
+        "classic" -> listOf(Color(0xFF33206B), Color(0xFF9C4FD3))
+        "calm" -> listOf(Color(0xFF193B54), Color(0xFF4B7893))
+        else -> listOf(Color(0xFF25245F), Color(0xFF7D4DCC))
+    }
+    Box(
+        modifier = Modifier
+            .width(252.dp)
+            .height(176.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(Brush.linearGradient(colors))
+            .border(1.dp, Color.White.copy(alpha = .18f), RoundedCornerShape(24.dp))
+            .clickable { onClick(playlist) }
+            .padding(17.dp)
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    playlist.badge.ifBlank { "AURA CHARTS" },
+                    color = Color.White.copy(alpha = .78f),
+                    fontSize = 10.sp,
+                    letterSpacing = 1.2.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(Icons.Rounded.AutoAwesome, null, tint = Color.White.copy(alpha = .8f), modifier = Modifier.size(18.dp))
+            }
+            Spacer(Modifier.height(14.dp))
+            Text(playlist.title, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            playlist.items.firstOrNull()?.let { first ->
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    "${first.artist} · ${first.title}",
+                    color = Color.White.copy(alpha = .74f),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${playlist.items.size} треков", color = Color.White.copy(alpha = .84f), fontSize = 12.sp, modifier = Modifier.weight(1f))
+                Text("Слушать  ›", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
         }
     }

@@ -36,6 +36,7 @@ class LocalIntentEngine {
             }
 
         explicitQueueIntent(text, language)?.let { return it }
+        worldPlaylistIntent(text, language)?.let { return it }
         explicitLibraryIntent(text, language)?.let { return it }
         equalizerIntent(text, language)?.let { return it }
         localPlaybackIntent(text, language)?.let { return it }
@@ -144,6 +145,28 @@ class LocalIntentEngine {
                     "Создаю плейлист $name.", "$name pleylistini yaradıram.", "Creating playlist $name.")
             }
         return null
+    }
+
+    private fun worldPlaylistIntent(text: String, language: AssistantLanguage): AssistantReply? {
+        val phrase = text
+            .replaceFirst(Regex("^(?:включи|поставь|запусти|сыграй|найди|play|put on|turn on)\\s+"), "")
+            .replace(Regex("[!?.,]"), "")
+            .trim()
+        val query = when {
+            matchesAny(phrase, "топ сегодня", "топ дня", "что слушают сегодня", "популярное сегодня", "top today", "today's top", "bu günün topu") -> "top-today-world"
+            matchesAny(phrase, "топ недели", "топ за неделю", "главные песни недели", "top this week", "weekly top", "həftənin top mahnıları") -> "top-week-world"
+            matchesAny(phrase, "топ азербайджана", "топ в азербайджане", "что слушают в азербайджане", "top azerbaijan", "azərbaycanın top mahnıları") -> "top-today-az"
+            matchesAny(phrase, "новинки этой недели", "новая музыка этой недели", "свежие релизы", "new this week", "new music this week", "bu həftənin yenilikləri") -> "new-this-week"
+            matchesAny(phrase, "хиты 90-х", "хиты девяностых", "песни 90 х", "музыка 90-х", "90s hits", "90s music", "90-cı illərin hitləri") -> "hits-90s"
+            matchesAny(phrase, "лучшее 50 cent", "хиты 50 cent", "песни 50 cent", "50 cent hits", "best of 50 cent") -> "artist-50cent"
+            matchesAny(phrase, "лучшее руки вверх", "хиты руки вверх", "песни руки вверх", "ruki vverh hits", "руки вверх хиты") -> "artist-ruki-vverh"
+            matchesAny(phrase, "спокойный вечер", "музыка для сна", "расслабляющая подборка", "calm evening", "relaxing music", "sakit axşam") -> "aura-calm-night"
+            else -> return null
+        }
+        return action(
+            MusicIntent.PlayWorldPlaylist(query), language,
+            "Открываю мировую подборку.", "Dünya musiqi siyahısını açıram.", "Opening the world playlist."
+        )
     }
 
     private fun equalizerIntent(text: String, language: AssistantLanguage): AssistantReply? {

@@ -63,6 +63,21 @@ class LocalIntentEngineTest {
     }
 
     @Test
+    fun recognizesWorldPlaylistShortcuts() {
+        assertEquals(MusicIntent.PlayWorldPlaylist("top-week-world"), engine.understand("Топ недели").intent)
+        assertEquals(MusicIntent.PlayWorldPlaylist("hits-90s"), engine.understand("Хиты 90-х").intent)
+        assertEquals(MusicIntent.PlayWorldPlaylist("new-this-week"), engine.understand("new this week").intent)
+    }
+
+    @Test
+    fun recognizesPermanentEditorialPlaylists() {
+        assertEquals(MusicIntent.PlayWorldPlaylist("artist-50cent"), engine.understand("включи хиты 50 cent").intent)
+        assertEquals(MusicIntent.PlayWorldPlaylist("top-week-world"), engine.understand("поставь топ недели").intent)
+        assertEquals(MusicIntent.PlayWorldPlaylist("artist-ruki-vverh"), engine.understand("поставь лучшее Руки Вверх").intent)
+        assertEquals(MusicIntent.PlayWorldPlaylist("aura-calm-night"), engine.understand("включи спокойный вечер").intent)
+    }
+
+    @Test
     fun recognizesQueueManagementCommandsBeforeGenericPlayback() {
         assertEquals(
             MusicIntent.QueueTrack("numb linkin park", playNext = true),
