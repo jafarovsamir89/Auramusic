@@ -25,7 +25,8 @@ class MusicBrain(
     private val recommendationEngine: RecommendationEngine,
     private val playbackCoordinator: PlaybackCoordinator,
     private val searchBrain: MusicSearchBrain = MusicSearchBrain(),
-    private val artistValidator: ArtistSearchResultValidator = ArtistSearchResultValidator()
+    private val artistValidator: ArtistSearchResultValidator = ArtistSearchResultValidator(),
+    private val preferredProviderIds: Set<String> = emptySet()
 ) {
     private data class ResolvedAlternative(
         val candidate: TrackCandidate,
@@ -56,7 +57,10 @@ class MusicBrain(
                 val ranked = candidateRanker.rank(
                     interpreted,
                     candidates,
-                    RankingContext(providerReliability = reliability)
+                    RankingContext(
+                        providerReliability = reliability,
+                        preferredProviderIds = preferredProviderIds
+                    )
                 )
                 val validated = if (interpreted.artistStrict && !interpreted.artist.isNullOrBlank()) {
                     val validation = artistValidator.validate(

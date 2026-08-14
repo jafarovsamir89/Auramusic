@@ -98,6 +98,7 @@ dependencies {
     implementation("androidx.media3:media3-datasource-okhttp:1.8.0")
     implementation("androidx.media3:media3-common:1.8.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jsoup:jsoup:1.20.1")
     implementation("org.json:json:20260719")
     implementation("org.pytorch:pytorch_android:2.1.0")
     implementation("io.coil-kt:coil-compose:2.7.0")

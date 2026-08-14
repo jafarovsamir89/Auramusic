@@ -57,6 +57,7 @@ import az.simplesoft.aura.data.plugins.core.PluginFailureReason as CoreFailureRe
 import az.simplesoft.aura.data.plugins.core.PluginResult
 import az.simplesoft.aura.data.plugins.core.ProviderManager
 import az.simplesoft.aura.data.plugins.local.LocalMusicPlugin
+import az.simplesoft.aura.data.plugins.muzofond.MuzofondMusicPlugin
 import az.simplesoft.aura.data.plugins.radio.RadioMusicPlugin
 import az.simplesoft.aura.data.plugins.youtube.YouTubeMusicPlugin
 import az.simplesoft.aura.data.providers.MusicSearchRequest
@@ -242,6 +243,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val providerManager = ProviderManager(
         setOf(
             LocalMusicPlugin(localProvider),
+            MuzofondMusicPlugin(),
             YouTubeMusicPlugin(),
             RadioMusicPlugin(radioProvider)
         )
@@ -259,7 +261,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         candidateRanker = candidateRanker,
         identityResolver = identityResolver,
         recommendationEngine = recommendationEngine,
-        playbackCoordinator = playbackCoordinator
+        playbackCoordinator = playbackCoordinator,
+        preferredProviderIds = setOf(MuzofondMusicPlugin.ID)
     )
     private val unifiedTrackSession = UnifiedTrackSession()
     private val candidatesByTrackId = mutableMapOf<String, TrackCandidate>()
