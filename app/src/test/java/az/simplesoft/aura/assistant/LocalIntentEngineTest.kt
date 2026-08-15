@@ -78,6 +78,12 @@ class LocalIntentEngineTest {
     }
 
     @Test
+    fun recognizesNaturalCollectionAndGenreRequests() {
+        assertEquals(MusicIntent.PlayWorldPlaylist("90-х"), engine.understand("Включи подборку песен из 90-х").intent)
+        assertEquals(MusicIntent.PlayWorldPlaylist("рок"), engine.understand("Включи жанр рок").intent)
+    }
+
+    @Test
     fun recognizesQueueManagementCommandsBeforeGenericPlayback() {
         assertEquals(
             MusicIntent.QueueTrack("numb linkin park", playNext = true),

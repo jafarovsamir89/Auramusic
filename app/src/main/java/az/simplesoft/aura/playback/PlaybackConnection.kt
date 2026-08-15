@@ -148,6 +148,16 @@ class PlaybackConnection(
             it.play()
         }
     }
+
+    /** Selects by media id so AURA's non-playable placeholder cannot shift the index. */
+    fun playTrack(trackId: String) = withController { player ->
+        val mediaIds = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }
+        val mediaIndex = PlaybackQueueMapping.mediaIndexForTrack(mediaIds, trackId)
+        if (mediaIndex >= 0) {
+            player.seekToDefaultPosition(mediaIndex)
+            player.play()
+        }
+    }
     fun setShuffle(enabled: Boolean) = withController { it.shuffleModeEnabled = enabled }
     fun setRepeat(mode: AuraRepeatMode) = withController {
         it.repeatMode = when (mode) {

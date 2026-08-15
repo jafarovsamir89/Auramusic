@@ -1,6 +1,6 @@
 package az.simplesoft.aura.domain.playlist
 
-/** A metadata-only playlist assembled from public or licensed chart sources. */
+/** A playlist assembled from a public collection source; playback data is loaded on demand. */
 data class WorldPlaylist(
     val id: String,
     val title: String,
@@ -15,7 +15,8 @@ data class WorldPlaylist(
     val visualKey: String = "default",
     val badge: String = "",
     /** Artist and other niche collections are available on demand, not promoted to everyone. */
-    val featured: Boolean = true
+    val featured: Boolean = true,
+    val collectionUrl: String? = null
 )
 
 enum class WorldPlaylistKind {
@@ -36,7 +37,11 @@ data class WorldPlaylistItem(
     val year: Int? = null,
     val musicBrainzId: String? = null,
     val sourceUrl: String? = null,
-    val sourceScore: Double? = null
+    val sourceScore: Double? = null,
+    val providerId: String? = null,
+    val playbackToken: String? = null,
+    val artworkUrl: String? = null,
+    val durationMs: Long? = null
 )
 
 data class WorldPlaylistCatalog(

@@ -15,7 +15,9 @@ data class MusicSearchRequest(
     val album: String? = null,
     val year: Int? = null,
     val preferredProviderId: String? = null,
-    val limit: Int = 10,
+    // Search screens start with a 20-result page; callers can request up to the
+    // provider-supported maximum when the user taps "Загрузить ещё".
+    val limit: Int = 20,
     val autoPlay: Boolean = true,
     val mediaKind: SearchMediaKind = SearchMediaKind.TRACK,
     /** Optional provider-facing query produced by the music-search brain. */

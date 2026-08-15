@@ -54,6 +54,10 @@ class CandidateRankerV2 {
             normalizedQuery == TrackMatcher.normalize("${candidate.title} ${candidate.artist}")
         ) 1.0 else .0
         val artwork = if (candidate.artworkUrl.isNullOrBlank()) .0 else 1.0
+        // The preferred source is the product's default playback path (Muzofond for
+        // normal search).  A tiny bonus is not enough to win against YouTube's
+        // official/bitrate bonuses, so the source preference must be explicit while
+        // metadata similarity still remains the dominant part of the score.
         val preference = if (candidate.providerId in context.preferredProviderIds) 1.0 else .0
         val history = context.playbackHistoryBoost["${candidate.providerId}:${candidate.id}"]
             ?.coerceIn(0.0, 1.0) ?: .0
@@ -65,6 +69,7 @@ class CandidateRankerV2 {
             if (exactMusicMatch == 1.0) add("full-query-exact")
             if (candidate.isOfficial) add("official")
             if (artwork == 1.0) add("artwork")
+            if (preference == 1.0) add("preferred-source")
             if (semanticHits > 0) add("semantic-match:$semanticHits")
         }
         val penalties = variantPenalties(request, candidate)
@@ -77,7 +82,7 @@ class CandidateRankerV2 {
                 reliability * .08 +
                 exactMusicMatch * .08 +
                 artwork * .02 +
-                preference * .03 +
+                preference * .12 +
                 history * .02 +
                 semanticHits.coerceAtMost(3) * .06 +
                 official -

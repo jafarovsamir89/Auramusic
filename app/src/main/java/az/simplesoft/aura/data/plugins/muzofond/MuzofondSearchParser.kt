@@ -76,6 +76,8 @@ internal class MuzofondSearchParser(
 internal object MuzofondSelectors {
     const val BASE_URL = "https://muzofond.fm/"
     const val HOST = "muzofond.fm"
+    const val COLLECTIONS_URL = "https://muzofond.fm/collections"
+    const val POPULAR_URL = "https://muzofond.fm/popular"
     const val TRACK_PREFIX = "https://muzofond.fm/track/"
     const val SEARCH_PREFIX = "https://muzofond.fm/search/"
 }

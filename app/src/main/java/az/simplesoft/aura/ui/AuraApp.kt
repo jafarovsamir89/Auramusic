@@ -1,10 +1,7 @@
 package az.simplesoft.aura.ui
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
-import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,6 +28,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -49,10 +47,15 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
@@ -149,6 +152,7 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -202,6 +206,8 @@ private val AuraBorder = Color.White.copy(.11f)
 private val ReferencePurple = Color(0xFFA990E8)
 private val ReferenceMagenta = Color(0xFFC2A8DA)
 private val ReferenceBlue = Color(0xFF8E91B5)
+private const val HOME_COLLECTION_PREVIEW_COUNT = 8
+private const val HOME_GENRE_PREVIEW_COUNT = 12
 
 @Composable
 fun AuraApp(
@@ -281,7 +287,17 @@ fun AuraApp(
         !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.DIAGNOSTICS
     ) { vm.navigate(AuraDestination.HOME) }
     BackHandler(
+        !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded &&
+            (state.destination == AuraDestination.SETTINGS || state.destination == AuraDestination.GEMINI)
+    ) { vm.navigate(AuraDestination.HOME) }
+    BackHandler(
         !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.RADIO
+    ) { vm.navigate(AuraDestination.HOME) }
+    BackHandler(
+        !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.COLLECTIONS
+    ) { vm.navigate(AuraDestination.HOME) }
+    BackHandler(
+        !state.isCarMode && !state.isQueueOpen && !state.isPlayerExpanded && state.destination == AuraDestination.GENRES
     ) { vm.navigate(AuraDestination.HOME) }
     BackHandler(
         !state.isCarMode && !state.isQueueOpen && state.isPlayerExpanded
@@ -353,6 +369,11 @@ fun AuraApp(
                 state = state,
                 onClose = vm::closeQueue,
                 onPlay = vm::playFromQueue,
+                onPrevious = vm::previous,
+                onTogglePlay = vm::togglePlay,
+                onNext = vm::next,
+                onLike = vm::toggleLike,
+                onSeek = vm::seekTo,
                 onRemove = vm::removeFromQueue,
                 onMove = vm::moveQueueTrack,
                 onClear = vm::clearQueue,
@@ -362,7 +383,8 @@ fun AuraApp(
                 onSave = vm::saveQueueAsPlaylist,
                 onRestore = vm::restoreQueue,
                 onDeleteHistory = vm::deleteQueueSnapshot,
-                onAddToPlaylist = { playlistTarget = it }
+                onAddToPlaylist = { playlistTarget = it },
+                onToggleTrackLike = vm::toggleLike
             )
             state.isPlayerExpanded -> PlayerScreen(
                 state = state,
@@ -383,14 +405,7 @@ fun AuraApp(
                     state = state,
                     vm = vm,
                     onVoice = voiceInput,
-                    onOpenSettings = {
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                Uri.parse("package:${context.packageName}")
-                            )
-                        )
-                    },
+                    onOpenSettings = { vm.navigate(AuraDestination.SETTINGS) },
                     onAddToPlaylist = { playlistTarget = it }
                 )
             }
@@ -419,7 +434,11 @@ private fun MainShell(
                     onVoice = onVoice,
                     onMyMix = vm::playMyMix,
                     worldPlaylists = state.worldPlaylists,
+                    worldGenres = state.worldGenres,
                     onWorldPlaylist = vm::playWorldPlaylist,
+                    onLikeWorldPlaylist = vm::toggleWorldPlaylistLike,
+                    onOpenCollections = { vm.navigate(AuraDestination.COLLECTIONS) },
+                    onOpenGenres = { vm.navigate(AuraDestination.GENRES) },
                     onTrack = vm::play,
                     onPlaylists = {
                         vm.setLibrarySection(LibrarySection.PLAYLISTS)
@@ -428,7 +447,7 @@ private fun MainShell(
                     onQueue = vm::openQueue,
                     onRadio = vm::openRadio,
                     onAddToPlaylist = onAddToPlaylist,
-                    onDiagnostics = { vm.navigate(AuraDestination.DIAGNOSTICS) },
+                    onMenu = { vm.navigate(AuraDestination.SETTINGS) },
                     onPlay = vm::togglePlay,
                     onPrevious = vm::previous,
                     onNext = vm::next,
@@ -445,7 +464,8 @@ private fun MainShell(
                     onPlayNext = vm::playNext,
                     onAddQueue = vm::addToQueue,
                     onAddPlaylist = onAddToPlaylist,
-                    onRecent = vm::search
+                    onRecent = vm::search,
+                    onLoadMore = vm::loadMoreSearchResults
                 )
                 AuraDestination.RADIO -> RadioScreen(
                     state = state,
@@ -475,13 +495,31 @@ private fun MainShell(
                     onMoveTrack = vm::movePlaylistTrack,
                     onShufflePlaylist = vm::shufflePlaylist,
                     onPlayPlaylist = vm::playPlaylist,
-                    onPlayPlaylistFrom = vm::playPlaylistFrom
+                    onPlayPlaylistFrom = vm::playPlaylistFrom,
+                    onOpenWorldPlaylist = vm::playWorldPlaylist,
+                    onLikeWorldPlaylist = vm::toggleWorldPlaylistLike
                 )
                 AuraDestination.ASSISTANT -> AssistantScreen(
                     state = state,
                     onVoice = onVoice,
                     onCommand = if (state.geminiConfigured) vm::sendGeminiText else vm::submit,
                     onOpenSettings = onOpenSettings
+                )
+                AuraDestination.SETTINGS -> SettingsScreen(
+                    state = state,
+                    onBack = { vm.navigate(AuraDestination.HOME) },
+                    onLanguage = vm::setPreferredLanguage,
+                    onEqualizer = vm::setEqualizer,
+                    onDisableEqualizer = vm::disableEqualizer,
+                    onSourceMode = vm::setMusicSourceMode,
+                    onOpenGemini = { vm.navigate(AuraDestination.GEMINI) },
+                    onOpenDiagnostics = { vm.navigate(AuraDestination.DIAGNOSTICS) }
+                )
+                AuraDestination.GEMINI -> GeminiScreen(
+                    diagnostics = state.geminiDiagnostics,
+                    onBack = { vm.navigate(AuraDestination.SETTINGS) },
+                    onVoice = vm::setGeminiVoice,
+                    onResetUsage = vm::resetGeminiUsage
                 )
                 AuraDestination.DIAGNOSTICS -> DiagnosticsScreen(
                     diagnostics = state.diagnostics,
@@ -490,12 +528,27 @@ private fun MainShell(
                     voiceBackend = state.recognitionBackend,
                     voiceDiagnostics = state.voiceDiagnostics,
                     assistantDiagnostics = state.assistantDiagnostics,
-                    geminiDiagnostics = state.geminiDiagnostics,
-                    onGeminiVoice = vm::setGeminiVoice,
-                    onResetGeminiUsage = vm::resetGeminiUsage,
                     voiceEngineMode = state.voiceEngineMode,
                     onVoiceEngineMode = vm::setVoiceEngineMode,
                     onTestVoice = onVoice
+                )
+                AuraDestination.COLLECTIONS -> CollectionsScreen(
+                    collections = state.worldPlaylists,
+                    genres = state.worldGenres,
+                    likedPlaylistIds = state.likedWorldPlaylistIds,
+                    onBack = { vm.navigate(AuraDestination.HOME) },
+                    onOpen = vm::playWorldPlaylist,
+                    onLike = vm::toggleWorldPlaylistLike,
+                    initialTab = CollectionsTab.COLLECTIONS
+                )
+                AuraDestination.GENRES -> CollectionsScreen(
+                    collections = state.worldPlaylists,
+                    genres = state.worldGenres,
+                    likedPlaylistIds = state.likedWorldPlaylistIds,
+                    onBack = { vm.navigate(AuraDestination.HOME) },
+                    onOpen = vm::playWorldPlaylist,
+                    onLike = vm::toggleWorldPlaylistLike,
+                    initialTab = CollectionsTab.GENRES
                 )
             }
         }
@@ -508,16 +561,18 @@ private fun MainShell(
                 .padding(horizontal = 14.dp)
                 .padding(top = 14.dp, bottom = 8.dp)
         ) {
-            if (state.nowTrack.id != DemoCatalog.tracks.first().id && state.destination != AuraDestination.HOME) {
-                MiniPlayer(
-                    state = state,
-                    onOpen = vm::openPlayer,
-                    onPlay = vm::togglePlay,
-                    onLike = vm::toggleLike
-                )
-                Spacer(Modifier.height(8.dp))
+            if (state.destination != AuraDestination.COLLECTIONS && state.destination != AuraDestination.GENRES) {
+                if (state.nowTrack.id != DemoCatalog.tracks.first().id && state.destination != AuraDestination.HOME) {
+                    MiniPlayer(
+                        state = state,
+                        onOpen = vm::openPlayer,
+                        onPlay = vm::togglePlay,
+                        onLike = vm::toggleLike
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                BottomNavigation(state.destination, vm::navigate, vm::openQueue)
             }
-            BottomNavigation(state.destination, vm::navigate, vm::openQueue)
         }
     }
 }
@@ -528,13 +583,17 @@ private fun HomeScreen(
     onVoice: () -> Unit,
     onMyMix: () -> Unit,
     worldPlaylists: List<WorldPlaylist>,
+    worldGenres: List<WorldPlaylist>,
     onWorldPlaylist: (WorldPlaylist) -> Unit,
+    onLikeWorldPlaylist: (WorldPlaylist) -> Unit,
+    onOpenCollections: () -> Unit,
+    onOpenGenres: () -> Unit,
     onTrack: (Track) -> Unit,
     onPlaylists: () -> Unit,
     onQueue: () -> Unit,
     onRadio: () -> Unit,
     onAddToPlaylist: (Track) -> Unit,
-    onDiagnostics: () -> Unit,
+    onMenu: () -> Unit,
     onPlay: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -542,20 +601,20 @@ private fun HomeScreen(
     onLike: () -> Unit,
     onSeek: (Long) -> Unit
 ) {
-    val tracks = (state.personalMix + state.history + state.queue)
+    val recentTracks = state.history
         .filterNot { it.id == DemoCatalog.tracks.first().id || it.sourceId == "local" }
         .distinctBy(Track::id)
     val hasCurrentTrack = state.nowTrack.id != DemoCatalog.tracks.first().id
     LazyColumn(
         modifier = Modifier.fillMaxSize().statusBarsPadding(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp
+            start = 20.dp, end = 20.dp, top = 12.dp, bottom = 150.dp
         ),
         verticalArrangement = Arrangement.spacedBy(22.dp)
     ) {
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onDiagnostics, modifier = Modifier.size(44.dp)) {
+                IconButton(onClick = onMenu, modifier = Modifier.size(44.dp)) {
                     Icon(Icons.Rounded.Menu, "Меню", tint = PrimaryText, modifier = Modifier.size(25.dp))
                 }
                 Text(
@@ -586,6 +645,17 @@ private fun HomeScreen(
             Spacer(Modifier.height(4.dp))
             Text("Твой музыкальный помощник", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = SecondaryText, fontSize = 14.sp)
         }
+        if (recentTracks.isNotEmpty()) {
+            item {
+                Text("Недавно слушал(а)", color = PrimaryText, fontSize = 17.sp)
+                Spacer(Modifier.height(12.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    items(recentTracks.take(5), key = { it.id }) { track ->
+                        AuraAtmosphereCard(track) { onTrack(track) }
+                    }
+                }
+            }
+        }
         if (hasCurrentTrack) {
             item {
                 AuraCurrentTrackCard(state, onPlay, onPrevious, onNext, onLike, onSeek, onOpenPlayer)
@@ -593,29 +663,39 @@ private fun HomeScreen(
         }
         if (worldPlaylists.isNotEmpty()) {
             item {
-                Text("Мировые подборки", color = PrimaryText, fontSize = 17.sp)
+                Row(Modifier.fillMaxWidth().clickable(onClick = onOpenCollections), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Подборки", color = PrimaryText, fontSize = 17.sp, modifier = Modifier.weight(1f))
+                    Text("Все  ›", color = AccentSilver, fontSize = 13.sp)
+                }
                 Spacer(Modifier.height(12.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(worldPlaylists, key = WorldPlaylist::id) { playlist ->
-                        WorldPlaylistCard(playlist, onWorldPlaylist)
+                    items(worldPlaylists.take(HOME_COLLECTION_PREVIEW_COUNT), key = WorldPlaylist::id) { playlist ->
+                        WorldPlaylistCard(
+                            playlist,
+                            playlist.id in state.likedWorldPlaylistIds,
+                            onWorldPlaylist,
+                            onLikeWorldPlaylist
+                        )
                     }
                 }
             }
         }
-        item {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Для твоей атмосферы", color = PrimaryText, fontSize = 17.sp, modifier = Modifier.weight(1f))
-                Text("Смотреть всё", color = AccentSilver, fontSize = 13.sp)
-            }
-            Spacer(Modifier.height(12.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                if (tracks.isEmpty()) {
-                    item { AuraAtmospherePresetCard("Парить", "Мой микс", 0, onMyMix) }
-                    item { AuraAtmospherePresetCard("Эфир", "Радио", 1, onRadio) }
-                    item { AuraAtmospherePresetCard("Внутри", "Плейлисты", 2, onPlaylists) }
-                    item { AuraAtmospherePresetCard("Лёгкость", "AURA", 3, onVoice) }
-                } else {
-                    items(tracks.take(8), key = { it.id }) { track -> AuraAtmosphereCard(track) { onTrack(track) } }
+        if (worldGenres.isNotEmpty()) {
+            item {
+                Row(Modifier.fillMaxWidth().clickable(onClick = onOpenGenres), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Жанры", color = PrimaryText, fontSize = 17.sp, modifier = Modifier.weight(1f))
+                    Text("Все  ›", color = AccentSilver, fontSize = 13.sp)
+                }
+                Spacer(Modifier.height(12.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(worldGenres.take(HOME_GENRE_PREVIEW_COUNT), key = WorldPlaylist::id) { genre ->
+                        WorldGenreCard(
+                            genre,
+                            genre.id in state.likedWorldPlaylistIds,
+                            { onWorldPlaylist(genre) },
+                            { onLikeWorldPlaylist(genre) }
+                        )
+                    }
                 }
             }
         }
@@ -623,7 +703,12 @@ private fun HomeScreen(
 }
 
 @Composable
-private fun WorldPlaylistCard(playlist: WorldPlaylist, onClick: (WorldPlaylist) -> Unit) {
+private fun WorldPlaylistCard(
+    playlist: WorldPlaylist,
+    liked: Boolean,
+    onClick: (WorldPlaylist) -> Unit,
+    onLike: (WorldPlaylist) -> Unit
+) {
     val colors = when (playlist.visualKey.lowercase()) {
         "gold" -> listOf(Color(0xFF5E4217), Color(0xFFD28A35))
         "sunset" -> listOf(Color(0xFF6B233E), Color(0xFFE06B58))
@@ -635,7 +720,7 @@ private fun WorldPlaylistCard(playlist: WorldPlaylist, onClick: (WorldPlaylist) 
     Box(
         modifier = Modifier
             .width(252.dp)
-            .height(176.dp)
+            .height(154.dp)
             .clip(RoundedCornerShape(24.dp))
             .background(Brush.linearGradient(colors))
             .border(1.dp, Color.White.copy(alpha = .18f), RoundedCornerShape(24.dp))
@@ -652,6 +737,14 @@ private fun WorldPlaylistCard(playlist: WorldPlaylist, onClick: (WorldPlaylist) 
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
+                IconButton(onClick = { onLike(playlist) }, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                        "Сохранить подборку",
+                        tint = Color.White.copy(alpha = .9f),
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
                 Icon(Icons.Rounded.AutoAwesome, null, tint = Color.White.copy(alpha = .8f), modifier = Modifier.size(18.dp))
             }
             Spacer(Modifier.height(14.dp))
@@ -666,12 +759,159 @@ private fun WorldPlaylistCard(playlist: WorldPlaylist, onClick: (WorldPlaylist) 
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Spacer(Modifier.weight(1f))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("${playlist.items.size} треков", color = Color.White.copy(alpha = .84f), fontSize = 12.sp, modifier = Modifier.weight(1f))
-                Text("Слушать  ›", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+private enum class CollectionsTab { COLLECTIONS, GENRES }
+
+@Composable
+private fun CollectionsScreen(
+    collections: List<WorldPlaylist>,
+    genres: List<WorldPlaylist>,
+    likedPlaylistIds: Set<String>,
+    onBack: () -> Unit,
+    onOpen: (WorldPlaylist) -> Unit,
+    onLike: (WorldPlaylist) -> Unit,
+    initialTab: CollectionsTab
+) {
+    var selectedTab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
+    var searchText by rememberSaveable(initialTab) { mutableStateOf("") }
+    val entries = (if (selectedTab == CollectionsTab.COLLECTIONS) collections else genres).filter { entry ->
+        searchText.isBlank() || entry.title.contains(searchText.trim(), ignoreCase = true)
+    }
+    Column(Modifier.fillMaxSize().background(AuraBlack).statusBarsPadding()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
+            Text("Музыка для тебя", fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Icon(Icons.Rounded.AutoAwesome, null, tint = AuraAccentSoft, modifier = Modifier.size(22.dp))
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SelectableChip("Подборки", selectedTab == CollectionsTab.COLLECTIONS) { selectedTab = CollectionsTab.COLLECTIONS }
+            SelectableChip("Жанры", selectedTab == CollectionsTab.GENRES) { selectedTab = CollectionsTab.GENRES }
+        }
+        CollectionSearchField(searchText, onChange = { searchText = it })
+        Spacer(Modifier.height(10.dp))
+        if (entries.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Загружаю каталог…", color = SecondaryText)
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 40.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                gridItems(entries, key = WorldPlaylist::id) { entry ->
+                    CollectionGridCard(
+                        entry,
+                        entry.id in likedPlaylistIds,
+                        { onOpen(entry) },
+                        { onLike(entry) }
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun CollectionSearchField(value: String, onChange: (String) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(48.dp)
+            .clip(RoundedCornerShape(16.dp)).background(ElevatedSurface)
+            .border(1.dp, AuraBorder, RoundedCornerShape(16.dp))
+            .padding(start = 14.dp, end = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Rounded.Search, "Поиск подборок", tint = AuraAccentSoft, modifier = Modifier.size(19.dp))
+        Spacer(Modifier.width(9.dp))
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = PrimaryText),
+            cursorBrush = SolidColor(AuraAccentSoft),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            modifier = Modifier.weight(1f),
+            decorationBox = { field ->
+                if (value.isBlank()) Text("Найти подборку или жанр", color = SecondaryText, fontSize = 13.sp)
+                field()
+            }
+        )
+        if (value.isNotBlank()) {
+            IconButton(onClick = { onChange("") }, modifier = Modifier.size(34.dp)) {
+                Icon(Icons.Rounded.Close, "Очистить поиск", tint = SecondaryText, modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun CollectionGridCard(playlist: WorldPlaylist, liked: Boolean, onClick: () -> Unit, onLike: () -> Unit) {
+    val colors = when (playlist.visualKey.lowercase()) {
+        "gold" -> listOf(Color(0xFF5E4217), Color(0xFFD28A35))
+        "sunset" -> listOf(Color(0xFF6B233E), Color(0xFFE06B58))
+        "classic" -> listOf(Color(0xFF33206B), Color(0xFF9C4FD3))
+        else -> listOf(Color(0xFF25245F), Color(0xFF7D4DCC))
+    }
+    Column(
+        Modifier.fillMaxWidth().height(154.dp).clip(RoundedCornerShape(20.dp))
+            .background(Brush.linearGradient(colors))
+            .border(1.dp, Color.White.copy(.14f), RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(playlist.badge.ifBlank { "ПОДБОРКА" }, color = Color.White.copy(.75f), fontSize = 9.sp, letterSpacing = 1.sp, modifier = Modifier.weight(1f))
+            IconButton(onClick = onLike, modifier = Modifier.size(28.dp)) {
+                Icon(if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, "Сохранить подборку", tint = Color.White.copy(.9f), modifier = Modifier.size(16.dp))
+            }
+            Icon(Icons.Rounded.PlayArrow, null, tint = Color.White.copy(.82f), modifier = Modifier.size(22.dp))
+        }
+        Text(playlist.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 3, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun WorldGenreCard(genre: WorldPlaylist, liked: Boolean, onClick: () -> Unit, onLike: () -> Unit) {
+    val colors = when (genre.visualKey.substringAfter("genre-", "0").toIntOrNull()?.mod(6) ?: 0) {
+        1 -> listOf(Color(0xFF1A4C57), Color(0xFF45A39B))
+        2 -> listOf(Color(0xFF4A2D5F), Color(0xFFAC6CC8))
+        3 -> listOf(Color(0xFF5C3A24), Color(0xFFCC8754))
+        4 -> listOf(Color(0xFF263B62), Color(0xFF668AD2))
+        5 -> listOf(Color(0xFF513B20), Color(0xFFC9A15E))
+        else -> listOf(Color(0xFF263C52), Color(0xFF6197B8))
+    }
+    Column(
+        Modifier.width(132.dp).height(106.dp).clip(RoundedCornerShape(18.dp))
+            .background(Brush.linearGradient(colors))
+            .border(1.dp, Color.White.copy(.14f), RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .semantics {
+                role = Role.Button
+                contentDescription = "Открыть жанр ${genre.title}"
+            }
+            .padding(horizontal = 13.dp, vertical = 13.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.GraphicEq, null, tint = Color.White.copy(.80f), modifier = Modifier.weight(1f).size(21.dp))
+            IconButton(onClick = onLike, modifier = Modifier.size(26.dp)) {
+                Icon(if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, "Сохранить жанр", tint = Color.White.copy(.9f), modifier = Modifier.size(15.dp))
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Text(genre.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -696,7 +936,7 @@ private fun AuraCurrentTrackCard(
                 Spacer(Modifier.height(5.dp))
                 Text(state.nowTrack.artist, color = PrimaryText.copy(.88f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(4.dp))
-                Text(state.nowTrack.genre ?: sourceLabel(state.nowTrack).lowercase(), color = AccentSilver, fontSize = 14.sp, maxLines = 1)
+                Text(state.nowTrack.genre ?: "Музыкальный трек", color = AccentSilver, fontSize = 14.sp, maxLines = 1)
             }
             IconButton(onClick = onPlay, modifier = Modifier.size(52.dp).background(Color.White.copy(.07f), CircleShape)) {
                 Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Воспроизведение", tint = AccentSilver, modifier = Modifier.size(25.dp))
@@ -902,6 +1142,143 @@ private fun HeroAction(label: String, icon: ImageVector, onClick: () -> Unit) {
 }
 
 @Composable
+private fun SettingsScreen(
+    state: AuraUiState,
+    onBack: () -> Unit,
+    onLanguage: (String) -> Unit,
+    onEqualizer: (az.simplesoft.aura.assistant.EqualizerPreset) -> Unit,
+    onDisableEqualizer: () -> Unit,
+    onSourceMode: (MusicSourceMode) -> Unit,
+    onOpenGemini: () -> Unit,
+    onOpenDiagnostics: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().statusBarsPadding(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
+                Column(Modifier.weight(1f)) {
+                    Text("Меню", style = MaterialTheme.typography.headlineLarge)
+                    Text("Настройки AURA", color = SecondaryText, fontSize = 12.sp)
+                }
+                Icon(Icons.Rounded.Settings, null, tint = AccentSilver)
+            }
+        }
+        item {
+            SettingsSectionTitle("Основные")
+            SettingsCard {
+                SettingsRow(Icons.Rounded.Settings, "Язык AURA", languageLabel(state.preferredLanguage), null)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("ru" to "Русский", "az" to "Azərbaycan", "en" to "English").forEach { (code, label) ->
+                        ChoiceChip(label, state.preferredLanguage == code) { onLanguage(code) }
+                    }
+                }
+            }
+        }
+        item {
+            SettingsSectionTitle("Аудио")
+            SettingsCard {
+                SettingsRow(Icons.Rounded.Equalizer, "Эквалайзер", state.equalizerPreset.label, null)
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    az.simplesoft.aura.assistant.EqualizerPreset.entries.forEach { preset ->
+                        ChoiceChip(preset.label, state.equalizerPreset == preset) {
+                            if (preset == az.simplesoft.aura.assistant.EqualizerPreset.FLAT) onDisableEqualizer() else onEqualizer(preset)
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            SettingsSectionTitle("Источники музыки")
+            SettingsCard {
+                Text("Как искать и воспроизводить треки", color = SecondaryText, fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                MusicSourceMode.entries.forEach { mode ->
+                    SourceOption(mode, state.musicSourceMode == mode, onSourceMode)
+                }
+            }
+        }
+        item {
+            SettingsSectionTitle("AURA и разработка")
+            SettingsCard {
+                SettingsRow(Icons.Rounded.AutoAwesome, "Gemini Smart Voice", "Голос, модель и токены") { onOpenGemini() }
+                HorizontalDivider(color = Color.White.copy(.08f), modifier = Modifier.padding(vertical = 4.dp))
+                SettingsRow(Icons.Rounded.GraphicEq, "Диагностика", "Микрофон, поиск и ресурсы") { onOpenDiagnostics() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GeminiScreen(
+    diagnostics: GeminiDiagnostics,
+    onBack: () -> Unit,
+    onVoice: (String) -> Unit,
+    onResetUsage: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().statusBarsPadding(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
+                Column(Modifier.weight(1f)) {
+                    Text("Gemini", style = MaterialTheme.typography.headlineLarge)
+                    Text("Smart Voice и расход токенов", color = SecondaryText, fontSize = 12.sp)
+                }
+                Icon(Icons.Rounded.AutoAwesome, null, tint = AccentSilver)
+            }
+        }
+        item {
+            SettingsCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(9.dp).background(if (diagnostics.connected) AuraMint else Color(0xFFE09A9A), CircleShape))
+                    Spacer(Modifier.width(9.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(if (diagnostics.connected) "Gemini подключён" else "Gemini не подключён", fontWeight = FontWeight.Medium)
+                        Text(if (diagnostics.connected) diagnostics.model else "Добавь GEMINI_API_KEY в local.properties", color = SecondaryText, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+        item {
+            SettingsSectionTitle("Голос модели")
+            SettingsCard {
+                GeminiLiveConfig.VOICES.forEach { voice ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { onVoice(voice) }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = diagnostics.voice == voice, onClick = { onVoice(voice) })
+                        Text(voice, fontSize = 14.sp)
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text("Текущий режим: ${diagnostics.thinkingLevel}", color = SecondaryText, fontSize = 12.sp)
+            }
+        }
+        item {
+            SettingsSectionTitle("Использование")
+            SettingsCard {
+                UsageRow("Последний ответ", "${diagnostics.lastUsage.totalTokens} токенов")
+                UsageRow("Текущая сессия", "${diagnostics.sessionUsage.totalTokens} токенов")
+                UsageRow("Всего на устройстве", "${diagnostics.lifetimeUsage.totalTokens} токенов")
+                UsageRow("Примерная стоимость", formatUsd(diagnostics.lifetimeUsage.estimatedCostUsd))
+                TextButton(onClick = onResetUsage) { Text("Сбросить счётчик") }
+            }
+        }
+        diagnostics.lastError?.let { error -> item { DiagnosticRow("Последняя ошибка", error) } }
+    }
+}
+
+@Composable
 private fun DiagnosticsScreen(
     diagnostics: ProviderDiagnostics,
     onBack: () -> Unit,
@@ -909,9 +1286,6 @@ private fun DiagnosticsScreen(
     voiceBackend: az.simplesoft.aura.assistant.RecognitionBackend,
     voiceDiagnostics: az.simplesoft.aura.assistant.VoiceCaptureDiagnostics?,
     assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics?,
-    geminiDiagnostics: GeminiDiagnostics,
-    onGeminiVoice: (String) -> Unit,
-    onResetGeminiUsage: () -> Unit,
     voiceEngineMode: VoiceEngineMode,
     onVoiceEngineMode: (VoiceEngineMode) -> Unit,
     onTestVoice: () -> Unit
@@ -990,43 +1364,6 @@ private fun DiagnosticsScreen(
                 DiagnosticRow("Context", decision.contextReferences.joinToString().ifBlank { "—" })
                 DiagnosticRow("Assistant latency", "${decision.processingTimeMs} ms")
             }
-        }
-        item {
-            Text("Gemini Smart Voice", color = SecondaryText, fontSize = 12.sp)
-            Spacer(Modifier.height(8.dp))
-            DiagnosticRow("Model", geminiDiagnostics.model)
-            DiagnosticRow("State", geminiDiagnostics.state.name)
-            DiagnosticRow("Connected", if (geminiDiagnostics.connected) "yes" else "no")
-            DiagnosticRow("Voice", geminiDiagnostics.voice)
-            Text("Gemini Voice Lab", color = SecondaryText, fontSize = 11.sp)
-            Row(Modifier.horizontalScroll(rememberScrollState())) {
-                GeminiLiveConfig.VOICES.forEach { voice ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = geminiDiagnostics.voice == voice, onClick = { onGeminiVoice(voice) })
-                        Text(voice, fontSize = 11.sp)
-                    }
-                }
-            }
-            DiagnosticRow("Thinking", geminiDiagnostics.thinkingLevel)
-            DiagnosticRow("Input", geminiDiagnostics.inputTranscription.ifBlank { "—" })
-            DiagnosticRow("Output", geminiDiagnostics.outputTranscription.ifBlank { "—" })
-            DiagnosticRow("Speech end → first audio", geminiDiagnostics.speechEndToFirstAudioMs?.let { "$it ms" } ?: "—")
-            DiagnosticRow("Last tool", geminiDiagnostics.lastTool ?: "—")
-            DiagnosticRow("Tool result", geminiDiagnostics.lastToolResult ?: "—")
-            DiagnosticRow("Reconnects / interruptions", "${geminiDiagnostics.reconnectCount} / ${geminiDiagnostics.interruptionCount}")
-            DiagnosticRow("Последний ответ", "${geminiDiagnostics.lastUsage.totalTokens} токенов")
-            DiagnosticRow("Текущая сессия", "${geminiDiagnostics.sessionUsage.totalTokens} токенов")
-            DiagnosticRow("Всего на устройстве", "${geminiDiagnostics.lifetimeUsage.totalTokens} токенов")
-            DiagnosticRow("Аудио input / output", "${geminiDiagnostics.lifetimeUsage.inputAudioTokens} / ${geminiDiagnostics.lifetimeUsage.outputAudioTokens}")
-            DiagnosticRow("Текст input / output", "${geminiDiagnostics.lifetimeUsage.inputTextTokens} / ${geminiDiagnostics.lifetimeUsage.outputTextTokens}")
-            DiagnosticRow("Примерная стоимость", "${formatUsd(geminiDiagnostics.lifetimeUsage.estimatedCostUsd)}")
-            TextButton(onClick = onResetGeminiUsage) { Text("Сбросить счётчик") }
-            geminiDiagnostics.lastError?.let { DiagnosticRow("Error", it) }
-            Text(
-                if (geminiDiagnostics.connected) "Gemini Smart Voice отправляет аудио в облачный Live API." else "Для Smart Voice нужен интернет и GEMINI_API_KEY в debug local.properties.",
-                color = SecondaryText,
-                fontSize = 11.sp
-            )
         }
         item { DiagnosticRow("Страница", diagnostics.selectedPage) }
         item {
@@ -1142,6 +1479,87 @@ private fun ResourceCard(
 }
 
 @Composable
+private fun SettingsSectionTitle(title: String) {
+    Text(title, color = SecondaryText, fontSize = 12.sp, letterSpacing = .8.sp)
+}
+
+@Composable
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        color = ElevatedSurface,
+        shape = RoundedCornerShape(22.dp),
+        border = BorderStroke(1.dp, Color.White.copy(.07f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(16.dp), content = content)
+    }
+}
+
+@Composable
+private fun SettingsRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: (() -> Unit)?
+) {
+    Row(
+        Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(38.dp).clip(CircleShape).background(Color.White.copy(.07f)), contentAlignment = Alignment.Center) {
+            Icon(icon, null, tint = AccentSilver, modifier = Modifier.size(19.dp))
+        }
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(subtitle, color = SecondaryText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (onClick != null) Icon(Icons.Rounded.KeyboardArrowDown, "Открыть", tint = SecondaryText)
+    }
+}
+
+@Composable
+private fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        color = if (selected) AuraAccent.copy(.24f) else Color.White.copy(.06f),
+        contentColor = if (selected) PrimaryText else SecondaryText,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, if (selected) AuraAccent.copy(.68f) else Color.White.copy(.08f))
+    ) {
+        Text(label, Modifier.padding(horizontal = 12.dp, vertical = 9.dp), fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun SourceOption(mode: MusicSourceMode, selected: Boolean, onSelect: (MusicSourceMode) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { onSelect(mode) }.padding(vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = { onSelect(mode) })
+        Column(Modifier.weight(1f)) {
+            Text(mode.title, fontSize = 14.sp, fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal)
+            Text(mode.description, color = SecondaryText, fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun UsageRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = SecondaryText, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+private fun languageLabel(code: String): String = when (code) {
+    "az" -> "Azərbaycan"
+    "en" -> "English"
+    else -> "Русский"
+}
+
+@Composable
 private fun DiagnosticRow(label: String, value: String) {
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(ElevatedSurface).padding(14.dp)) {
         Text(label, color = SecondaryText, fontSize = 11.sp)
@@ -1160,14 +1578,14 @@ private fun SearchScreen(
     onPlayNext: (Track) -> Unit,
     onAddQueue: (Track) -> Unit,
     onAddPlaylist: (Track) -> Unit,
-    onRecent: (String) -> Unit
+    onRecent: (String) -> Unit,
+    onLoadMore: () -> Unit
 ) {
     Column(
         Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 20.dp).padding(top = 20.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Поиск", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f))
-            ProviderStatusPill()
         }
         Spacer(Modifier.height(20.dp))
         SearchField(state.query, onQuery, onSubmit, onVoice, state.isListening)
@@ -1187,7 +1605,15 @@ private fun SearchScreen(
         Row(verticalAlignment = Alignment.Bottom) {
             Text("Результаты", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             if (state.isLoading) {
-                CircularProgressIndicator(Modifier.size(18.dp), color = AccentSilver, strokeWidth = 2.dp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(18.dp), color = AccentSilver, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (state.searchResults.isEmpty()) "Ищем…" else "${state.searchResults.size} найдено",
+                        color = SecondaryText,
+                        fontSize = 13.sp
+                    )
+                }
             } else {
                 Text("${state.searchResults.size} результатов", color = SecondaryText, fontSize = 13.sp)
             }
@@ -1209,6 +1635,31 @@ private fun SearchScreen(
                     badge = if (index == 0) "ЛУЧШЕЕ" else null
                 )
                 Spacer(Modifier.height(8.dp))
+            }
+            if (state.searchResults.isNotEmpty() && (state.canLoadMore || state.isLoadingMore)) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = onLoadMore,
+                        enabled = !state.isLoadingMore,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White.copy(alpha = 0.10f),
+                            contentColor = PrimaryText,
+                            disabledContainerColor = Color.White.copy(alpha = 0.06f),
+                            disabledContentColor = SecondaryText
+                        )
+                    ) {
+                        if (state.isLoadingMore) {
+                            CircularProgressIndicator(Modifier.size(18.dp), color = AccentSilver, strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Загружаю…")
+                        } else {
+                            Text("Загрузить ещё")
+                        }
+                    }
+                }
             }
         }
     }
@@ -1336,7 +1787,9 @@ private fun LibraryScreen(
     onMoveTrack: (String, Int, Int) -> Unit,
     onShufflePlaylist: (String) -> Unit,
     onPlayPlaylist: (AuraPlaylist, Boolean) -> Unit,
-    onPlayPlaylistFrom: (AuraPlaylist, Int) -> Unit
+    onPlayPlaylistFrom: (AuraPlaylist, Int) -> Unit,
+    onOpenWorldPlaylist: (WorldPlaylist) -> Unit,
+    onLikeWorldPlaylist: (WorldPlaylist) -> Unit
 ) {
     var createDialog by rememberSaveable { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<AuraPlaylist?>(null) }
@@ -1395,7 +1848,11 @@ private fun LibraryScreen(
                 IconButton(onClick = onClosePlaylist) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
             }
             Text(
-                selected?.name ?: if (state.librarySection == LibrarySection.PLAYLISTS) "Плейлисты" else "Библиотека",
+                selected?.name ?: when (state.librarySection) {
+                    LibrarySection.PLAYLISTS -> "Плейлисты"
+                    LibrarySection.WORLD_PLAYLISTS -> "Сохранённые подборки"
+                    else -> "Библиотека"
+                },
                 style = MaterialTheme.typography.headlineLarge,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
@@ -1435,6 +1892,7 @@ private fun LibraryScreen(
                     LibrarySection.HISTORY -> "История"
                     LibrarySection.LOCAL -> "На телефоне"
                     LibrarySection.PLAYLISTS -> "Плейлисты"
+                    LibrarySection.WORLD_PLAYLISTS -> "Подборки"
                 }
                 SelectableChip(title, section == state.librarySection) { onSection(section) }
             }
@@ -1445,8 +1903,33 @@ private fun LibraryScreen(
             LibrarySection.HISTORY -> state.history
             LibrarySection.LOCAL -> state.localTracks
             LibrarySection.PLAYLISTS -> emptyList()
+            LibrarySection.WORLD_PLAYLISTS -> emptyList()
         }
-        if (state.librarySection == LibrarySection.PLAYLISTS) {
+        if (state.librarySection == LibrarySection.WORLD_PLAYLISTS) {
+            val saved = (state.worldPlaylists + state.worldGenres)
+                .distinctBy(WorldPlaylist::id)
+                .filter { it.id in state.likedWorldPlaylistIds }
+            if (saved.isEmpty()) {
+                EmptyLibrary(Icons.Rounded.FavoriteBorder, "Сохранённых подборок пока нет", "Нажми сердечко на подборке или жанре")
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 180.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    gridItems(saved, key = WorldPlaylist::id) { playlist ->
+                        CollectionGridCard(
+                            playlist,
+                            liked = true,
+                            onClick = { onOpenWorldPlaylist(playlist) },
+                            onLike = { onLikeWorldPlaylist(playlist) }
+                        )
+                    }
+                }
+            }
+        } else if (state.librarySection == LibrarySection.PLAYLISTS) {
             if (state.playlists.isEmpty()) {
                 EmptyLibrary(Icons.AutoMirrored.Rounded.PlaylistPlay, "Плейлистов пока нет", "Создай пустой или сохрани текущую очередь")
                 Spacer(Modifier.height(20.dp))
@@ -1474,12 +1957,14 @@ private fun LibraryScreen(
                     LibrarySection.HISTORY -> Icons.Rounded.History
                     LibrarySection.LOCAL -> Icons.Rounded.Headphones
                     LibrarySection.PLAYLISTS -> Icons.AutoMirrored.Rounded.PlaylistPlay
+                    LibrarySection.WORLD_PLAYLISTS -> Icons.Rounded.FavoriteBorder
                 },
                 when (state.librarySection) {
                     LibrarySection.FAVORITES -> "Здесь появятся любимые треки"
                     LibrarySection.HISTORY -> "История пока пуста"
                     LibrarySection.LOCAL -> "Музыкальные файлы не найдены"
                     LibrarySection.PLAYLISTS -> "Список пока пуст"
+                    LibrarySection.WORLD_PLAYLISTS -> "Сохранённых подборок пока нет"
                 },
                 "Данные сохраняются только на этом устройстве"
             )
@@ -2054,6 +2539,11 @@ private fun QueueScreen(
     state: AuraUiState,
     onClose: () -> Unit,
     onPlay: (Track) -> Unit,
+    onPrevious: () -> Unit,
+    onTogglePlay: () -> Unit,
+    onNext: () -> Unit,
+    onLike: () -> Unit,
+    onSeek: (Long) -> Unit,
     onRemove: (Track) -> Unit,
     onMove: (Int, Int) -> Unit,
     onClear: () -> Unit,
@@ -2063,7 +2553,8 @@ private fun QueueScreen(
     onSave: (String) -> Unit,
     onRestore: (AuraQueueSnapshot) -> Unit,
     onDeleteHistory: (String) -> Unit,
-    onAddToPlaylist: (Track) -> Unit
+    onAddToPlaylist: (Track) -> Unit,
+    onToggleTrackLike: (Track) -> Unit
 ) {
     var historyVisible by rememberSaveable { mutableStateOf(false) }
     var confirmClear by rememberSaveable { mutableStateOf(false) }
@@ -2097,10 +2588,23 @@ private fun QueueScreen(
         ) {
             IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
             Column(Modifier.weight(1f)) {
-                Text("Очередь", style = MaterialTheme.typography.headlineMedium)
-                Text("${state.queue.size} треков в сессии", color = SecondaryText, fontSize = 12.sp)
+                Text(state.activeWorldPlaylistTitle ?: "Очередь", style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    if (state.activeWorldPlaylistTitle != null) "Подборка · ${state.queue.size} треков" else "${state.queue.size} треков в сессии",
+                    color = SecondaryText,
+                    fontSize = 12.sp
+                )
             }
         }
+        QueueNowPlaying(
+            state = state,
+            onPrevious = onPrevious,
+            onPlay = onTogglePlay,
+            onNext = onNext,
+            onLike = onLike,
+            onSeek = onSeek
+        )
+        Spacer(Modifier.height(16.dp))
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2184,8 +2688,78 @@ private fun QueueScreen(
                 onPlay = onPlay,
                 onRemove = onRemove,
                 onMove = onMove,
-                onAddToPlaylist = onAddToPlaylist
+                onAddToPlaylist = onAddToPlaylist,
+                onToggleLike = onToggleTrackLike
             )
+        }
+    }
+}
+
+@Composable
+private fun QueueNowPlaying(
+    state: AuraUiState,
+    onPrevious: () -> Unit,
+    onPlay: () -> Unit,
+    onNext: () -> Unit,
+    onLike: () -> Unit,
+    onSeek: (Long) -> Unit
+    ) {
+    val track = state.nowTrack
+    val isPreparing = state.isLoading && track.id == DemoCatalog.tracks.first().id
+    val duration = maxOf(state.playbackDurationMs, track.durationMs ?: 0L)
+    val progress = if (duration > 0L) (state.positionMs.toFloat() / duration).coerceIn(0f, 1f) else 0f
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp)
+            .clip(RoundedCornerShape(26.dp))
+            .background(Brush.linearGradient(listOf(Color(0xFF34313F), Color(0xFF22232D))))
+            .border(1.dp, Color.White.copy(.12f), RoundedCornerShape(26.dp))
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (isPreparing) {
+                Box(Modifier.size(78.dp).clip(RoundedCornerShape(16.dp)).background(Brush.linearGradient(listOf(ReferencePurple, Color(0xFF3D355D)))), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(25.dp), color = Color.White, strokeWidth = 2.dp)
+                }
+            } else {
+                Artwork(track, Modifier.size(78.dp), 16.dp)
+            }
+            Spacer(Modifier.width(13.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (state.isLoading) "Собираю подборку…" else state.activeWorldPlaylistTitle?.let { "Из подборки" } ?: "Сейчас играет",
+                    color = AuraAccentSoft,
+                    fontSize = 10.sp,
+                    letterSpacing = 1.1.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(if (isPreparing) "Подготовка плейлиста" else track.title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (isPreparing) state.assistantText else track.artist, color = SecondaryText, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (!isPreparing) IconButton(onClick = onLike) {
+                Icon(if (state.liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, "В любимые", tint = ReferenceMagenta)
+            }
+        }
+        if (duration > 0L) {
+            Slider(
+                value = progress,
+                onValueChange = { onSeek((it * duration).toLong()) },
+                colors = SliderDefaults.colors(thumbColor = AuraAccentSoft, activeTrackColor = ReferenceMagenta, inactiveTrackColor = Color.White.copy(.16f)),
+                modifier = Modifier.height(28.dp)
+            )
+            Row(Modifier.fillMaxWidth()) {
+                Text(formatDuration(state.positionMs), color = SecondaryText, fontSize = 10.sp)
+                Spacer(Modifier.weight(1f))
+                Text(formatDuration(duration), color = SecondaryText, fontSize = 10.sp)
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onPrevious) { Icon(Icons.Rounded.SkipPrevious, "Предыдущий", tint = PrimaryText, modifier = Modifier.size(29.dp)) }
+            IconButton(onClick = onPlay, modifier = Modifier.size(52.dp).background(ReferencePurple, CircleShape)) {
+                Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Воспроизведение", tint = Color.White, modifier = Modifier.size(29.dp))
+            }
+            IconButton(onClick = onNext) { Icon(Icons.Rounded.SkipNext, "Следующий", tint = PrimaryText, modifier = Modifier.size(29.dp)) }
         }
     }
 }
@@ -2217,18 +2791,24 @@ private fun ReorderableQueue(
     onPlay: (Track) -> Unit,
     onRemove: (Track) -> Unit,
     onMove: (Int, Int) -> Unit,
-    onAddToPlaylist: (Track) -> Unit
+    onAddToPlaylist: (Track) -> Unit,
+    onToggleLike: (Track) -> Unit
 ) {
     val listState = rememberLazyListState()
     val haptics = LocalHapticFeedback.current
     var draggingIndex by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(0f) }
-    LazyColumn(
+    val visibleQueue = state.queue.filterNot { state.isLoading && it.id == DemoCatalog.tracks.first().id }
+    if (visibleQueue.isEmpty()) {
+        Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+            Text("Треки появятся здесь через секунду", color = SecondaryText, fontSize = 13.sp)
+        }
+    } else LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxWidth(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 12.dp, end = 12.dp, bottom = 28.dp)
     ) {
-        itemsIndexed(state.queue, key = { _, track -> track.id }) { index, track ->
+        itemsIndexed(visibleQueue, key = { _, track -> track.id }) { index, track ->
             val current = track.id == state.nowTrack.id
             val dragging = draggingIndex == index
             Row(
@@ -2287,6 +2867,7 @@ private fun ReorderableQueue(
                         track.id in state.likedIds,
                         { onPlay(track) },
                         onAddPlaylist = { onAddToPlaylist(track) },
+                        onLike = { onToggleLike(track) },
                         highlighted = current,
                         compact = true
                     )
@@ -2490,6 +3071,11 @@ private fun SearchField(
             singleLine = true,
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = PrimaryText),
             cursorBrush = SolidColor(PrimaryText),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(
+                onSearch = { onSubmit() },
+                onDone = { onSubmit() }
+            ),
             modifier = Modifier.weight(1f),
             decorationBox = { field ->
                 if (value.isBlank()) Text("Артист, песня или настроение", color = SecondaryText.copy(.65f), maxLines = 1)
@@ -2545,22 +3131,8 @@ private fun StarterCard(onClick: () -> Unit) {
             Spacer(Modifier.height(5.dp))
             Text("Мот — Капкан", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(4.dp))
-            Text("Поиск → источник → нативный плеер", color = SecondaryText, fontSize = 12.sp)
+            Text("Поиск → выбор песни → нативный плеер", color = SecondaryText, fontSize = 12.sp)
         }
-    }
-}
-
-@Composable
-private fun ProviderStatusPill() {
-    Row(
-        Modifier.clip(RoundedCornerShape(100.dp)).background(Color.White.copy(.06f))
-            .border(1.dp, Color.White.copy(.08f), RoundedCornerShape(100.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(Modifier.size(7.dp).background(Color(0xFF73D99A), CircleShape))
-        Spacer(Modifier.width(7.dp))
-        Text("YOUTUBE", color = AccentSilver, fontSize = 10.sp, letterSpacing = 1.2.sp)
     }
 }
 
@@ -2572,6 +3144,7 @@ private fun TrackRow(
     onPlayNext: (() -> Unit)? = null,
     onAddQueue: (() -> Unit)? = null,
     onAddPlaylist: (() -> Unit)? = null,
+    onLike: (() -> Unit)? = null,
     highlighted: Boolean = false,
     card: Boolean = false,
     badge: String? = null,
@@ -2623,12 +3196,15 @@ private fun TrackRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (!compact) {
-                    Text("  ·  ${sourceLabel(track)}", color = SecondaryText.copy(.55f), fontSize = 9.sp, maxLines = 1)
-                }
             }
         }
-        if (liked) Icon(Icons.Rounded.Favorite, null, tint = AccentSilver, modifier = Modifier.size(17.dp))
+        if (onLike != null) {
+            IconButton(onClick = onLike, modifier = Modifier.size(40.dp)) {
+                Icon(if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, "В любимые", tint = if (liked) AccentSilver else SecondaryText, modifier = Modifier.size(18.dp))
+            }
+        } else if (liked) {
+            Icon(Icons.Rounded.Favorite, null, tint = AccentSilver, modifier = Modifier.size(17.dp))
+        }
         Spacer(Modifier.width(5.dp))
         if (onPlayNext != null || onAddQueue != null || onAddPlaylist != null) {
             Box {
@@ -2857,10 +3433,3 @@ private fun formatDuration(milliseconds: Long): String {
 }
 
 private fun formatUsd(value: Double): String = "$" + "%.4f".format(Locale.US, value)
-
-private fun sourceLabel(track: Track): String = when (track.sourceId) {
-    "local" -> "НА ТЕЛЕФОНЕ"
-    "radio_browser" -> "РАДИО"
-    "youtube" -> "YOUTUBE"
-    else -> "ИСТОЧНИК"
-}

@@ -62,13 +62,38 @@ class CandidateRankerV2Test {
         assertTrue(ranked.last().penalties.any { it.startsWith("semantic-excluded") })
     }
 
+    @Test
+    fun preferredMuzofondSourceBeatsHigherQualityYouTubeDuplicate() {
+        val request = MusicSearchRequest(
+            rawQuery = "The Weeknd Blinding Lights",
+            artist = "The Weeknd",
+            title = "Blinding Lights"
+        )
+        val ranked = ranker.rank(
+            request,
+            listOf(
+                candidate("muzofond-track", "Blinding Lights", official = false, provider = "muzofond")
+                    .copy(bitrateKbps = 128),
+                candidate("youtube-track", "Blinding Lights", official = true, provider = "youtube")
+                    .copy(bitrateKbps = 256)
+            ),
+            RankingContext(
+                providerReliability = mapOf("muzofond" to .65, "youtube" to 1.0),
+                preferredProviderIds = setOf("muzofond")
+            )
+        )
+
+        assertEquals("muzofond", ranked.first().candidate.providerId)
+    }
+
     private fun candidate(
         id: String,
         title: String,
         official: Boolean = false,
-        durationMs: Long = 185_000
+        durationMs: Long = 185_000,
+        provider: String = "youtube"
     ) = TrackCandidate(
-        providerId = "youtube",
+        providerId = provider,
         id = id,
         title = title,
         artist = "Linkin Park",

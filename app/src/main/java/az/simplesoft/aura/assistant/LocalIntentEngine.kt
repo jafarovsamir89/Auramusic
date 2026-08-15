@@ -161,7 +161,15 @@ class LocalIntentEngine {
             matchesAny(phrase, "лучшее 50 cent", "хиты 50 cent", "песни 50 cent", "50 cent hits", "best of 50 cent") -> "artist-50cent"
             matchesAny(phrase, "лучшее руки вверх", "хиты руки вверх", "песни руки вверх", "ruki vverh hits", "руки вверх хиты") -> "artist-ruki-vverh"
             matchesAny(phrase, "спокойный вечер", "музыка для сна", "расслабляющая подборка", "calm evening", "relaxing music", "sakit axşam") -> "aura-calm-night"
-            else -> return null
+            else -> {
+                val collectionRequest = phrase.contains(Regex("(?i)подборк|сборник|жанр|коллекци|playlist|collection|janr|pleylist"))
+                if (!collectionRequest) return null
+                phrase
+                    .replace(Regex("(?i)включи|поставь|запусти|сыграй|подборку|подборка|подборки|сборник|сборника|песен|песни|жанр|жанры|коллекцию|playlist|collection|of|из|для|the"), " ")
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
+                    .ifBlank { return null }
+            }
         }
         return action(
             MusicIntent.PlayWorldPlaylist(query), language,

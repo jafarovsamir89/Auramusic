@@ -46,7 +46,7 @@ import az.simplesoft.aura.data.LocalMusicProvider
 import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.RadioBrowserProvider
 import az.simplesoft.aura.data.RadioCountry
-import az.simplesoft.aura.data.playlist.BundledWorldPlaylistCatalog
+import az.simplesoft.aura.data.plugins.muzofond.MuzofondCollectionsClient
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.database.AuraPlaybackSnapshot
 import az.simplesoft.aura.data.database.AuraPlaylist
@@ -59,6 +59,8 @@ import az.simplesoft.aura.data.plugins.core.ProviderManager
 import az.simplesoft.aura.data.plugins.local.LocalMusicPlugin
 import az.simplesoft.aura.data.plugins.muzofond.MuzofondMusicPlugin
 import az.simplesoft.aura.data.plugins.radio.RadioMusicPlugin
+import az.simplesoft.aura.data.plugins.vol.VolMusicPlugin
+import az.simplesoft.aura.data.plugins.vol.VolCollectionsClient
 import az.simplesoft.aura.data.plugins.youtube.YouTubeMusicPlugin
 import az.simplesoft.aura.data.providers.MusicSearchRequest
 import az.simplesoft.aura.data.providers.PlayableSource
@@ -111,12 +113,25 @@ import java.util.Calendar
 import kotlin.math.abs
 import org.json.JSONObject
 
-enum class AuraDestination { HOME, SEARCH, RADIO, LIBRARY, ASSISTANT, DIAGNOSTICS }
-enum class LibrarySection { FAVORITES, HISTORY, LOCAL, PLAYLISTS }
+enum class AuraDestination { HOME, SEARCH, RADIO, LIBRARY, ASSISTANT, SETTINGS, GEMINI, DIAGNOSTICS, COLLECTIONS, GENRES }
+enum class LibrarySection { FAVORITES, HISTORY, LOCAL, PLAYLISTS, WORLD_PLAYLISTS }
 enum class SearchPhase { IDLE, SEARCHING, MATCHING, RESOLVING, BUFFERING, PLAYING, ERROR }
 
+enum class MusicSourceMode(val title: String, val description: String) {
+    MUZOFOND("Популярный стабильный", "Быстрый стабильный каталог"),
+    YOUTUBE("Глобальная библиотека", "Большой каталог для поиска и fallback"),
+    BOTH("Оба источника", "Стабильный каталог и глобальная библиотека")
+}
+
+private fun providerDisplayName(id: String): String = when (id) {
+    MuzofondMusicPlugin.ID -> "Популярный стабильный"
+    VolMusicPlugin.ID -> "Популярный стабильный"
+    YouTubeMusicPlugin.ID -> "Глобальная библиотека"
+    else -> id
+}
+
 data class ProviderDiagnostics(
-    val engine: String = "Plugin Core · YouTube",
+    val engine: String = "Plugin Core · три онлайн-источника",
     val selectedProvider: String = "—",
     val query: String = "—",
     val candidates: List<String> = emptyList(),
@@ -137,6 +152,9 @@ data class AuraUiState(
     val query: String = "",
     val recentSearches: List<String> = emptyList(),
     val searchResults: List<Track> = emptyList(),
+    val searchResultLimit: Int = SearchPaging.INITIAL_LIMIT,
+    val isLoadingMore: Boolean = false,
+    val canLoadMore: Boolean = false,
     val radioCountries: List<RadioCountry> = emptyList(),
     val radioStations: List<Track> = emptyList(),
     val selectedRadioCountry: RadioCountry? = null,
@@ -145,6 +163,9 @@ data class AuraUiState(
     val personalMix: List<Track> = emptyList(),
     val playlists: List<AuraPlaylist> = emptyList(),
     val worldPlaylists: List<WorldPlaylist> = emptyList(),
+    val worldGenres: List<WorldPlaylist> = emptyList(),
+    val likedWorldPlaylistIds: Set<String> = emptySet(),
+    val activeWorldPlaylistTitle: String? = null,
     val queueHistory: List<AuraQueueSnapshot> = emptyList(),
     val selectedPlaylistId: String? = null,
     val assistantText: String = "Привет. Я AURA.",
@@ -157,6 +178,7 @@ data class AuraUiState(
     val onboardingComplete: Boolean = false,
     val userName: String? = null,
     val preferredLanguage: String = "ru",
+    val musicSourceMode: MusicSourceMode = MusicSourceMode.BOTH,
     val assistantDiagnostics: az.simplesoft.aura.assistant.DecisionDiagnostics? = null,
     val voiceEngineMode: VoiceEngineMode = VoiceEngineMode.VERIFIED_SILERO,
     val isListening: Boolean = false,
@@ -203,7 +225,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val intentEngine = LocalIntentEngine()
     private val localProvider = LocalMusicProvider(application)
     private val radioProvider = RadioBrowserProvider()
-    private val worldPlaylistCatalog = BundledWorldPlaylistCatalog(application).load()
+    private val muzofondCollections = MuzofondCollectionsClient()
+    private val volCollections = VolCollectionsClient()
     private var worldPlaylistJob: Job? = null
     private val preferences = application.getSharedPreferences("aura_state", Context.MODE_PRIVATE)
     private val stateRepository = AuraStateRepository(application)
@@ -244,6 +267,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         setOf(
             LocalMusicPlugin(localProvider),
             MuzofondMusicPlugin(),
+            VolMusicPlugin(),
             YouTubeMusicPlugin(),
             RadioMusicPlugin(radioProvider)
         )
@@ -268,6 +292,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val candidatesByTrackId = mutableMapOf<String, TrackCandidate>()
     private val playbackRecoveryAttempts = mutableMapOf<String, Int>()
     private var latestCandidates: List<TrackCandidate> = emptyList()
+    private var lastSearchRequest: MusicSearchRequest? = null
     private var hasPreparedMedia = false
     private val persistenceQueue = Channel<AuraPlaybackSnapshot>(Channel.CONFLATED)
     private var positionPersistenceTick = 0
@@ -283,6 +308,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val initialOnboardingComplete = preferences.getBoolean("onboarding_complete", false)
     private val initialUserName = preferences.getString("user_name", null)?.takeIf(String::isNotBlank)
     private val initialPreferredLanguage = preferences.getString("preferred_language", "ru").orEmpty().ifBlank { "ru" }
+    private val initialMusicSourceMode = runCatching {
+        MusicSourceMode.valueOf(preferences.getString("music_source_mode", MusicSourceMode.BOTH.name).orEmpty())
+    }.getOrDefault(MusicSourceMode.BOTH)
     private val initialVoiceEngineMode = runCatching {
         VoiceEngineMode.valueOf(preferences.getString("voice_engine_mode", VoiceEngineMode.VERIFIED_SILERO.name).orEmpty())
     }.getOrDefault(VoiceEngineMode.VERIFIED_SILERO).let {
@@ -291,6 +319,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val initialEqualizerPreset = EqualizerPreset.fromText(
         preferences.getString("equalizer_preset", EqualizerPreset.FLAT.name).orEmpty()
     ) ?: EqualizerPreset.FLAT
+    private val initialLikedWorldPlaylists = preferences.getStringSet("liked_world_playlists", emptySet()).orEmpty().toSet()
 
     private val _state = MutableStateFlow(
         AuraUiState(
@@ -299,18 +328,21 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             onboardingComplete = initialOnboardingComplete,
             userName = initialUserName,
             preferredLanguage = initialPreferredLanguage,
+            musicSourceMode = initialMusicSourceMode,
             isOfflineOnly = BuildConfig.GEMINI_API_KEY.isBlank(),
             geminiConfigured = BuildConfig.GEMINI_API_KEY.isNotBlank(),
             geminiDiagnostics = geminiSession.diagnostics.value,
             voiceEngineMode = initialVoiceEngineMode,
             equalizerPreset = initialEqualizerPreset,
-            worldPlaylists = worldPlaylistCatalog.playlists.filter { it.items.isNotEmpty() && it.featured }
+            likedWorldPlaylistIds = initialLikedWorldPlaylists
         )
     )
     val state = _state.asStateFlow()
 
     init {
+        configureMusicSources(initialMusicSourceMode)
         speech.setEngineMode(initialVoiceEngineMode)
+        refreshWorldPlaylists()
         viewModelScope.launch {
             val memory = assistantMemory.snapshot()
             geminiUserContext = memory.promptSummary()
@@ -425,6 +457,88 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             librarySection = if (destination == AuraDestination.LIBRARY) LibrarySection.PLAYLISTS else it.librarySection,
             isPlayerExpanded = false,
             isQueueOpen = false
+        )
+    }
+
+    fun setPreferredLanguage(language: String) {
+        val cleanLanguage = language.takeIf { it in setOf("ru", "az", "en") } ?: "ru"
+        preferences.edit { putString("preferred_language", cleanLanguage) }
+        _state.update { it.copy(preferredLanguage = cleanLanguage) }
+    }
+
+    fun setMusicSourceMode(mode: MusicSourceMode) {
+        configureMusicSources(mode)
+        preferences.edit { putString("music_source_mode", mode.name) }
+        _state.update {
+            it.copy(
+                musicSourceMode = mode,
+                worldPlaylists = if (mode == MusicSourceMode.YOUTUBE) emptyList() else it.worldPlaylists,
+                worldGenres = if (mode == MusicSourceMode.YOUTUBE) emptyList() else it.worldGenres,
+                assistantText = "Источник: ${mode.title}"
+            )
+        }
+        if (mode != MusicSourceMode.YOUTUBE && (state.value.worldPlaylists.isEmpty() || state.value.worldGenres.isEmpty())) refreshWorldPlaylists()
+    }
+
+    private fun refreshWorldPlaylists() {
+        if (state.value.musicSourceMode == MusicSourceMode.YOUTUBE) return
+        viewModelScope.launch {
+            runCatching {
+                coroutineScope {
+                    val new2026 = async {
+                        runCatching {
+                            muzofondCollections.collection(
+                                "https://muzofond.fm/collections/new/%D0%BD%D0%BE%D0%B2%D0%B8%D0%BD%D0%BA%D0%B8",
+                                limit = 50
+                            )
+                        }.getOrNull()
+                    }
+                    val collections = async { runCatching { muzofondCollections.collections(limit = 240) }.getOrDefault(emptyList()) }
+                    val genres = async { runCatching { muzofondCollections.genres() }.getOrDefault(emptyList()) }
+                    val vol = async { runCatching { volCollections.featured() }.getOrDefault(emptyList()) }
+                    val featured = listOfNotNull(new2026.await()) + vol.await()
+                    val remaining = collections.await()
+                        .filterNot { candidate ->
+                            featured.any { it.id == candidate.id || it.collectionUrl == candidate.collectionUrl } ||
+                                candidate.title.equals("Новинки музыки 2026", ignoreCase = true)
+                        }
+                        .shuffled()
+                    (featured + remaining) to genres.await()
+                }
+            }
+                .onSuccess { (collections, genres) ->
+                    _state.update { it.copy(worldPlaylists = collections, worldGenres = genres) }
+                }
+                .onFailure { error ->
+                    _state.update { current ->
+                        current.copy(diagnostics = current.diagnostics.copy(fallbackReason = "Collections: ${error.javaClass.simpleName}"))
+                    }
+                }
+        }
+    }
+
+    fun toggleWorldPlaylistLike(playlist: WorldPlaylist) {
+        _state.update { current ->
+            val liked = if (playlist.id in current.likedWorldPlaylistIds) {
+                current.likedWorldPlaylistIds - playlist.id
+            } else {
+                current.likedWorldPlaylistIds + playlist.id
+            }
+            preferences.edit { putStringSet("liked_world_playlists", liked) }
+            current.copy(likedWorldPlaylistIds = liked)
+        }
+    }
+
+    private fun configureMusicSources(mode: MusicSourceMode) {
+        providerManager.setEnabled(MuzofondMusicPlugin.ID, mode != MusicSourceMode.YOUTUBE)
+        providerManager.setEnabled(VolMusicPlugin.ID, mode != MusicSourceMode.YOUTUBE)
+        providerManager.setEnabled(YouTubeMusicPlugin.ID, mode != MusicSourceMode.MUZOFOND)
+        musicBrain.setPreferredProviderIds(
+            when (mode) {
+                MusicSourceMode.MUZOFOND -> setOf(MuzofondMusicPlugin.ID, VolMusicPlugin.ID)
+                MusicSourceMode.YOUTUBE -> setOf(YouTubeMusicPlugin.ID)
+                MusicSourceMode.BOTH -> setOf(MuzofondMusicPlugin.ID, VolMusicPlugin.ID)
+            }
         )
     }
 
@@ -799,7 +913,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     playMoodMix(requestedMood)
                     return ok("Запускаю подборку под настроение", JSONObject().put("mood", requestedMood.name.lowercase()))
                 }
-                searchTracks(MusicSearchRequest(rawQuery = query)).join()
+                searchTracks(
+                    MusicSearchRequest(rawQuery = query, limit = SearchPaging.INITIAL_LIMIT)
+                ).join()
                 val results = state.value.searchResults
                 if (results.isEmpty()) GeminiToolResult("not_found", "Ничего не нашла")
                 else ok("Найдено ${results.size} результатов", JSONObject().put("count", results.size).put("tracks", results.take(5).joinToString { "${it.title} — ${it.artist}" }))
@@ -851,6 +967,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     MusicSearchRequest(
                         rawQuery = artist,
                         artist = artist,
+                        limit = SearchPaging.INITIAL_LIMIT,
                         autoPlay = true,
                         artistStrict = true,
                         allowUnattributedArtistMetadata = true
@@ -1068,6 +1185,26 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
+    /** Requests the next search page while preserving the current query and ranking context. */
+    fun loadMoreSearchResults() {
+        val current = state.value
+        val baseRequest = lastSearchRequest ?: return
+        val nextLimit = SearchPaging.nextLimit(current.searchResultLimit) ?: run {
+            _state.update { it.copy(canLoadMore = false) }
+            return
+        }
+        if (current.isLoading || current.isLoadingMore || !current.canLoadMore) return
+        val request = baseRequest.copy(limit = nextLimit, autoPlay = false)
+        _state.update {
+            it.copy(
+                isLoadingMore = true,
+                searchPhase = SearchPhase.SEARCHING,
+                assistantText = "Загружаю ещё результаты…"
+            )
+        }
+        searchTracks(request, append = true)
+    }
+
     private fun submitAssistant(text: String, speakResponse: Boolean, pendingCommandId: String? = null) {
         val input = text.trim()
         if (input.isBlank()) return
@@ -1189,12 +1326,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             if (!exists) return ActionExecutionResult.NotFound("Плейлист $requested не найден")
         }
-        if (answer.intent is MusicIntent.PlayWorldPlaylist) {
-            val playlist = worldPlaylistCatalog.find(answer.intent.query)
-            if (playlist == null || playlist.items.isEmpty()) {
-                return ActionExecutionResult.NotFound("Мировая подборка пока обновляется")
-            }
-        }
         dispatchAssistantReply(answer)?.join()
         return ActionExecutionResult.Success()
     }
@@ -1295,11 +1426,20 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     recentSearches = recent.take(5),
                     assistantText = "Ищу песню: $query",
                     isLoading = true,
+                    isLoadingMore = false,
+                    canLoadMore = false,
+                    searchResultLimit = SearchPaging.INITIAL_LIMIT,
                     searchPhase = SearchPhase.SEARCHING
                 )
             }
             persist(_state.value)
-            return searchTracks(MusicSearchRequest(rawQuery = query, artist = requestedSearch.artist))
+            return searchTracks(
+                MusicSearchRequest(
+                    rawQuery = query,
+                    artist = requestedSearch.artist,
+                    limit = SearchPaging.INITIAL_LIMIT
+                )
+            )
         }
 
         if (answer.intent == MusicIntent.MoreLikeThis || answer.intent == MusicIntent.Similar) {
@@ -1525,9 +1665,13 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private fun playWorldPlaylist(query: String, shuffled: Boolean): Job = viewModelScope.launch {
         worldPlaylistJob?.cancel()
         worldPlaylistJob = coroutineContext[Job]
-        val playlist = worldPlaylistCatalog.find(query)
+        val listed = findWorldPlaylist(query)
+        val playlist = listed?.let { entry ->
+            if (entry.items.isNotEmpty()) entry
+            else entry.collectionUrl?.let { url -> runCatching { muzofondCollections.collection(url) }.getOrNull() }
+        }
         if (playlist == null || playlist.items.isEmpty()) {
-            _state.update { it.copy(assistantText = "Не нашла наполненную мировую подборку.") }
+            _state.update { it.copy(assistantText = "Не нашла треки в этой подборке.") }
             return@launch
         }
         // Do not leave the previous song visible while a new chart is resolving.
@@ -1535,6 +1679,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         playback.pause()
         _state.update {
             it.copy(
+                activeWorldPlaylistTitle = playlist.title,
                 queue = DemoCatalog.tracks,
                 currentIndex = 0,
                 isPlayerExpanded = false,
@@ -1546,8 +1691,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
         _state.update { it.copy(isLoading = true, assistantText = "Собираю ${playlist.title}…") }
         val items = playlist.items.let { if (shuffled) it.shuffled() else it }.take(MAX_WORLD_PLAYLIST_ITEMS)
-        // Resolve several chart positions at once, but keep a small limit so YouTube
-        // is not flooded and one slow/unavailable song cannot block the whole playlist.
+        // Resolve several chart positions at once, but keep a small limit so an
+        // online source is not flooded and one slow song cannot block the playlist.
         val resolverSlots = Semaphore(WORLD_PLAYLIST_CONCURRENCY)
         val resolved = coroutineScope {
             items.map { item ->
@@ -1574,16 +1719,90 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         _state.update { it.copy(isLoading = false, assistantText = "Запустила ${playlist.title}: ${resolved.size} треков.") }
     }
 
+    /** Maps voice shortcuts and natural requests onto the live Muzofond catalog. */
+    private fun findWorldPlaylist(query: String): WorldPlaylist? {
+        val all = state.value.worldPlaylists + state.value.worldGenres
+        val needle = query.trim().lowercase()
+        if (needle.isBlank()) return null
+        all.firstOrNull { entry ->
+            entry.id.equals(needle, ignoreCase = true) ||
+                entry.title.contains(needle, ignoreCase = true) ||
+                needle.contains(entry.title.lowercase())
+        }?.let { return it }
+        val compact = needle.replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+        val preferred = when {
+            needle == "hits-90s" || compact.contains("90") || compact.contains("девяност") ->
+                all.filter { it.title.lowercase().contains("90") || it.title.lowercase().contains("девяност") }
+            needle == "new-this-week" -> all.filter { it.kind == az.simplesoft.aura.domain.playlist.WorldPlaylistKind.NEW_RELEASES }
+            needle == "top-week-world" -> all.filter { it.kind == az.simplesoft.aura.domain.playlist.WorldPlaylistKind.TOP_WEEK }
+            needle == "top-today-world" -> all.filter { it.title.lowercase().contains("сегодня") || it.title.lowercase().contains("today") }
+            needle == "top-today-az" -> all.filter { it.title.lowercase().contains("азер") || it.title.lowercase().contains("azer") }
+            needle == "artist-50cent" -> all.filter { it.title.lowercase().contains("50 cent") || it.title.lowercase().contains("50cent") }
+            needle == "artist-ruki-vverh" -> all.filter { it.title.lowercase().contains("руки вверх") || it.title.lowercase().contains("ruki vverh") }
+            else -> emptyList()
+        }
+        preferred.firstOrNull()?.let { return it }
+        val tokens = compact.split(' ').filter { it.length >= 2 }
+        return all.maxByOrNull { entry ->
+            val title = entry.title.lowercase()
+            tokens.fold(0) { score, token -> score + if (title.contains(token)) 3 else 0 } +
+                if (entry.kind == az.simplesoft.aura.domain.playlist.WorldPlaylistKind.MOOD && tokens.any { title.contains(it) }) 2 else 0
+        }?.takeIf { entry -> tokens.any { entry.title.lowercase().contains(it) } }
+    }
+
     private suspend fun resolveWorldPlaylistItem(item: az.simplesoft.aura.domain.playlist.WorldPlaylistItem): Track? =
         withTimeoutOrNull(WORLD_PLAYLIST_ITEM_TIMEOUT_MS) {
             try {
+                val volCandidate = if (
+                    item.providerId == VolMusicPlugin.ID && !item.sourceUrl.isNullOrBlank()
+                ) {
+                    TrackCandidate(
+                        providerId = VolMusicPlugin.ID,
+                        id = "collection:${item.rank}:${item.artist}:${item.title}",
+                        title = item.title,
+                        artist = item.artist,
+                        detailUrl = item.sourceUrl!!,
+                        artworkUrl = item.artworkUrl,
+                        durationMs = item.durationMs
+                    )
+                } else null
+                if (volCandidate != null) {
+                    return@withTimeoutOrNull when (val source = resolveCandidate(volCandidate)) {
+                        is ProviderResult.Success -> source.value.track
+                        is ProviderResult.Failure -> null
+                    }
+                }
+                val directCandidate = if (
+                    item.providerId == MuzofondMusicPlugin.ID && !item.playbackToken.isNullOrBlank()
+                ) {
+                    TrackCandidate(
+                        providerId = MuzofondMusicPlugin.ID,
+                        id = "collection:${item.rank}:${item.artist}:${item.title}",
+                        title = item.title,
+                        artist = item.artist,
+                        detailUrl = item.sourceUrl ?: "https://muzofond.fm/",
+                        artworkUrl = item.artworkUrl,
+                        durationMs = item.durationMs,
+                        playbackToken = item.playbackToken
+                    )
+                } else null
+                if (directCandidate != null) {
+                    return@withTimeoutOrNull when (val source = resolveCandidate(directCandidate)) {
+                        is ProviderResult.Success -> source.value.track
+                        is ProviderResult.Failure -> null
+                    }
+                }
                 when (val result = providerManager.search(MusicSearchRequest(
                     rawQuery = "${item.artist} ${item.title}",
                     artist = item.artist,
                     title = item.title,
                     year = item.year,
                     autoPlay = false,
-                    preferredProviderId = YouTubeMusicPlugin.ID,
+                    preferredProviderId = when (state.value.musicSourceMode) {
+                        MusicSourceMode.MUZOFOND -> MuzofondMusicPlugin.ID
+                        MusicSourceMode.YOUTUBE,
+                        MusicSourceMode.BOTH -> YouTubeMusicPlugin.ID
+                    },
                     limit = 8
                 ))) {
                     is PluginResult.Success -> {
@@ -1662,6 +1881,19 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         recordRecommendationEvent(current.nowTrack, event)
     }
 
+    /** Toggles a favorite from a queue row without changing the active track. */
+    fun toggleLike(track: Track) {
+        val wasLiked = track.id in state.value.likedIds
+        _state.update { value ->
+            val liked = if (wasLiked) value.likedIds - track.id else value.likedIds + track.id
+            value.copy(
+                likedIds = liked,
+                memoryTracks = (listOf(track) + value.memoryTracks).distinctBy(Track::id)
+            ).also(::persist)
+        }
+        recordRecommendationEvent(track, if (wasLiked) RecommendationEventType.UNLIKE else RecommendationEventType.LIKE)
+    }
+
     fun toggleShuffle() = _state.update {
         it.copy(isShuffleEnabled = !it.isShuffleEnabled).also { next ->
             playback.setShuffle(next.isShuffleEnabled)
@@ -1724,7 +1956,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 assistantText = "Играет ${track.title}"
             ).also(::persist)
         }
-        playback.playAt(index)
+        playback.playTrack(track.id)
     }
 
     fun removeFromQueue(track: Track) = applyQueueEdit(
@@ -2146,21 +2378,35 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
-    private fun searchTracks(request: MusicSearchRequest): Job {
+    private fun searchTracks(request: MusicSearchRequest, append: Boolean = false): Job {
+        lastSearchRequest = request
         return viewModelScope.launch {
             val startedAt = System.currentTimeMillis()
             when (val result = searchCandidates(request)) {
                 is ProviderResult.Success -> {
-                    latestCandidates = result.value
-                    candidatesByTrackId.clear()
-                    playbackRecoveryAttempts.clear()
-                    val tracks = result.value.map { candidate ->
+                    if (!append) {
+                        latestCandidates = result.value
+                        candidatesByTrackId.clear()
+                        playbackRecoveryAttempts.clear()
+                    } else {
+                        latestCandidates = (latestCandidates + result.value)
+                            .distinctBy { "${it.providerId}:${it.id}" }
+                    }
+                    val pageTracks = result.value.map { candidate ->
                         candidate.toTrack().also { candidatesByTrackId[it.id] = candidate }
                     }
                     _state.update {
+                        val tracks = if (append) {
+                            (it.searchResults + pageTracks).distinctBy(Track::id)
+                        } else {
+                            pageTracks
+                        }
                         it.copy(
                             searchResults = tracks,
                             isLoading = false,
+                            isLoadingMore = false,
+                            searchResultLimit = request.limit,
+                            canLoadMore = result.value.size >= request.limit && request.limit < SearchPaging.MAX_LIMIT,
                             searchPhase = SearchPhase.MATCHING,
                             diagnostics = it.diagnostics.copy(
                                 query = request.rawQuery,
@@ -2169,20 +2415,27 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                                 },
                                 searchTimeMs = System.currentTimeMillis() - startedAt
                             ),
-                            assistantText = if (tracks.isEmpty()) "Ничего не нашла." else "Нашла ${tracks.size} треков. Сверяю лучший результат…"
+                            assistantText = when {
+                                tracks.isEmpty() -> "Ничего не нашла."
+                                append -> "Загрузила ещё ${pageTracks.size} результатов."
+                                else -> "Нашла ${tracks.size} треков. Сверяю лучший результат…"
+                            }
                         )
                     }
                     val best = result.value.firstOrNull()
-                    if (request.autoPlay && best != null && best.confidence >= AUTO_PLAY_CONFIDENCE) {
+                    if (!append && request.autoPlay && best != null && best.confidence >= AUTO_PLAY_CONFIDENCE) {
                         resolveAndPlay(best).join()
-                    } else {
+                    } else if (!append) {
                         _state.update { it.copy(searchPhase = SearchPhase.IDLE, assistantText = "Выбери нужный трек.") }
+                    } else {
+                        _state.update { it.copy(searchPhase = SearchPhase.IDLE) }
                     }
                 }
                 is ProviderResult.Failure -> _state.update {
-                    unifiedTrackSession.clear()
+                    if (!append) unifiedTrackSession.clear()
                     it.copy(
                         isLoading = false,
+                        isLoadingMore = false,
                         searchPhase = SearchPhase.ERROR,
                         diagnostics = it.diagnostics.copy(
                             query = request.rawQuery,
@@ -2231,7 +2484,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                                 isLoading = false,
                                 searchPhase = SearchPhase.BUFFERING,
                                 diagnostics = it.diagnostics.copy(
-                                    selectedProvider = result.value.providerId,
+                                    selectedProvider = providerDisplayName(result.value.providerId),
                                     selectedPage = result.value.sourcePageUrl,
                                     resolver = result.diagnostics["stage"] ?: "unknown",
                                     resolveTimeMs = System.currentTimeMillis() - resolveStartedAt,
