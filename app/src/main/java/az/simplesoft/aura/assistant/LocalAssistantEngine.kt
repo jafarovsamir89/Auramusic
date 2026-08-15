@@ -83,7 +83,7 @@ class LocalAssistantEngine(
 
         val registryCandidates = registry.candidates(input)
         val match = registryCandidates.firstOrNull()
-        val registryReply = match?.let { registryAction(it, input.detectedLanguage) }
+        val registryReply = match?.let { registryAction(it, input) }
         if (registryReply != null) return remember(decisionFromReply(registryReply, input, match, registryCandidates), startedAt)
 
         val corrected = CommonSpeechCorrections.apply(input.normalizedText)
@@ -302,9 +302,25 @@ class LocalAssistantEngine(
         return null
     }
 
-    private fun registryAction(match: RegistryIntentMatch, language: AssistantLanguage): AssistantReply? = when (match.intentId) {
+    private fun registryAction(match: RegistryIntentMatch, input: NormalizedAssistantInput): AssistantReply? {
+        val language = input.detectedLanguage
+        return when (match.intentId) {
         "open_queue" -> AssistantReply(MusicIntent.OpenQueue, localized(language, "Открываю очередь.", "Növbəni açıram.", "Opening the queue."), language)
         "open_playlists" -> AssistantReply(MusicIntent.OpenPlaylists, localized(language, "Открываю плейлисты.", "Pleylistlərini açıram.", "Opening your playlists."), language)
+        "open_local_library" -> AssistantReply(MusicIntent.OpenLocalLibrary, localized(language, "Открываю музыку на телефоне.", "Telefondakı musiqini açıram.", "Opening music on the phone."), language)
+        "play_offline_music" -> AssistantReply(MusicIntent.PlayOfflineMusic, localized(language, "Включаю музыку с телефона.", "Telefondakı musiqini qoşuram.", "Playing music from the phone."), language)
+        "offline_status" -> AssistantReply(MusicIntent.OfflineStatus, localized(language, "Проверяю офлайн-библиотеку.", "Oflayn kitabxananı yoxlayıram.", "Checking the offline library."), language)
+        "delete_all_offline" -> AssistantReply(MusicIntent.DeleteAllOffline, localized(language, "Очищаю офлайн-библиотеку.", "Oflayn kitabxananı təmizləyirəm.", "Clearing the offline library."), language)
+        "search_offline" -> {
+            val query = input.normalizedText
+                .replaceFirst(Regex("^(?:найди|поищи)\\s+(?:среди скачанных(?:\\s+(?:песен|музыки))?|в офлайн(?:-музыке| музыке))\\s*"), "")
+                .replaceFirst(Regex("^search\\s+(?:offline|downloaded)\\s*"), "")
+                .trim()
+            AssistantReply(MusicIntent.SearchOffline(query), localized(language, "Ищу в офлайн-библиотеке.", "Oflayn kitabxanada axtarıram.", "Searching offline music."), language)
+        }
+        "download_current" -> AssistantReply(MusicIntent.DownloadCurrent, localized(language, "Сохраняю песню на телефон.", "Mahnını telefonda saxlayıram.", "Saving the song on the phone."), language)
+        "download_queue" -> AssistantReply(MusicIntent.DownloadQueue, localized(language, "Сохраняю очередь для офлайн-прослушивания.", "Növbəni oflayn dinləmək üçün saxlayıram.", "Saving the queue for offline listening."), language)
+        "delete_offline_current" -> AssistantReply(MusicIntent.DeleteOfflineCurrent, localized(language, "Удаляю локальную копию.", "Yerli nüsxəni silirəm.", "Deleting the local copy."), language)
         "open_radio" -> AssistantReply(MusicIntent.OpenRadio, localized(language, "Открываю радио по странам.", "Radionu açıram.", "Opening radio stations."), language)
         "clear_queue" -> AssistantReply(MusicIntent.ClearQueue, localized(language, "Очищаю очередь.", "Növbəni təmizləyirəm.", "Clearing the queue."), language)
         "remove_last_queue" -> AssistantReply(MusicIntent.RemoveLastFromQueue, localized(language, "Удаляю последний трек.", "Son mahnını silirəm.", "Removing the last track."), language)
@@ -336,6 +352,7 @@ class LocalAssistantEngine(
         "continue_listening" -> AssistantReply(MusicIntent.ContinueListening, localized(language, "Продолжаю прослушивание.", "Musiqini davam etdirirəm.", "Continuing listening."), language)
         "car_mode" -> AssistantReply(MusicIntent.CarMode, localized(language, "Включаю автомобильный режим.", "Avtomobil rejimini açıram.", "Turning on car mode."), language)
         else -> null
+        }
     }
 
     private fun decisionFromReply(

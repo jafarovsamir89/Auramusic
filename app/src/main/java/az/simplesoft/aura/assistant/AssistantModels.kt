@@ -26,6 +26,14 @@ sealed interface MusicIntent {
     data object NowPlaying : MusicIntent
     data object OpenHistory : MusicIntent
     data object OpenPlaylists : MusicIntent
+    data object OpenLocalLibrary : MusicIntent
+    data object PlayOfflineMusic : MusicIntent
+    data class SearchOffline(val query: String) : MusicIntent
+    data object OfflineStatus : MusicIntent
+    data object DownloadCurrent : MusicIntent
+    data object DownloadQueue : MusicIntent
+    data object DeleteOfflineCurrent : MusicIntent
+    data object DeleteAllOffline : MusicIntent
     data object OpenRadio : MusicIntent
     data object OpenQueue : MusicIntent
     data object ClearQueue : MusicIntent
@@ -49,12 +57,13 @@ sealed interface MusicIntent {
     data object Unknown : MusicIntent
 }
 
-enum class EqualizerPreset(val label: String, val aliases: Set<String>) {
-    FLAT("Плоский", setOf("плоский", "flat", "обычный")),
-    BASS("Бас", setOf("бас", "басовый", "bass", "низкие")),
-    VOCAL("Вокал", setOf("вокал", "голос", "vocal", "voice")),
-    ROCK("Рок", setOf("рок", "rock")),
-    ACOUSTIC("Акустика", setOf("акустика", "acoustic"));
+enum class EqualizerPreset(val label: String, val aliases: Set<String>, val defaultBands: FloatArray) {
+    FLAT("Плоский", setOf("плоский", "flat", "обычный"), floatArrayOf(0f, 0f, 0f, 0f, 0f)),
+    BASS("Бас", setOf("бас", "басовый", "bass", "низкие"), floatArrayOf(7f, 4f, 1f, -1f, -2f)),
+    VOCAL("Вокал", setOf("вокал", "голос", "vocal", "voice"), floatArrayOf(-2f, 1f, 4f, 3f, 0f)),
+    ROCK("Рок", setOf("рок", "rock"), floatArrayOf(5f, 2f, -1f, 3f, 5f)),
+    ACOUSTIC("Акустика", setOf("акустика", "acoustic"), floatArrayOf(2f, 3f, 2f, 1f, -1f)),
+    CUSTOM("Пользовательский", setOf("пользовательский", "custom", "мой"), floatArrayOf(0f, 0f, 0f, 0f, 0f));
 
     companion object {
         fun fromText(text: String): EqualizerPreset? = entries.firstOrNull { preset ->

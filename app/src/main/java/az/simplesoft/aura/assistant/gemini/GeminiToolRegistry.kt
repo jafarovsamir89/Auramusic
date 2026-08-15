@@ -68,6 +68,13 @@ object GeminiToolRegistry {
             put(declaration("set_repeat", "Set repeat mode.", JSONObject().put("mode", string("One of off, one, all")), listOf("mode")))
             put(declaration("open_queue", "Open the queue screen."))
             put(declaration("open_playlists", "Open saved playlists."))
+            put(declaration("open_local_library", "Open music downloaded to this phone."))
+            put(declaration("play_offline_music", "Play downloaded music without using an online source."))
+            put(declaration("search_offline_library", "Search only the downloaded music on this phone.", JSONObject().put("query", string("Song or artist to find")), listOf("query")))
+            put(declaration("get_offline_library_status", "Return the number of downloaded tracks and local storage usage."))
+            put(declaration("download_current_track", "Save the currently playing authorized direct audio stream for offline playback. Never download YouTube/watch-page audio."))
+            put(declaration("delete_offline_track", "Delete the local offline copy of the current track."))
+            put(declaration("delete_all_offline", "Delete every downloaded offline track from this phone after the user explicitly asks."))
             put(declaration("open_history", "Open listening history."))
             put(declaration("set_auto_continue", "Enable or disable automatic queue continuation.", JSONObject().put("enabled", boolean("Whether auto continue is enabled")), listOf("enabled")))
         }

@@ -15,6 +15,9 @@ data class RecommendationContext(
     val recentTracks: List<Track>,
     val likedTrackIds: Set<String>,
     val skippedTrackIds: Set<String> = emptySet(),
+    val preferredArtists: Set<String> = emptySet(),
+    val preferredGenres: Set<String> = emptySet(),
+    val dislikedArtists: Set<String> = emptySet(),
     val hourOfDay: Int,
     val carMode: Boolean = false
 ) {
@@ -130,6 +133,10 @@ class PersonalRecommendationEngine(
             .map { it.candidate }
             .filter { it.providerId == ONLINE_PROVIDER }
             .filterNot { "$ONLINE_PROVIDER:${it.id}" in excluded }
+            .filterNot { candidate ->
+                val searchable = "${candidate.artist} ${candidate.title}".normalizedArtist()
+                context.dislikedArtists.any { disliked -> searchable.contains(disliked.normalizedArtist()) }
+            }
             .distinctBy { "${it.providerId}:${it.id}" }
             .sortedByDescending { personalizedScore(it, context) }
             .toList()
@@ -157,9 +164,16 @@ class PersonalRecommendationEngine(
         val likedArtists = context.likedTracks.map { it.artist.normalizedArtist() }
         val recentArtists = context.recentTracks.map { it.artist.normalizedArtist() }
         val currentArtist = context.currentTrack?.artist?.normalizedArtist()
+        val preferredArtists = context.preferredArtists.map { it.normalizedArtist() }
+        val dislikedArtists = context.dislikedArtists.map { it.normalizedArtist() }
+        val preferredGenres = context.preferredGenres.map { it.normalizedArtist() }
+        val candidateText = "${candidate.artist} ${candidate.title}".normalizedArtist()
         return candidate.confidence * 10.0 +
             likedArtists.count { it == artist } * 8.0 +
             recentArtists.count { it == artist } * 2.5 +
+            preferredArtists.count { candidateText.contains(it) } * 6.0 +
+            preferredGenres.count { candidateText.contains(it) } * 1.5 -
+            dislikedArtists.count { candidateText.contains(it) } * 12.0 +
             (if (artist == currentArtist) 5.0 else 0.0) +
             (if (candidate.isOfficial) 1.5 else 0.0) +
             ((candidate.popularity ?: 0L).coerceAtMost(10_000_000L) / 10_000_000.0)
@@ -178,6 +192,8 @@ class PersonalRecommendationEngine(
     }
 
     private fun fallbackQuery(context: RecommendationContext): String = when {
+        context.preferredArtists.isNotEmpty() -> "${context.preferredArtists.take(2).joinToString(" ")} лучшие песни"
+        context.preferredGenres.isNotEmpty() -> "${context.preferredGenres.take(2).joinToString(" ")} музыка"
         context.carMode -> "музыка в дорогу популярные песни"
         context.hourOfDay in 5..10 -> "музыка для доброго утра"
         context.hourOfDay in 22..23 || context.hourOfDay in 0..4 -> "спокойная ночная музыка"

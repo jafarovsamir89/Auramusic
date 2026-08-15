@@ -38,6 +38,7 @@ class LocalIntentEngine {
         explicitQueueIntent(text, language)?.let { return it }
         worldPlaylistIntent(text, language)?.let { return it }
         explicitLibraryIntent(text, language)?.let { return it }
+        offlineLibraryIntent(text, language)?.let { return it }
         equalizerIntent(text, language)?.let { return it }
         localPlaybackIntent(text, language)?.let { return it }
         localConversation(text, language)?.let { return it }
@@ -144,6 +145,98 @@ class LocalIntentEngine {
                 return action(MusicIntent.CreatePlaylist(name, false), language,
                     "Создаю плейлист $name.", "$name pleylistini yaradıram.", "Creating playlist $name.")
             }
+        return null
+    }
+
+    private fun offlineLibraryIntent(text: String, language: AssistantLanguage): AssistantReply? {
+        if (matchesAny(
+                text,
+                "скачай эту песню", "скачай песню", "сохрани песню офлайн", "сохрани офлайн",
+                "добавь песню на телефон", "download this song", "save offline", "download offline",
+                "bu mahnını yüklə", "mahnını telefona yüklə"
+        )
+        ) {
+            return action(
+                MusicIntent.DownloadCurrent,
+                language,
+                "Сохраняю песню на телефон.",
+                "Mahnını telefonda saxlayıram.",
+                "Saving the song on the phone."
+            )
+        }
+        if (matchesAny(
+                text,
+                "скачай очередь", "скачай все песни из очереди", "сохрани очередь офлайн",
+                "download the queue", "download all queued songs", "download queue",
+                "növbəni yüklə", "növbədəki mahnıları yüklə"
+            )
+        ) {
+            return action(
+                MusicIntent.DownloadQueue,
+                language,
+                "Сохраняю очередь для офлайн-прослушивания.",
+                "Növbəni oflayn dinləmək üçün saxlayıram.",
+                "Saving the queue for offline listening."
+            )
+        }
+        if (matchesAny(text, "сколько песен скачано", "сколько музыки на телефоне", "сколько офлайн песен", "offline library status", "how many downloaded songs", "telefonda neçə mahnı var")) {
+            return action(MusicIntent.OfflineStatus, language, "Проверяю офлайн-библиотеку.", "Oflayn kitabxananı yoxlayıram.", "Checking the offline library.")
+        }
+        if (matchesAny(text, "удали всю офлайн музыку", "очисти офлайн библиотеку", "удали все скачанные песни", "delete all offline music", "clear offline library", "bütün oflayn musiqini sil")) {
+            return action(MusicIntent.DeleteAllOffline, language, "Очищаю офлайн-библиотеку.", "Oflayn kitabxananı təmizləyirəm.", "Clearing the offline library.")
+        }
+        listOf(
+            Regex("(?:найди|поищи)\\s+(?:среди скачанных(?:\\s+(?:песен|музыки))?|в офлайн(?:-музыке| музыке))\\s+(.+)"),
+            Regex("search\\s+(?:offline|downloaded)\\s+(.+)"),
+            Regex("yüklənmiş mahnılarda\\s+(.+)\\s+axtar")
+        ).firstNotNullOfOrNull { it.find(text)?.groupValues?.getOrNull(1)?.trim() }
+            ?.takeIf(String::isNotBlank)?.let { query ->
+                return action(MusicIntent.SearchOffline(query), language, "Ищу в офлайн-библиотеке.", "Oflayn kitabxanada axtarıram.", "Searching offline music.")
+            }
+        if (matchesAny(
+                text,
+                "удали эту песню с телефона", "удали офлайн песню", "удали скачанную песню",
+                "delete offline song", "remove downloaded song", "bu mahnını telefondan sil"
+            )
+        ) {
+            return action(
+                MusicIntent.DeleteOfflineCurrent,
+                language,
+                "Удаляю локальную копию.",
+                "Yerli nüsxəni silirəm.",
+                "Deleting the local copy."
+            )
+        }
+        if (matchesAny(
+                text,
+                "включи скачанную музыку", "включи офлайн музыку", "играй музыку с телефона",
+                "моя музыка на телефоне", "play downloaded music", "play offline music",
+                "yüklənmiş musiqini qoş"
+            )
+        ) {
+            return action(
+                MusicIntent.PlayOfflineMusic,
+                language,
+                "Включаю музыку с телефона.",
+                "Telefondakı musiqini qoşuram.",
+                "Playing music from the phone."
+            )
+        }
+        if (matchesAny(
+                text,
+                "открой музыку на телефоне", "открой локальную музыку", "офлайн библиотека",
+                "офлайн музыка", "локальная музыка", "open offline music", "phone music",
+                "telefondakı musiqi"
+            )
+        ) {
+            return action(
+                MusicIntent.OpenLocalLibrary,
+                language,
+                "Открываю музыку на телефоне.",
+                "Telefondakı musiqini açıram.",
+                "Opening music on the phone."
+            )
+        }
         return null
     }
 

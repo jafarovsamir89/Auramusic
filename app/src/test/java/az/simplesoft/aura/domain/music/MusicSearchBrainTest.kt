@@ -40,4 +40,21 @@ class MusicSearchBrainTest {
         assertTrue("piano" in interpreted.semanticTags)
         assertTrue("party" in interpreted.excludedTerms)
     }
+
+    @Test
+    fun `romantic request is not treated as a generic search`() {
+        val interpreted = brain.interpret(MusicSearchRequest(rawQuery = "романтичные песни для двоих"))
+
+        assertTrue("romantic" in interpreted.semanticTags)
+        assertTrue(interpreted.query.contains("love songs"))
+    }
+
+    @Test
+    fun `regional requests keep Azerbaijani and Turkish intent`() {
+        val az = brain.interpret(MusicSearchRequest(rawQuery = "азербайджанская музыка"))
+        val tr = brain.interpret(MusicSearchRequest(rawQuery = "турецкие хиты"))
+
+        assertTrue("region-az" in az.semanticTags)
+        assertTrue("region-tr" in tr.semanticTags)
+    }
 }

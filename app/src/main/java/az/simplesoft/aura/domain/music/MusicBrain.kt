@@ -194,13 +194,18 @@ class MusicBrain(
         val resolved = resolveFirst(unified.alternatives)
             ?: return PlaybackOutcome.Failure("No playable source")
         val source = resolved.source
+        val resolvedTrack = if (!az.simplesoft.aura.data.ArtistArtworkLookup.isUsable(source.track.artworkUrl) &&
+            az.simplesoft.aura.data.ArtistArtworkLookup.isUsable(unified.metadata.artworkUrl)
+        ) {
+            source.track.copy(artworkUrl = unified.metadata.artworkUrl)
+        } else source.track
         alternativesByTrackId[source.track.id] = unified.alternatives.filterNot {
             it.providerId == resolved.candidate.providerId && it.id == resolved.candidate.id
         }
-        if (replacing) playbackCoordinator.replaceCurrent(source.track, positionMs)
-        else playbackCoordinator.play(listOf(source.track), source.track, positionMs)
+        if (replacing) playbackCoordinator.replaceCurrent(resolvedTrack, positionMs)
+        else playbackCoordinator.play(listOf(resolvedTrack), resolvedTrack, positionMs)
         return PlaybackOutcome.Started(
-            source.track,
+            resolvedTrack,
             resumedAtMs = positionMs,
             alternativesAvailable = (unified.alternatives.size - 1).coerceAtLeast(0)
         )

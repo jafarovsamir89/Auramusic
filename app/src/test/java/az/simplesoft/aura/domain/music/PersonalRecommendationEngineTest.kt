@@ -53,6 +53,37 @@ class PersonalRecommendationEngineTest {
         assertTrue(mix.any { it.artist == "Radiohead" })
     }
 
+    @Test
+    fun memoryPreferencesBoostPreferredArtistsAndSuppressDislikes() = runBlocking {
+        val candidates = listOf(
+            candidate("11111111111", "Muse", "Uprising"),
+            candidate("22222222222", "Coldplay", "Yellow"),
+            candidate("33333333333", "Radiohead", "Creep")
+        )
+        val plugin = RecommendationPlugin(candidates)
+        val engine = PersonalRecommendationEngine(
+            providerManager = ProviderManager(setOf(plugin)),
+            candidateRanker = CandidateRankerV2(),
+            identityResolver = TrackIdentityResolver(),
+            candidateResolver = { it.toTrack() }
+        )
+        val seed = track("youtube:seedseedsee", "Muse", "Hysteria")
+        val context = RecommendationContext(
+            queue = listOf(seed),
+            currentIndex = 0,
+            recentTracks = listOf(seed),
+            likedTrackIds = emptySet(),
+            preferredArtists = setOf("Coldplay"),
+            dislikedArtists = setOf("Muse"),
+            hourOfDay = 20
+        )
+
+        val mix = engine.myMix(context, limit = 3)
+
+        assertEquals("Coldplay", mix.first().artist)
+        assertFalse(mix.any { it.artist == "Muse" })
+    }
+
     private fun candidate(id: String, artist: String, title: String) = TrackCandidate(
         providerId = "youtube",
         id = id,

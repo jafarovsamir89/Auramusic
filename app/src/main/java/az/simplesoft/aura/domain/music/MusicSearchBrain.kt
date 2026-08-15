@@ -100,6 +100,34 @@ class MusicSearchBrain {
                 triggers = setOf("без слов", "инструменталь", "instrumental", "no vocals", "sözsüz"),
                 providerTerms = "instrumental no vocals",
                 semanticTags = setOf("instrumental", "no-vocals")
+            ),
+            Profile(
+                triggers = setOf("романтич", "любовн", "для двоих", "romantic", "love songs", "sevgı mahnıları", "sevgi mahnıları"),
+                providerTerms = "romantic love songs playlist",
+                semanticTags = setOf("romantic", "love"),
+                excludedTerms = setOf("breakup", "angry", "hardstyle")
+            ),
+            Profile(
+                triggers = setOf("для вечеринки", "танцевальн", "party music", "dance music", "rəqs musiqisi", "parti musiqisi"),
+                providerTerms = "party dance hits playlist",
+                semanticTags = setOf("party", "dance", "energetic"),
+                excludedTerms = setOf("sleep", "lullaby", "ambient")
+            ),
+            Profile(
+                triggers = setOf("песни 90", "музыка 90", "90-х", "90s music", "90s hits", "90-cı illər"),
+                providerTerms = "90s hits playlist",
+                semanticTags = setOf("decade-90s", "hits"),
+                excludedTerms = setOf("2026", "new release")
+            ),
+            Profile(
+                triggers = setOf("азербайджанск", "азербайджанская музыка", "azerbaijani music", "azərbaycan musiqisi"),
+                providerTerms = "Azerbaijani music hits",
+                semanticTags = setOf("region-az", "azerbaijani")
+            ),
+            Profile(
+                triggers = setOf("турецк", "турецкая музыка", "turkish music", "türk musiqisi"),
+                providerTerms = "Turkish music hits",
+                semanticTags = setOf("region-tr", "turkish")
             )
         )
     }

@@ -24,6 +24,7 @@ import az.simplesoft.aura.assistant.VoiceCaptureDiagnostics
 import az.simplesoft.aura.assistant.VoiceInputState
 import az.simplesoft.aura.assistant.VoiceEngineMode
 import az.simplesoft.aura.assistant.CompactAssistantMemory
+import az.simplesoft.aura.assistant.AssistantMemoryFact
 import az.simplesoft.aura.assistant.AssistantCommandCoordinator
 import az.simplesoft.aura.assistant.ActionExecutionResult
 import az.simplesoft.aura.assistant.gemini.GeminiAudioInput
@@ -43,6 +44,8 @@ import az.simplesoft.aura.assistant.EqualizerPreset
 import az.simplesoft.aura.assistant.RoomAssistantMemoryPersistence
 import az.simplesoft.aura.data.DemoCatalog
 import az.simplesoft.aura.data.LocalMusicProvider
+import az.simplesoft.aura.data.OfflineTrackStore
+import az.simplesoft.aura.data.ArtistArtworkLookup
 import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.RadioBrowserProvider
 import az.simplesoft.aura.data.RadioCountry
@@ -86,7 +89,6 @@ import az.simplesoft.aura.domain.music.SearchOutcome
 import az.simplesoft.aura.domain.playlist.WorldPlaylist
 import az.simplesoft.aura.domain.playlist.WorldPlaylistCandidateMatcher
 import az.simplesoft.aura.playback.PlaybackConnection
-import az.simplesoft.aura.playback.AudioEffectsController
 import az.simplesoft.aura.playback.PlaybackConnectionCoordinator
 import az.simplesoft.aura.voice.AuraVoiceForegroundService
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -170,6 +172,7 @@ data class AuraUiState(
     val selectedPlaylistId: String? = null,
     val assistantText: String = "Привет. Я AURA.",
     val assistantMessages: List<AssistantMessage> = emptyList(),
+    val memoryFacts: List<AssistantMemoryFact> = emptyList(),
     val isAssistantThinking: Boolean = false,
     val assistantSource: AssistantSource = AssistantSource.LOCAL,
     val isOfflineOnly: Boolean = true,
@@ -200,6 +203,15 @@ data class AuraUiState(
     val isRecommendationLoading: Boolean = false,
     val autoContinueEnabled: Boolean = true,
     val equalizerPreset: EqualizerPreset = EqualizerPreset.FLAT,
+    val equalizerBands: List<Float> = EqualizerPreset.FLAT.defaultBands.toList(),
+    val offlineSort: OfflineSort = OfflineSort.RECENT,
+    val offlineStorageBytes: Long = 0L,
+    val downloadedSourceTrackIds: Set<String> = emptySet(),
+    val offlineDownloadProgress: Float? = null,
+    val offlineDownloadTrackId: String? = null,
+    val offlineDownloadBytes: Long = 0L,
+    val offlineDownloadTotalBytes: Long = -1L,
+    val offlineSearchQuery: String = "",
     val sleepTimerEndsAt: Long? = null,
     val stopAfterTrack: Boolean = false,
     val searchPhase: SearchPhase = SearchPhase.IDLE,
@@ -221,9 +233,12 @@ data class AuraUiState(
     val isRepeatEnabled: Boolean get() = repeatMode != AuraRepeatMode.OFF
 }
 
+enum class OfflineSort { RECENT, TITLE, ARTIST }
+
 class AuraViewModel(application: Application) : AndroidViewModel(application), PlaybackConnection.Listener {
     private val intentEngine = LocalIntentEngine()
     private val localProvider = LocalMusicProvider(application)
+    private val offlineStore = OfflineTrackStore(application)
     private val radioProvider = RadioBrowserProvider()
     private val muzofondCollections = MuzofondCollectionsClient()
     private val volCollections = VolCollectionsClient()
@@ -262,7 +277,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         )
     }
     private val playback = PlaybackConnection(application, this)
-    private val audioEffects = AudioEffectsController()
     private val providerManager = ProviderManager(
         setOf(
             LocalMusicPlugin(localProvider),
@@ -279,6 +293,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         candidateRanker = candidateRanker,
         identityResolver = identityResolver
     )
+    private val artworkLookup = ArtistArtworkLookup()
     private val playbackCoordinator = PlaybackConnectionCoordinator(playback) { state.value.queue }
     private val musicBrain = MusicBrain(
         providerManager = providerManager,
@@ -301,6 +316,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private var pendingCommand: String? = null
     private var pendingCommandShouldSpeak = false
     private val claimedPendingCommands = mutableSetOf<String>()
+    private var offlineDownloadJob: Job? = null
 
     private val initialLiked = preferences.getStringSet("liked", emptySet()).orEmpty().toSet()
     private val initialHistory = preferences.getString("history", "")
@@ -319,6 +335,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val initialEqualizerPreset = EqualizerPreset.fromText(
         preferences.getString("equalizer_preset", EqualizerPreset.FLAT.name).orEmpty()
     ) ?: EqualizerPreset.FLAT
+    private val initialEqualizerBands = preferences.getString("equalizer_bands", null)
+        ?.split(',')?.mapNotNull { it.toFloatOrNull() }?.takeIf { it.size == 5 }
+        ?: initialEqualizerPreset.defaultBands.toList()
     private val initialLikedWorldPlaylists = preferences.getStringSet("liked_world_playlists", emptySet()).orEmpty().toSet()
 
     private val _state = MutableStateFlow(
@@ -334,6 +353,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             geminiDiagnostics = geminiSession.diagnostics.value,
             voiceEngineMode = initialVoiceEngineMode,
             equalizerPreset = initialEqualizerPreset,
+            equalizerBands = initialEqualizerBands,
             likedWorldPlaylistIds = initialLikedWorldPlaylists
         )
     )
@@ -342,10 +362,16 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     init {
         configureMusicSources(initialMusicSourceMode)
         speech.setEngineMode(initialVoiceEngineMode)
+        if (initialEqualizerPreset == EqualizerPreset.CUSTOM) {
+            playback.setEqualizerBands(initialEqualizerBands)
+        } else {
+            playback.setEqualizer(initialEqualizerPreset)
+        }
         refreshWorldPlaylists()
         viewModelScope.launch {
             val memory = assistantMemory.snapshot()
             geminiUserContext = memory.promptSummary()
+            _state.update { it.copy(memoryFacts = memory.facts) }
         }
         viewModelScope.launch {
             geminiSession.diagnostics.collect { diagnostics ->
@@ -454,7 +480,6 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun navigate(destination: AuraDestination) = _state.update {
         it.copy(
             destination = destination,
-            librarySection = if (destination == AuraDestination.LIBRARY) LibrarySection.PLAYLISTS else it.librarySection,
             isPlayerExpanded = false,
             isQueueOpen = false
         )
@@ -843,7 +868,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         source = AssistantSource.REMOTE
                     )
                 )
-                geminiUserContext = assistantMemory.snapshot().promptSummary()
+                val memory = assistantMemory.snapshot()
+                geminiUserContext = memory.promptSummary()
+                _state.update { it.copy(memoryFacts = memory.facts) }
             }
         }
         val timestamp = System.currentTimeMillis()
@@ -1053,7 +1080,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             "find_similar_music" -> { playSimilarMix(); ok("Ищу похожую музыку") }
             "more_like_this" -> { playSimilarMix(); ok("Подбираю ещё похожее") }
             "reject_current_track" -> { rejectCurrentTrack(); ok("Трек пропущен и учтён") }
-            "clear_memory" -> { assistantMemory.clear(); geminiUserContext = ""; ok("Локальная память очищена") }
+            "clear_memory" -> {
+                assistantMemory.clear()
+                geminiUserContext = ""
+                _state.update { it.copy(memoryFacts = emptyList()) }
+                ok("Локальная память очищена")
+            }
             "play_mood_mix" -> {
                 val mood = moodFromGemini(args.optString("mood"))
                     ?: return GeminiToolResult("error", "Не знаю такое настроение")
@@ -1073,6 +1105,19 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             }
             "open_queue" -> { _state.update { it.copy(isQueueOpen = true, isPlayerExpanded = false) }; ok("Очередь открыта") }
             "open_playlists" -> { _state.update { it.copy(destination = AuraDestination.LIBRARY, librarySection = LibrarySection.PLAYLISTS) }; ok("Плейлисты открыты") }
+            "open_local_library" -> { _state.update { it.copy(destination = AuraDestination.LIBRARY, librarySection = LibrarySection.LOCAL) }; refreshLocalMusic(); ok("Музыка на телефоне открыта") }
+            "play_offline_music" -> { playOfflineMusic("Включаю музыку с телефона."); ok("Запускаю офлайн-музыку") }
+            "search_offline_library" -> {
+                val query = args.optString("query").trim()
+                if (query.isBlank()) GeminiToolResult("error", "Укажи песню или исполнителя") else { searchOffline(query); ok("Ищу в офлайн-библиотеке") }
+            }
+            "get_offline_library_status" -> {
+                val local = state.value.localTracks
+                ok("Офлайн-библиотека: ${local.size} песен, ${formatStorageSize(state.value.offlineStorageBytes)}")
+            }
+            "download_current_track" -> { downloadCurrentTrack(); ok("Сохраняю текущую песню на телефон") }
+            "delete_offline_track" -> { deleteCurrentOfflineTrack(); ok("Удаляю локальную копию") }
+            "delete_all_offline" -> { deleteAllOffline(); ok("Очищаю офлайн-библиотеку") }
             "open_history" -> { _state.update { it.copy(destination = AuraDestination.LIBRARY, librarySection = LibrarySection.HISTORY) }; ok("История открыта") }
             "set_auto_continue" -> {
                 val enabled = args.optBoolean("enabled", true)
@@ -1117,7 +1162,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 add(az.simplesoft.aura.assistant.MemoryInsight("language", "preferred", cleanLanguage))
             }
             assistantMemory.remember(facts)
-            geminiUserContext = assistantMemory.snapshot().promptSummary()
+            val memory = assistantMemory.snapshot()
+            geminiUserContext = memory.promptSummary()
+            _state.update { it.copy(memoryFacts = memory.facts) }
         }
         _state.update {
             it.copy(
@@ -1351,6 +1398,27 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 }
                 return null
             }
+            MusicIntent.OpenLocalLibrary -> {
+                viewModelScope.launch {
+                    refreshLocalMusic()
+                    _state.update {
+                        it.copy(
+                            destination = AuraDestination.LIBRARY,
+                            librarySection = LibrarySection.LOCAL,
+                            selectedPlaylistId = null,
+                            assistantText = answer.text
+                        )
+                    }
+                }
+                return null
+            }
+            MusicIntent.PlayOfflineMusic -> return playOfflineMusic(answer.text)
+            MusicIntent.OfflineStatus -> return offlineStatus(answer.text)
+            is MusicIntent.SearchOffline -> return searchOffline(intent.query)
+            MusicIntent.DownloadCurrent -> return downloadCurrentTrack()
+            MusicIntent.DownloadQueue -> return downloadQueue()
+            MusicIntent.DeleteOfflineCurrent -> return deleteCurrentOfflineTrack()
+            MusicIntent.DeleteAllOffline -> return deleteAllOffline()
             is MusicIntent.CreatePlaylist -> {
                 createPlaylist(intent.name, intent.includeQueue)
                 _state.update {
@@ -1476,7 +1544,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             viewModelScope.launch {
                 assistantMemory.clear()
                 geminiUserContext = ""
-                _state.update { it.copy(assistantText = "Локальная память очищена.") }
+                _state.update { it.copy(memoryFacts = emptyList(), assistantText = "Локальная память очищена.") }
             }
             return null
         }
@@ -1610,6 +1678,14 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 is MusicIntent.SetEqualizer,
                 MusicIntent.DisableEqualizer,
                 MusicIntent.CycleEqualizer -> current
+                MusicIntent.OpenLocalLibrary,
+                MusicIntent.PlayOfflineMusic,
+                MusicIntent.OfflineStatus,
+                is MusicIntent.SearchOffline,
+                MusicIntent.DownloadCurrent,
+                MusicIntent.DownloadQueue,
+                MusicIntent.DeleteOfflineCurrent,
+                MusicIntent.DeleteAllOffline -> current
                 MusicIntent.CarMode -> current.copy(isCarMode = true, assistantText = answer.text)
                 MusicIntent.NowPlaying -> current.copy(
                     assistantText = "Сейчас играет ${current.nowTrack.title} — ${current.nowTrack.artist}."
@@ -1620,6 +1696,14 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                     assistantText = answer.text
                 )
                 MusicIntent.OpenPlaylists,
+                MusicIntent.OpenLocalLibrary,
+                MusicIntent.PlayOfflineMusic,
+                MusicIntent.OfflineStatus,
+                is MusicIntent.SearchOffline,
+                MusicIntent.DownloadCurrent,
+                MusicIntent.DownloadQueue,
+                MusicIntent.DeleteOfflineCurrent,
+                MusicIntent.DeleteAllOffline,
                 MusicIntent.OpenRadio,
                 is MusicIntent.CreatePlaylist,
                 is MusicIntent.PlayPlaylist,
@@ -1909,20 +1993,216 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     override fun onAudioSessionIdChanged(sessionId: Int) {
-        audioEffects.setSessionId(sessionId)
-        audioEffects.apply(state.value.equalizerPreset)
+        // EQ is applied in the Media3 PCM pipeline, not through a device-specific
+        // AudioEffect session. This callback is retained for the playback seam.
+    }
+
+    fun downloadCurrentTrack(): Job = downloadTrack(state.value.nowTrack)
+
+    /** Saves every eligible track currently in the queue one by one. */
+    fun downloadQueue(): Job = viewModelScope.launch {
+        val queue = state.value.queue
+            .filter { it.id != DemoCatalog.tracks.first().id }
+            .filter { it.sourceId in setOf("muzofond", "vol") && it.streamUrl?.startsWith("https://") == true }
+            .distinctBy(Track::id)
+        if (queue.isEmpty()) {
+            _state.update { it.copy(assistantText = "В очереди нет треков, доступных для офлайн-сохранения.") }
+            return@launch
+        }
+        var saved = 0
+        _state.update { it.copy(assistantText = "Сохраняю очередь: 0 из ${queue.size}…") }
+        queue.forEach { track ->
+            if (track.id !in state.value.downloadedSourceTrackIds) {
+                downloadTrack(track).join()
+                if (track.id in state.value.downloadedSourceTrackIds) saved++
+            } else {
+                saved++
+            }
+            _state.update { it.copy(assistantText = "Сохраняю очередь: $saved из ${queue.size}…") }
+        }
+        _state.update { it.copy(assistantText = "Готово: $saved песен сохранено офлайн.") }
+    }
+
+    fun downloadTrack(track: Track): Job {
+        offlineDownloadJob?.cancel()
+        val job = viewModelScope.launch {
+        if (track.id in state.value.downloadedSourceTrackIds) {
+            _state.update { it.copy(assistantText = "Эта песня уже сохранена на телефоне.") }
+            return@launch
+        }
+        if (track.id == DemoCatalog.tracks.first().id) {
+            _state.update { it.copy(assistantText = "Сначала включи конкретную песню.") }
+            return@launch
+        }
+        _state.update {
+            it.copy(
+                isLoading = true,
+                offlineDownloadProgress = 0f,
+                offlineDownloadTrackId = track.id,
+                offlineDownloadBytes = 0L,
+                offlineDownloadTotalBytes = -1L,
+                assistantText = "Сохраняю ${track.title} на телефон…"
+            )
+        }
+        try {
+            offlineStore.download(track) { downloaded, total ->
+                _state.update {
+                    it.copy(
+                        offlineDownloadProgress = if (total > 0L) downloaded.toFloat() / total else 0f,
+                        offlineDownloadBytes = downloaded,
+                        offlineDownloadTotalBytes = total
+                    )
+                }
+            }
+            refreshLocalMusic()
+            _state.update { current -> current.copy(isLoading = false, assistantText = "Сохранила ${track.title} для офлайн-прослушивания.") }
+        } catch (error: CancellationException) {
+            _state.update { it.copy(isLoading = false, assistantText = "Загрузка отменена.") }
+            throw error
+        } catch (error: Throwable) {
+            _state.update { current ->
+                current.copy(
+                    isLoading = false,
+                    assistantText = when {
+                        track.sourceId == "youtube" -> "Эту песню нельзя скачать из YouTube."
+                        else -> "Не удалось сохранить песню: ${error.message ?: "поток недоступен"}"
+                    }
+                )
+            }
+        } finally {
+            _state.update { it.copy(offlineDownloadProgress = null, offlineDownloadTrackId = null, offlineDownloadBytes = 0L, offlineDownloadTotalBytes = -1L) }
+        }
+        }
+        offlineDownloadJob = job
+        return job
+    }
+
+    fun cancelOfflineDownload() {
+        offlineDownloadJob?.cancel()
+        offlineDownloadJob = null
+    }
+
+    fun deleteOfflineTrack(track: Track): Job = viewModelScope.launch {
+        if (track.sourceId != LocalMusicPlugin.ID || !track.id.startsWith("offline-")) return@launch
+        offlineStore.remove(track)
+        refreshLocalMusic()
+        _state.update { it.copy(assistantText = "Удалена ${track.title} с телефона.") }
+    }
+
+    fun deleteAllOffline(): Job = viewModelScope.launch {
+        val removed = offlineStore.removeAll()
+        refreshLocalMusic()
+        _state.update { it.copy(assistantText = if (removed == 0) "Офлайн-библиотека уже пуста." else "Удалено песен: $removed.") }
+    }
+
+    private fun deleteCurrentOfflineTrack(): Job = viewModelScope.launch {
+        val track = state.value.nowTrack
+        if (track.sourceId != LocalMusicPlugin.ID || !track.id.startsWith("offline-")) {
+            _state.update { it.copy(assistantText = "Текущая песня не сохранена офлайн.") }
+            return@launch
+        }
+        deleteOfflineTrack(track).join()
+    }
+
+    private fun playOfflineMusic(message: String): Job = viewModelScope.launch {
+        val tracks = offlineStore.load()
+        _state.update {
+            it.copy(
+                localTracks = sortOfflineTracks(tracks, it.offlineSort),
+                offlineStorageBytes = offlineStore.storageBytes()
+            )
+        }
+        if (tracks.isEmpty()) {
+            _state.update { it.copy(destination = AuraDestination.LIBRARY, librarySection = LibrarySection.LOCAL, assistantText = "На телефоне пока нет скачанных песен.") }
+            return@launch
+        }
+        val queue = tracks.shuffled()
+        val first = queue.first()
+        _state.update {
+            it.copy(
+                queue = queue,
+                currentIndex = 0,
+                destination = AuraDestination.LIBRARY,
+                librarySection = LibrarySection.LOCAL,
+                assistantText = message
+            ).also(::persist)
+        }
+        startPlayback(first)
+    }
+
+    private fun offlineStatus(message: String): Job = viewModelScope.launch {
+        val tracks = offlineStore.load()
+        val bytes = offlineStore.storageBytes()
+        _state.update {
+            it.copy(
+                localTracks = sortOfflineTracks(tracks, it.offlineSort),
+                offlineStorageBytes = bytes,
+                assistantText = "$message ${tracks.size} песен, ${formatStorageSize(bytes)}."
+            )
+        }
+    }
+
+    private fun searchOffline(query: String): Job = viewModelScope.launch {
+        val tracks = offlineStore.load()
+        _state.update {
+            it.copy(
+                localTracks = sortOfflineTracks(tracks, it.offlineSort),
+                offlineStorageBytes = offlineStore.storageBytes(),
+                offlineSearchQuery = query,
+                destination = AuraDestination.LIBRARY,
+                librarySection = LibrarySection.LOCAL,
+                assistantText = if (tracks.any { track ->
+                    track.title.contains(query, ignoreCase = true) || track.artist.contains(query, ignoreCase = true)
+                }) "Нашла в офлайн-библиотеке." else "В офлайн-библиотеке ничего не нашла."
+            )
+        }
     }
 
     fun setEqualizer(preset: EqualizerPreset) {
-        audioEffects.apply(preset)
-        preferences.edit { putString("equalizer_preset", preset.name.lowercase()) }
-        _state.update { it.copy(equalizerPreset = preset, assistantText = "Эквалайзер: ${preset.label}") }
+        playback.setEqualizer(preset)
+        preferences.edit {
+            putString("equalizer_preset", preset.name.lowercase())
+            putString("equalizer_bands", preset.defaultBands.joinToString(","))
+        }
+        _state.update {
+            it.copy(
+                equalizerPreset = preset,
+                equalizerBands = preset.defaultBands.toList(),
+                assistantText = "Эквалайзер: ${preset.label}"
+            )
+        }
+    }
+
+    fun setCustomEqualizer(bands: List<Float>) {
+        val normalized = bands.take(5).map { it.coerceIn(-12f, 12f) }
+            .let { values -> values + List(5 - values.size) { 0f } }
+        playback.setEqualizerBands(normalized)
+        preferences.edit {
+            putString("equalizer_preset", EqualizerPreset.CUSTOM.name.lowercase())
+            putString("equalizer_bands", normalized.joinToString(","))
+        }
+        _state.update {
+            it.copy(
+                equalizerPreset = EqualizerPreset.CUSTOM,
+                equalizerBands = normalized,
+                assistantText = "Пользовательский эквалайзер применён"
+            )
+        }
     }
 
     fun disableEqualizer() {
-        audioEffects.disable()
-        preferences.edit { putString("equalizer_preset", EqualizerPreset.FLAT.name.lowercase()) }
-        _state.update { it.copy(equalizerPreset = EqualizerPreset.FLAT, assistantText = "Эквалайзер выключен") }
+        playback.setEqualizer(EqualizerPreset.FLAT)
+        preferences.edit {
+            putString("equalizer_preset", EqualizerPreset.FLAT.name.lowercase())
+            putString("equalizer_bands", EqualizerPreset.FLAT.defaultBands.joinToString(","))
+        }
+        _state.update {
+            it.copy(
+                equalizerPreset = EqualizerPreset.FLAT,
+                equalizerBands = EqualizerPreset.FLAT.defaultBands.toList(),
+                assistantText = "Эквалайзер выключен"
+            )
+        }
     }
 
     fun cycleEqualizer() {
@@ -2326,8 +2606,36 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     fun refreshLocalMusic() {
         viewModelScope.launch {
             val tracks = localProvider.load()
-            _state.update { it.copy(localTracks = tracks) }
+            val current = state.value
+            _state.update {
+                it.copy(
+                localTracks = sortOfflineTracks(tracks, current.offlineSort),
+                offlineStorageBytes = offlineStore.storageBytes(),
+                downloadedSourceTrackIds = offlineStore.downloadedSourceTrackIds()
+                )
+            }
         }
+    }
+
+    fun setOfflineSort(sort: OfflineSort) {
+        _state.update { current ->
+            current.copy(
+                offlineSort = sort,
+                localTracks = sortOfflineTracks(current.localTracks, sort)
+            )
+        }
+    }
+
+    fun setOfflineSearchQuery(query: String) {
+        _state.update { it.copy(offlineSearchQuery = query) }
+    }
+
+    fun isTrackDownloaded(track: Track): Boolean = track.id in state.value.downloadedSourceTrackIds
+
+    private fun sortOfflineTracks(tracks: List<Track>, sort: OfflineSort): List<Track> = when (sort) {
+        OfflineSort.RECENT -> tracks.sortedByDescending { it.addedAt ?: 0L }
+        OfflineSort.TITLE -> tracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+        OfflineSort.ARTIST -> tracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.artist })
     }
 
     private fun searchAndQueue(query: String, playNext: Boolean): Job {
@@ -2422,6 +2730,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                             }
                         )
                     }
+                    enrichMissingArtwork(pageTracks)
                     val best = result.value.firstOrNull()
                     if (!append && request.autoPlay && best != null && best.confidence >= AUTO_PLAY_CONFIDENCE) {
                         resolveAndPlay(best).join()
@@ -2577,10 +2886,41 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                 assistantText = "Буферизация ${track.title}…"
             ).also(::persist)
         }
+        enrichMissingArtwork(listOf(track))
         hasPreparedMedia = true
         playback.play(playbackQueue, track)
         if (track.sourceId == "radio_browser") {
             viewModelScope.launch { radioProvider.registerClick(track.id.removePrefix("radio_browser:")) }
+        }
+    }
+
+    private fun enrichMissingArtwork(tracks: List<Track>) {
+        val missing = tracks
+            .filterNot { ArtistArtworkLookup.isUsable(it.artworkUrl) }
+            .distinctBy(Track::id)
+            .take(8)
+        if (missing.isEmpty()) return
+        viewModelScope.launch {
+            val replacements = coroutineScope {
+                missing.map { track ->
+                    async {
+                        artworkLookup.lookup(track.artist, track.title)?.let { track.id to it }
+                    }
+                }.awaitAll().filterNotNull().toMap()
+            }
+            if (replacements.isEmpty()) return@launch
+            _state.update { current ->
+                fun updateArtwork(items: List<Track>): List<Track> = items.map { track ->
+                    replacements[track.id]?.let { track.copy(artworkUrl = it) } ?: track
+                }
+                current.copy(
+                    searchResults = updateArtwork(current.searchResults),
+                    queue = updateArtwork(current.queue),
+                    personalMix = updateArtwork(current.personalMix),
+                    memoryTracks = updateArtwork(current.memoryTracks),
+                    localTracks = updateArtwork(current.localTracks)
+                ).also(::persist)
+            }
         }
     }
 
@@ -2662,6 +3002,18 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
             recentTracks = recent,
             likedTrackIds = current.likedIds,
             skippedTrackIds = current.skippedTrackIds,
+            preferredArtists = current.memoryFacts
+                .filter { it.category == "preference" && it.key == "artist" }
+                .map { it.value }
+                .toSet(),
+            preferredGenres = current.memoryFacts
+                .filter { it.category == "preference" && it.key == "genre" }
+                .map { it.value }
+                .toSet(),
+            dislikedArtists = current.memoryFacts
+                .filter { it.category == "dislike" && it.key == "artist" }
+                .map { it.value }
+                .toSet(),
             hourOfDay = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
             carMode = current.isCarMode
         )
@@ -2763,6 +3115,17 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     override fun onPlaybackError(trackId: String?, message: String) {
+        val failedTrack = trackId?.let { id -> state.value.queue.firstOrNull { it.id == id } }
+        val offlineAlternative = failedTrack?.takeUnless { it.sourceId == LocalMusicPlugin.ID }?.let { failed ->
+            state.value.localTracks.firstOrNull { local ->
+                local.title.equals(failed.title, ignoreCase = true) &&
+                    local.artist.equals(failed.artist, ignoreCase = true)
+            }
+        }
+        if (offlineAlternative != null) {
+            switchToOfflineCopy(offlineAlternative)
+            return
+        }
         val candidate = trackId?.let(candidatesByTrackId::get)
         val attempts = trackId?.let { playbackRecoveryAttempts[it] } ?: 0
         if (candidate != null && attempts < 1) {
@@ -2796,12 +3159,30 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
+    private fun switchToOfflineCopy(track: Track) {
+        val current = state.value
+        val index = current.currentIndex.coerceIn(0, current.queue.lastIndex.coerceAtLeast(0))
+        val queue = current.queue.toMutableList().apply {
+            if (isNotEmpty()) this[index] = track
+        }
+        _state.update {
+            it.copy(
+                queue = queue,
+                currentIndex = index,
+                isBuffering = true,
+                searchPhase = SearchPhase.BUFFERING,
+                assistantText = "Интернет недоступен. Включаю локальную копию ${track.title}."
+            ).also(::persist)
+        }
+        hasPreparedMedia = true
+        playback.replaceCurrent(track, playback.currentPositionMs())
+    }
+
     override fun onCleared() {
         geminiAudioInput.stop()
         geminiSession.close()
         speech.shutdown()
         playback.release()
-        audioEffects.release()
         stopVoiceForegroundService()
         super.onCleared()
     }
@@ -2836,6 +3217,13 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         ProviderFailureReason.NETWORK -> "Не удалось связаться с музыкальным источником. Проверь интернет."
         ProviderFailureReason.NOT_PLAYABLE -> "Источник не воспроизводится. Ищу другой вариант."
         ProviderFailureReason.PARSE, ProviderFailureReason.UNKNOWN -> "Музыкальный источник временно недоступен."
+    }
+
+    private fun formatStorageSize(bytes: Long): String = when {
+        bytes >= 1_000_000_000L -> "%.1f ГБ".format(bytes / 1_000_000_000f)
+        bytes >= 1_000_000L -> "%.1f МБ".format(bytes / 1_000_000f)
+        bytes >= 1_000L -> "%.0f КБ".format(bytes / 1_000f)
+        else -> "$bytes Б"
     }
 
     private fun durationCompatible(left: Long?, right: Long?): Boolean =

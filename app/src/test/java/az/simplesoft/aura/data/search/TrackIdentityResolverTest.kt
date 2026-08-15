@@ -49,6 +49,20 @@ class TrackIdentityResolverTest {
         assertTrue(resolver.areSame(studio, officialVideo))
     }
 
+    @Test
+    fun takesArtworkFromAnAlternativeWhenPreferredSourceHasNone() {
+        val catalog = candidate("vol", "one", "Numb", 190_000)
+        val preview = candidate("youtube", "two", "Numb (Official Music Video)", 187_000)
+            .copy(artworkUrl = "https://images.example/numb.jpg")
+
+        val unified = resolver.unify(listOf(
+            RankedCandidate(catalog, .98, emptyList(), emptyList()),
+            RankedCandidate(preview, .80, emptyList(), emptyList())
+        ))
+
+        assertEquals("https://images.example/numb.jpg", unified.first().metadata.artworkUrl)
+    }
+
     private fun candidate(provider: String, id: String, title: String, duration: Long) = TrackCandidate(
         providerId = provider,
         id = id,

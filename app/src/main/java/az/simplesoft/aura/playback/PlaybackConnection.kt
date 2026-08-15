@@ -2,6 +2,7 @@ package az.simplesoft.aura.playback
 
 import android.content.ComponentName
 import android.content.Context
+import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -12,7 +13,9 @@ import androidx.media3.session.SessionToken
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.plugins.youtube.YouTubePlaybackIdentity
 import az.simplesoft.aura.domain.music.AuraRepeatMode
+import az.simplesoft.aura.assistant.EqualizerPreset
 import com.google.common.util.concurrent.ListenableFuture
+import androidx.media3.session.SessionCommand
 
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackConnection(
@@ -165,6 +168,20 @@ class PlaybackConnection(
             AuraRepeatMode.ONE -> Player.REPEAT_MODE_ONE
             AuraRepeatMode.ALL -> Player.REPEAT_MODE_ALL
         }
+    }
+    fun setEqualizer(preset: EqualizerPreset) = withController { player ->
+        player.sendCustomCommand(
+            SessionCommand(PlaybackService.CUSTOM_COMMAND_SET_EQUALIZER, Bundle.EMPTY),
+            Bundle().apply { putString(PlaybackService.EXTRA_EQUALIZER_PRESET, preset.name.lowercase()) }
+        )
+    }
+    fun setEqualizerBands(bands: List<Float>) = withController { player ->
+        player.sendCustomCommand(
+            SessionCommand(PlaybackService.CUSTOM_COMMAND_SET_EQUALIZER, Bundle.EMPTY),
+            Bundle().apply {
+                putFloatArray(PlaybackService.EXTRA_EQUALIZER_BANDS, bands.toFloatArray())
+            }
+        )
     }
     fun seekTo(positionMs: Long) = withController { it.seekTo(positionMs.coerceAtLeast(0L)) }
     fun currentPositionMs(): Long = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L

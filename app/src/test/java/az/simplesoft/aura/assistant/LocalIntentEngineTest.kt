@@ -63,6 +63,19 @@ class LocalIntentEngineTest {
     }
 
     @Test
+    fun recognizesOfflineLibraryCommands() {
+        assertEquals(MusicIntent.DownloadCurrent, engine.understand("Скачай эту песню").intent)
+        assertEquals(MusicIntent.DownloadQueue, engine.understand("Скачай очередь").intent)
+        assertEquals(MusicIntent.DownloadQueue, engine.understand("download all queued songs").intent)
+        assertEquals(MusicIntent.PlayOfflineMusic, engine.understand("Включи скачанную музыку").intent)
+        assertEquals(MusicIntent.OpenLocalLibrary, engine.understand("Открой музыку на телефоне").intent)
+        assertEquals(MusicIntent.DeleteOfflineCurrent, engine.understand("Удали скачанную песню").intent)
+        assertEquals(MusicIntent.OfflineStatus, engine.understand("Сколько песен скачано").intent)
+        assertEquals(MusicIntent.DeleteAllOffline, engine.understand("Очисти офлайн библиотеку").intent)
+        assertEquals(MusicIntent.SearchOffline("bts"), engine.understand("Найди среди скачанных песен bts").intent)
+    }
+
+    @Test
     fun recognizesWorldPlaylistShortcuts() {
         assertEquals(MusicIntent.PlayWorldPlaylist("top-week-world"), engine.understand("Топ недели").intent)
         assertEquals(MusicIntent.PlayWorldPlaylist("hits-90s"), engine.understand("Хиты 90-х").intent)

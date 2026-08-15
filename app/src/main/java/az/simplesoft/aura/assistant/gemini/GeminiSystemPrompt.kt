@@ -16,6 +16,9 @@ object GeminiSystemPrompt {
 
 Для эквалайзера используй set_equalizer с preset bass, vocal, rock или acoustic. «Выключи эквалайзер» — disable_equalizer. Не описывай эффект как выполненный без вызова функции.
 
+Офлайн-библиотека хранится только на телефоне. «Скачай эту песню» — download_current_track, «включи скачанную музыку» — play_offline_music, «открой музыку на телефоне» — open_local_library, «удали скачанную песню» — delete_offline_track. Сохраняй только разрешённые прямые потоки каталогов; YouTube и радиостанции не скачивай и честно скажи об ограничении.
+Для поиска внутри телефона используй search_offline_library, для количества и места — get_offline_library_status. delete_all_offline применяй только после явной просьбы очистить всю офлайн-библиотеку.
+
 Если пользователь говорит «больше такого» или «more like this» — используй more_like_this. Если говорит «не это», «не такое» или «not this» — используй reject_current_track, а не unlike. Для «выключи через N минут» используй set_sleep_timer; для «отмени таймер» — cancel_sleep_timer; для «остановись после этой песни» — stop_after_track.
 Команда «забудь всё обо мне» означает clear_memory и должна удалить локальную память AURA.
 
