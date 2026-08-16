@@ -48,7 +48,6 @@ class GeminiLiveSession(
     private var reconnects = 0
     private var closedByUser = false
     private val countedUsage = mutableSetOf<String>()
-    private var usageSequence = 0L
     private var sessionId = UUID.randomUUID().toString()
     private val _diagnostics = MutableStateFlow(
         GeminiDiagnostics(
@@ -106,8 +105,9 @@ class GeminiLiveSession(
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    val preview = text.take(500).replace(Regex("(key|access_token)=([^&\\\" ]+)"), "$1=<redacted>")
-                    Log.i(TAG, "server message: $preview")
+                    // Never log transcript/tool payloads. They may contain
+                    // private speech and are not needed for diagnostics.
+                    Log.d(TAG, "server text message bytes=${text.toByteArray().size}")
                     _diagnostics.value = _diagnostics.value.copy(bytesReceived = _diagnostics.value.bytesReceived + text.toByteArray().size)
                     handleServerMessage(webSocket, JSONObject(text))
                 }
@@ -153,19 +153,25 @@ class GeminiLiveSession(
         })
     }
 
-    fun sendText(text: String) {
-        if (text.isBlank()) return
+    fun sendText(text: String): Boolean {
+        if (text.isBlank()) return false
         mutableState.value = GeminiSessionState.MODEL_THINKING
-        send(JSONObject().put("realtimeInput", JSONObject().put("text", text)))
+        val sent = send(JSONObject().put("realtimeInput", JSONObject().put("text", text)))
+        if (!sent) {
+            fail("Gemini connection is not ready")
+        }
+        return sent
     }
 
-    fun sendAudio(pcm: ByteArray) {
-        if (pcm.isEmpty()) return
+    fun sendAudio(pcm: ByteArray): Boolean {
+        if (pcm.isEmpty()) return false
         if (mutableState.value == GeminiSessionState.READY) mutableState.value = GeminiSessionState.USER_SPEAKING
-        send(JSONObject().put("realtimeInput", JSONObject().put("audio", JSONObject().apply {
+        val sent = send(JSONObject().put("realtimeInput", JSONObject().put("audio", JSONObject().apply {
             put("data", Base64.encodeToString(pcm, Base64.NO_WRAP))
             put("mimeType", "audio/pcm;rate=${GeminiLiveConfig.INPUT_RATE}")
         })))
+        if (!sent && mutableState.value != GeminiSessionState.ERROR) fail("Gemini connection is not ready")
+        return sent
     }
 
     fun markSpeechEnded() {
@@ -178,11 +184,13 @@ class GeminiLiveSession(
         _diagnostics.value = _diagnostics.value.copy(interruptionCount = _diagnostics.value.interruptionCount + 1)
     }
 
-    private fun send(message: JSONObject) {
+    private fun send(message: JSONObject): Boolean {
         val bytes = message.toString().toByteArray()
-        if (socket?.send(message.toString()) == true) {
+        val sent = socket?.send(message.toString()) == true
+        if (sent) {
             _diagnostics.value = _diagnostics.value.copy(bytesSent = _diagnostics.value.bytesSent + bytes.size)
         }
+        return sent
     }
 
     private fun handleServerMessage(webSocket: WebSocket, message: JSONObject) {
@@ -328,11 +336,13 @@ class GeminiLiveSession(
     private fun recordUsage(usage: GeminiTokenUsage) {
         _diagnostics.value = _diagnostics.value.copy(lastUsage = usage)
         val fingerprint = listOf(
-            ++usageSequence,
             usage.promptTokens, usage.responseTokens, usage.totalTokens,
-            usage.inputAudioTokens, usage.outputAudioTokens, usage.toolUsePromptTokens
+            usage.thoughtsTokens, usage.cachedTokens, usage.toolUsePromptTokens,
+            usage.inputAudioTokens, usage.inputTextTokens, usage.outputAudioTokens,
+            usage.outputTextTokens
         ).joinToString(":")
         if (countedUsage.add(fingerprint)) {
+            if (countedUsage.size > MAX_COUNTED_USAGE_EVENTS) countedUsage.remove(countedUsage.first())
             val session = _diagnostics.value.sessionUsage + usage
             val lifetime = usageStore?.add(usage) ?: (_diagnostics.value.lifetimeUsage + usage)
             _diagnostics.value = _diagnostics.value.copy(sessionUsage = session, lifetimeUsage = lifetime)
@@ -353,5 +363,8 @@ class GeminiLiveSession(
         _diagnostics.value = _diagnostics.value.copy(lifetimeUsage = GeminiTokenUsage())
     }
 
-    private companion object { const val TAG = "GeminiLive" }
+    private companion object {
+        const val TAG = "GeminiLive"
+        const val MAX_COUNTED_USAGE_EVENTS = 64
+    }
 }

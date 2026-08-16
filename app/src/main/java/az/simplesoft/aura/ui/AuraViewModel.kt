@@ -1,5 +1,6 @@
 package az.simplesoft.aura.ui
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Context
 import android.content.Intent
@@ -272,7 +273,17 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         onInputTranscription = ::onGeminiInputTranscription,
         onOutputTranscription = ::onGeminiOutputTranscription,
         onError = { message ->
-            _state.update { it.copy(assistantText = message, isAssistantThinking = false) }
+            geminiAudioInput.stop()
+            stopVoiceForegroundService()
+            _state.update {
+                it.copy(
+                    assistantText = message,
+                    isListening = false,
+                    isVoiceSessionActive = false,
+                    isAssistantThinking = false,
+                    voiceInputState = VoiceInputState.Failed(message)
+                )
+            }
         }
         )
     }
@@ -308,6 +319,8 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     private val playbackRecoveryAttempts = mutableMapOf<String, Int>()
     private var latestCandidates: List<TrackCandidate> = emptyList()
     private var lastSearchRequest: MusicSearchRequest? = null
+    private var searchJob: Job? = null
+    private var searchGeneration = 0L
     private var hasPreparedMedia = false
     private val persistenceQueue = Channel<AuraPlaybackSnapshot>(Channel.CONFLATED)
     private var positionPersistenceTick = 0
@@ -558,13 +571,13 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         providerManager.setEnabled(MuzofondMusicPlugin.ID, mode != MusicSourceMode.YOUTUBE)
         providerManager.setEnabled(VolMusicPlugin.ID, mode != MusicSourceMode.YOUTUBE)
         providerManager.setEnabled(YouTubeMusicPlugin.ID, mode != MusicSourceMode.MUZOFOND)
-        musicBrain.setPreferredProviderIds(
-            when (mode) {
+        val preferred = when (mode) {
                 MusicSourceMode.MUZOFOND -> setOf(MuzofondMusicPlugin.ID, VolMusicPlugin.ID)
                 MusicSourceMode.YOUTUBE -> setOf(YouTubeMusicPlugin.ID)
-                MusicSourceMode.BOTH -> setOf(MuzofondMusicPlugin.ID, VolMusicPlugin.ID)
+                MusicSourceMode.BOTH -> setOf(MuzofondMusicPlugin.ID, VolMusicPlugin.ID, YouTubeMusicPlugin.ID)
             }
-        )
+        musicBrain.setPreferredProviderIds(preferred)
+        recommendationEngine.setPreferredProviderIds(preferred)
     }
 
     fun openRadio(autoPlayFirst: Boolean = false) {
@@ -754,9 +767,23 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                                 )
                             }
                         }
+                    },
+                    onError = { error ->
+                        _state.update {
+                            it.copy(
+                                isListening = false,
+                                isAssistantThinking = false,
+                                voiceInputState = VoiceInputState.Failed(
+                                    error.message ?: "Не удалось записать голос",
+                                    error
+                                )
+                            )
+                        }
                     }
                 )
             }.onFailure { error ->
+                geminiAudioInput.stop()
+                stopVoiceForegroundService()
                 _state.update { it.copy(isListening = false, isVoiceSessionActive = false, isAssistantThinking = false, voiceInputState = VoiceInputState.Failed(error.message ?: "Gemini Voice недоступен", error)) }
             }
         }
@@ -775,6 +802,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
         androidx.core.content.ContextCompat.startForegroundService(getApplication(), intent)
     }
 
+    @SuppressLint("ImplicitSamInstance")
     private fun stopVoiceForegroundService() {
         getApplication<Application>().stopService(Intent(getApplication(), AuraVoiceForegroundService::class.java))
     }
@@ -1178,7 +1206,19 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
 
     fun resetOnboarding() {
         preferences.edit { remove("onboarding_complete"); remove("user_name"); remove("preferred_language") }
-        _state.update { it.copy(onboardingComplete = false, userName = null, preferredLanguage = "ru") }
+        viewModelScope.launch {
+            assistantMemory.clear()
+            geminiUserContext = ""
+            _state.update {
+                it.copy(
+                    onboardingComplete = false,
+                    userName = null,
+                    preferredLanguage = "ru",
+                    memoryFacts = emptyList(),
+                    assistantText = "Профиль и локальная память очищены."
+                )
+            }
+        }
     }
 
     fun setVoiceEngineMode(mode: VoiceEngineMode) {
@@ -2687,11 +2727,17 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     private fun searchTracks(request: MusicSearchRequest, append: Boolean = false): Job {
+        if (!append) {
+            searchJob?.cancel()
+            searchGeneration += 1
+        }
+        val generation = searchGeneration
         lastSearchRequest = request
-        return viewModelScope.launch {
+        val job = viewModelScope.launch {
             val startedAt = System.currentTimeMillis()
             when (val result = searchCandidates(request)) {
                 is ProviderResult.Success -> {
+                    if (generation != searchGeneration) return@launch
                     if (!append) {
                         latestCandidates = result.value
                         candidatesByTrackId.clear()
@@ -2731,6 +2777,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         )
                     }
                     enrichMissingArtwork(pageTracks)
+                    if (generation != searchGeneration) return@launch
                     val best = result.value.firstOrNull()
                     if (!append && request.autoPlay && best != null && best.confidence >= AUTO_PLAY_CONFIDENCE) {
                         resolveAndPlay(best).join()
@@ -2740,7 +2787,9 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         _state.update { it.copy(searchPhase = SearchPhase.IDLE) }
                     }
                 }
-                is ProviderResult.Failure -> _state.update {
+                is ProviderResult.Failure -> {
+                    if (generation != searchGeneration) return@launch
+                    _state.update {
                     if (!append) unifiedTrackSession.clear()
                     it.copy(
                         isLoading = false,
@@ -2753,9 +2802,12 @@ class AuraViewModel(application: Application) : AndroidViewModel(application), P
                         ),
                         assistantText = friendlyFailure(result.reason, searching = true)
                     )
+                    }
                 }
             }
         }
+        searchJob = job
+        return job
     }
 
     private fun resolveAndPlay(

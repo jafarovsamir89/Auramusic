@@ -3,11 +3,12 @@ package az.simplesoft.aura.data.plugins.muzofond
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import az.simplesoft.aura.data.providers.AuraHttpClient
 import okhttp3.Request
 
 /** Loads public Muzofond collections and their track metadata on demand. */
 internal class MuzofondCollectionsClient(
-    private val httpClient: OkHttpClient = OkHttpClient(),
+    private val httpClient: OkHttpClient = AuraHttpClient.create(),
     private val parser: MuzofondCollectionsParser = MuzofondCollectionsParser()
 ) {
     suspend fun collections(limit: Int = 240) = fetch(MuzofondSelectors.COLLECTIONS_URL) { html ->

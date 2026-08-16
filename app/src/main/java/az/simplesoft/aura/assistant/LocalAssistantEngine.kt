@@ -182,7 +182,9 @@ class LocalAssistantEngine(
 
     private fun containsAny(text: String, vararg values: String): Boolean = values.any {
         val normalized = TextNormalizer.normalizeForMatching(it)
-        text == normalized || text.contains(normalized)
+        if (normalized.isBlank()) return@any false
+        Regex("(?:^|[^\\p{L}\\p{N}])${Regex.escape(normalized)}(?:$|[^\\p{L}\\p{N}])")
+            .containsMatchIn(text)
     }
 
     private fun contextualDecision(

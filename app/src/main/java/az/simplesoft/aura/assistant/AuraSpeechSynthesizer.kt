@@ -16,9 +16,12 @@ class AuraSpeechSynthesizer(context: Context) : VoiceEngine, AuraVoiceEngine {
 
     override val id: String = "aura-local-voice"
     override val supportedLanguages: Set<AssistantLanguage> = AssistantLanguage.entries.toSet()
-    override val isReady: Boolean get() = true
+    override val isReady: Boolean
+        get() = engineMode == VoiceEngineMode.VERIFIED_SILERO && russianSilero.isReady()
 
-    override fun prepare() = Unit
+    override fun prepare() {
+        if (engineMode == VoiceEngineMode.VERIFIED_SILERO) russianSilero.prepare()
+    }
 
     fun setEngineMode(mode: VoiceEngineMode) { engineMode = mode }
 
@@ -32,7 +35,7 @@ class AuraSpeechSynthesizer(context: Context) : VoiceEngine, AuraVoiceEngine {
         stop()
         when (language) {
             AssistantLanguage.RUSSIAN -> if (engineMode == VoiceEngineMode.VERIFIED_SILERO) {
-                russianSilero.speak(processed) { Log.w("AuraVoice", "Russian Silero pack is unavailable; speech skipped") }
+                russianSilero.speak(processed, profileFor(style)) { Log.w("AuraVoice", "Russian Silero pack is unavailable; speech skipped") }
             } else {
                 Log.w("AuraVoice", "Android TTS is disabled; speech skipped")
             }

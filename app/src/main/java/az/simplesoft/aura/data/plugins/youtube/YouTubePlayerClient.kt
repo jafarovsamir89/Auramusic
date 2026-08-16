@@ -6,12 +6,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import az.simplesoft.aura.data.providers.AuraHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 
 class YouTubePlayerClient(
-    private val httpClient: OkHttpClient = OkHttpClient(),
+    private val httpClient: OkHttpClient = AuraHttpClient.create(),
     private val requestContext: YouTubeRequestContext = YouTubeRequestContext()
 ) {
     private val relatedCache = YouTubeMemoryCache<String, String>(maxEntries = 16, ttlMs = 2 * 60_000L)

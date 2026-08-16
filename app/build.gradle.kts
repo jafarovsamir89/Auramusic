@@ -38,7 +38,9 @@ android {
         versionCode = 6
         versionName = "0.6.0"
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
-        ndk.abiFilters += "arm64-v8a"
+        // Keep physical arm64 coverage while allowing the x86_64 emulator and
+        // ChromeOS to run the same native Whisper build.
+        ndk.abiFilters += listOf("arm64-v8a", "x86_64")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
             cmake {

@@ -65,13 +65,40 @@ class ArtistArtworkLookup(
             if (!response.isSuccessful) return@use null
             val results = JSONObject(response.body?.string().orEmpty()).optJSONArray("results")
                 ?: return@use null
-            (0 until results.length())
-                .asSequence()
-                .mapNotNull { results.optJSONObject(it)?.optString("artworkUrl100") }
-                .map { it.replace(Regex("/\\d+x\\d+bb"), "/600x600bb") }
-                .firstOrNull { it.startsWith("https://") }
+            val candidates = (0 until results.length()).mapNotNull { index ->
+                val item = results.optJSONObject(index) ?: return@mapNotNull null
+                val image = item.optString("artworkUrl100")
+                    .replace(Regex("/\\d+x\\d+bb"), "/600x600bb")
+                    .takeIf { it.startsWith("https://") }
+                    ?: return@mapNotNull null
+                val candidateArtist = item.optString("artistName")
+                val candidateTitle = item.optString("trackName")
+                val artistOverlap = tokenOverlap(cleanTokens(rawQuery), cleanTokens(candidateArtist))
+                val titleOverlap = tokenOverlap(cleanTokens(rawQuery), cleanTokens(candidateTitle))
+                val score = if (candidateArtist.isBlank() && candidateTitle.isBlank()) {
+                    // Some catalog responses omit metadata but still provide a
+                    // valid artwork URL; preserve the explicit fallback query.
+                    1
+                } else if (attribute == "artistTerm") {
+                    artistOverlap * 3
+                } else {
+                    titleOverlap * 2 + artistOverlap
+                }
+                image to score
+            }
+            candidates.maxByOrNull { it.second }
+                ?.takeIf { it.second > 0 }
+                ?.first
         }
     }
+
+    private fun cleanTokens(value: String): Set<String> = value.lowercase()
+        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+        .split(' ')
+        .filter { it.length >= 2 }
+        .toSet()
+
+    private fun tokenOverlap(left: Set<String>, right: Set<String>): Int = left.count { it in right }
 
     companion object {
         private const val MAX_CACHE_ENTRIES = 120

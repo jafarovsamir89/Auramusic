@@ -16,6 +16,7 @@ import az.simplesoft.aura.domain.music.AuraRepeatMode
 import az.simplesoft.aura.assistant.EqualizerPreset
 import com.google.common.util.concurrent.ListenableFuture
 import androidx.media3.session.SessionCommand
+import java.util.ArrayDeque
 
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackConnection(
@@ -32,7 +33,7 @@ class PlaybackConnection(
     private val appContext = context.applicationContext
     private val controllerFuture: ListenableFuture<MediaController>
     private var controller: MediaController? = null
-    private val pendingActions = mutableListOf<(MediaController) -> Unit>()
+    private val pendingActions = ArrayDeque<(MediaController) -> Unit>()
 
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -67,10 +68,12 @@ class PlaybackConnection(
                         isPlaying = it.isPlaying,
                         isBuffering = it.playbackState == Player.STATE_BUFFERING
                     )
-                    val actions = pendingActions.toList()
-                    pendingActions.clear()
+                    val actions = synchronized(pendingActions) {
+                        pendingActions.toList().also { pendingActions.clear() }
+                    }
                     actions.forEach { action -> action(it) }
                 }.onFailure {
+                    synchronized(pendingActions) { pendingActions.clear() }
                     listener.onPlaybackError(null, "Не удалось подключить системный плеер.")
                 }
             },
@@ -194,12 +197,20 @@ class PlaybackConnection(
 
     fun release() {
         controller?.removeListener(playerListener)
+        synchronized(pendingActions) { pendingActions.clear() }
         MediaController.releaseFuture(controllerFuture)
         controller = null
     }
 
     private fun withController(action: (MediaController) -> Unit) {
-        controller?.let(action) ?: pendingActions.add(action)
+        controller?.let(action) ?: synchronized(pendingActions) {
+            if (pendingActions.size >= MAX_PENDING_ACTIONS) pendingActions.removeFirst()
+            pendingActions.addLast(action)
+        }
+    }
+
+    private companion object {
+        const val MAX_PENDING_ACTIONS = 64
     }
 
     private fun toMediaItem(track: Track): MediaItem {

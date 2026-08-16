@@ -7,9 +7,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import az.simplesoft.aura.data.providers.AuraHttpClient
 
 internal class MuzofondSearchClient(
-    private val httpClient: OkHttpClient = OkHttpClient(),
+    private val httpClient: OkHttpClient = AuraHttpClient.create(),
     private val parser: MuzofondSearchParser = MuzofondSearchParser()
 ) {
     private val cache = MuzofondMemoryCache<String, List<MuzofondSearchItem>>(32, 5 * 60_000L)

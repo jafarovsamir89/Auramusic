@@ -7,9 +7,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import az.simplesoft.aura.data.providers.AuraHttpClient
 
 internal class VolSearchClient(
-    private val httpClient: OkHttpClient = OkHttpClient(),
+    private val httpClient: OkHttpClient = AuraHttpClient.create(),
     private val parser: VolSearchParser = VolSearchParser()
 ) {
     private val cache = VolMemoryCache<String, List<VolSearchItem>>(32, 5 * 60_000L)

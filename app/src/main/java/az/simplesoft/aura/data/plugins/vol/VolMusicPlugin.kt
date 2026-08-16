@@ -13,10 +13,11 @@ import az.simplesoft.aura.data.plugins.core.PluginResult
 import az.simplesoft.aura.data.providers.MusicSearchRequest
 import az.simplesoft.aura.data.providers.PlayableSource
 import az.simplesoft.aura.data.providers.TrackCandidate
+import az.simplesoft.aura.data.providers.AuraHttpClient
 import okhttp3.OkHttpClient
 
 class VolMusicPlugin internal constructor(
-    httpClient: OkHttpClient = OkHttpClient(),
+    httpClient: OkHttpClient = AuraHttpClient.create(),
     private val searchClient: VolSearchClient = VolSearchClient(httpClient)
 ) : MusicPlugin {
     override val id: String = ID

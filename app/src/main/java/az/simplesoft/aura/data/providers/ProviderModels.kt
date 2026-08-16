@@ -2,6 +2,19 @@ package az.simplesoft.aura.data.providers
 
 import android.net.Uri
 import az.simplesoft.aura.data.Track
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
+
+/** Shared bounded network policy for catalog providers. */
+object AuraHttpClient {
+    fun create(): OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(35, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+}
 
 enum class SearchMediaKind {
     TRACK,

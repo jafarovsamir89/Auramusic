@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class GeminiAudioOutput(context: Context? = null) {
     private val audioManager = context?.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
-    private val focusRequest = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O && audioManager != null) {
+    private val focusRequest = if (audioManager != null) {
         android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             .setAudioAttributes(
                 AudioAttributes.Builder()

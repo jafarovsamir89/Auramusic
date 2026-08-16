@@ -196,6 +196,13 @@ class LocalIntentEngineTest {
     }
 
     @Test
+    fun commandWords_inside_normal_words_do_not_trigger_playback() {
+        val result = engine.understand("Это стопроцентно хороший альбом")
+
+        assertEquals(MusicIntent.Unknown, result.intent)
+    }
+
+    @Test
     fun `azerbaijani and english conversations do not search`() {
         val az = engine.understand("Salam")
         val en = engine.understand("How are you?")

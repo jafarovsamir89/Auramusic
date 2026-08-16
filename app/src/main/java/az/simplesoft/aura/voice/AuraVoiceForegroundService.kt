@@ -38,12 +38,20 @@ class AuraVoiceForegroundService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setContentIntent(mainActivityIntent())
             .build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // FOREGROUND_SERVICE_TYPE_MICROPHONE is a R-level constant. Keeping the
+        // API guard aligned prevents verifier/runtime issues on Android 10.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-        if (wakeLock?.isHeld != true) wakeLock?.acquire()
+        wakeLock?.let { lock ->
+            if (lock.isHeld) lock.release()
+            // A bounded lock protects an explicitly armed voice session without
+            // allowing a leaked service to drain the battery forever. The
+            // ViewModel/service start path renews it when the session is armed.
+            lock.acquire(WAKE_LOCK_TIMEOUT_MS)
+        }
         return START_NOT_STICKY
     }
 
@@ -63,7 +71,6 @@ class AuraVoiceForegroundService : Service() {
     )
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Голосовой режим AURA",
@@ -77,5 +84,6 @@ class AuraVoiceForegroundService : Service() {
         const val ACTION_STOP = "az.simplesoft.aura.voice.STOP"
         private const val CHANNEL_ID = "aura_voice"
         private const val NOTIFICATION_ID = 2406
+        private const val WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1_000L
     }
 }

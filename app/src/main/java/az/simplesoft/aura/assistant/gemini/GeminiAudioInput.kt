@@ -23,7 +23,14 @@ class GeminiAudioInput(private val context: Context) {
     private var noiseSuppressor: NoiseSuppressor? = null
     private var automaticGainControl: AutomaticGainControl? = null
 
-    fun start(scope: CoroutineScope, onChunk: (ByteArray) -> Unit, onState: (Boolean) -> Unit, onSpeechEnd: () -> Unit = {}, onSpeechStart: () -> Unit = {}) {
+    fun start(
+        scope: CoroutineScope,
+        onChunk: (ByteArray) -> Unit,
+        onState: (Boolean) -> Unit,
+        onSpeechEnd: () -> Unit = {},
+        onSpeechStart: () -> Unit = {},
+        onError: (Throwable) -> Unit = {}
+    ) {
         if (job != null) return
         require(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             "Microphone permission is required"
@@ -60,9 +67,12 @@ class GeminiAudioInput(private val context: Context) {
             val buffer = ByteArray(bytesPerChunk)
             var silentMs = 0
             var speaking = false
-            record.startRecording()
-            onState(true)
+            var speechStartedAt = 0L
+            var noiseFloor = 180.0
             try {
+                record.startRecording()
+                check(record.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "Microphone did not start recording" }
+                onState(true)
                 while (isActive) {
                     val count = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
                     if (count > 0) {
@@ -75,20 +85,31 @@ class GeminiAudioInput(private val context: Context) {
                             index += 2
                         }
                         val rms = kotlin.math.sqrt(energy / (chunk.size / 2).coerceAtLeast(1))
-                        if (rms > 700.0) {
+                        // Calibrate against the first chunks instead of using one
+                        // device-specific magic value. A minimum gate prevents
+                        // quiet handset noise from opening a turn by itself.
+                        val threshold = maxOf(650.0, noiseFloor * 2.4)
+                        if (!speaking) noiseFloor = (noiseFloor * 0.95) + (rms * 0.05)
+                        if (rms > threshold) {
                             if (!speaking) onSpeechStart()
                             speaking = true
+                            if (speechStartedAt == 0L) speechStartedAt = System.currentTimeMillis()
                             silentMs = 0
                         } else if (speaking) {
                             silentMs += GeminiLiveConfig.INPUT_CHUNK_MS
-                            if (silentMs >= 400) {
+                            val utteranceMs = System.currentTimeMillis() - speechStartedAt
+                            if (silentMs >= SILENCE_END_MS || utteranceMs >= MAX_UTTERANCE_MS) {
                                 speaking = false
+                                speechStartedAt = 0L
+                                silentMs = 0
                                 onSpeechEnd()
                             }
                         }
                         onChunk(chunk)
                     }
                 }
+            } catch (error: Throwable) {
+                if (isActive) onError(error)
             } finally {
                 onState(false)
                 runCatching { record.stop() }
@@ -108,5 +129,10 @@ class GeminiAudioInput(private val context: Context) {
         job?.cancel()
         job = null
         runCatching { recorder?.stop() }
+    }
+
+    private companion object {
+        const val SILENCE_END_MS = 500
+        const val MAX_UTTERANCE_MS = 20_000L
     }
 }

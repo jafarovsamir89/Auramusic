@@ -1,6 +1,8 @@
 package az.simplesoft.aura.assistant
 
 import android.content.Context
+import android.os.StatFs
+import android.os.storage.StorageManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
@@ -72,7 +74,7 @@ class OfflineModelManager(
         }
         require(directory().exists() || directory().mkdirs()) { "Unable to create Whisper directory" }
         val requiredSpace = (metadata.sizeBytes * 1.20).toLong()
-        require(directory().usableSpace >= requiredSpace) { "Not enough free space for Whisper download" }
+        require(allocatableBytes(directory()) >= requiredSpace) { "Not enough free space for Whisper download" }
         mutableState.value = OfflineModelState.DOWNLOADING
         val partial = File(directory(), "${metadata.fileName}.part")
         try {
@@ -154,6 +156,11 @@ class OfflineModelManager(
     private fun directory() = File(appContext.filesDir, "models/whisper")
     private fun modelFile() = File(directory(), metadata.fileName)
     private fun sidecarFile() = File(directory(), "${metadata.fileName}.sha256")
+
+    private fun allocatableBytes(directory: File): Long = runCatching {
+        val storage = appContext.getSystemService(StorageManager::class.java)
+        storage.getAllocatableBytes(storage.getUuidForPath(directory))
+    }.getOrElse { StatFs(directory.path).availableBytes }
 
     private fun writeSidecarAtomically() {
         val sidecar = sidecarFile()

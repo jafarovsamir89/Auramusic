@@ -43,7 +43,9 @@ internal class SileroRussianVoiceEngine(
     @Volatile private var module: Module? = null
     @Volatile private var currentAudio: AudioTrack? = null
 
-    fun speak(text: String, onFailure: () -> Unit) {
+    fun isReady(): Boolean = cachedVerifiedModel() != null
+
+    fun speak(text: String, profile: AuraVoiceProfile = AuraVoiceProfile(), onFailure: () -> Unit) {
         val safeText = text.trim().take(MAX_TEXT_CHARS)
         if (safeText.isBlank()) return
         val requestId = utterance.incrementAndGet()
@@ -59,7 +61,7 @@ internal class SileroRussianVoiceEngine(
                 val audio = output.toTuple().first().toTensor().dataAsFloatArray
                 require(audio.isNotEmpty()) { "Silero returned empty audio" }
                 Log.i(TAG, "Russian female voice generated ${audio.size} samples")
-                if (utterance.get() == requestId) play(audio, requestId)
+                if (utterance.get() == requestId) play(applyProfile(audio, profile), requestId)
             }.onFailure { error ->
                 Log.w(TAG, "Russian Silero voice failed; speech skipped", error)
                 if (utterance.get() == requestId) mainHandler.post {
@@ -163,6 +165,15 @@ internal class SileroRussianVoiceEngine(
             synchronized(audioLock) { if (currentAudio === track) currentAudio = null }
             runCatching { track.release() }
             throw error
+        }
+    }
+
+    private fun applyProfile(samples: FloatArray, profile: AuraVoiceProfile): FloatArray {
+        val step = (profile.speechRate * profile.pitch).coerceIn(0.75f, 1.25f)
+        val outputSize = (samples.size / step).toInt().coerceAtLeast(1)
+        return FloatArray(outputSize) { index ->
+            val source = (index * step).toInt().coerceAtMost(samples.lastIndex)
+            (samples[source] * profile.volume.coerceIn(0f, 1.2f)).coerceIn(-1f, 1f)
         }
     }
 

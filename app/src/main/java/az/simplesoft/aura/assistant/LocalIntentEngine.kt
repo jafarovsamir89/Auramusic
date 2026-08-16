@@ -384,5 +384,25 @@ class LocalIntentEngine {
         AssistantLanguage.ENGLISH -> en
     }
 
-    private fun matchesAny(text: String, vararg values: String) = values.any { text == it || text.contains(it) }
+    private fun matchesAny(text: String, vararg values: String): Boolean = values.any { value ->
+        val needle = value.trim().lowercase()
+        if (needle.isBlank()) return@any false
+        // A command phrase must be a token, not an arbitrary substring. Stem
+        // terms are explicitly listed because ASR often gives inflected forms
+        // ("грустн" -> "грустная", "колыбельн" -> "колыбельную").
+        val pattern = if (STEM_TERMS.contains(needle)) {
+            "(?:^|[^\\p{L}\\p{N}])${Regex.escape(needle)}\\p{L}*(?:$|[^\\p{L}\\p{N}])"
+        } else {
+            "(?:^|[^\\p{L}\\p{N}])${Regex.escape(needle)}(?:$|[^\\p{L}\\p{N}])"
+        }
+        Regex(pattern, setOf(RegexOption.IGNORE_CASE)).containsMatchIn(text)
+    }
+
+    private companion object {
+        val STEM_TERMS = setOf(
+            "колыбельн", "усып", "груст", "печал", "энерг", "спокойн",
+            "расслаб", "релакс", "дорог", "поездк", "работ", "концентрац",
+            "фокус", "ноч", "вечер", "весёл", "радост", "позитив"
+        )
+    }
 }

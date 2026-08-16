@@ -1,6 +1,8 @@
 package az.simplesoft.aura.assistant
 
 import android.content.Context
+import android.os.StatFs
+import android.os.storage.StorageManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -77,7 +79,8 @@ class VoicePackManager(
         .callTimeout(3, TimeUnit.MINUTES)
         .build()
 ) {
-    private val root = File(context.applicationContext.filesDir, "voice")
+    private val appContext = context.applicationContext
+    private val root = File(appContext.filesDir, "voice")
     private val mutableProgress = MutableStateFlow<Map<String, VoicePackProgress>>(emptyMap())
     val progress: StateFlow<Map<String, VoicePackProgress>> = mutableProgress.asStateFlow()
     private val installMutex = Mutex()
@@ -106,7 +109,7 @@ class VoicePackManager(
         val definition = definitions().firstOrNull { it.id == id } ?: error("Unknown voice pack: $id")
         val directory = File(root, definition.directory)
         require(directory.exists() || directory.mkdirs()) { "Unable to create voice directory" }
-        require(directory.usableSpace >= (definition.sizeBytes * 1.20).toLong()) {
+        require(allocatableBytes(directory) >= (definition.sizeBytes * 1.20).toLong()) {
             "Not enough free space for voice pack"
         }
         val partial = File(directory, "${definition.fileName}.part")
@@ -174,6 +177,11 @@ class VoicePackManager(
         partial.writeText(value)
         Files.move(partial.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
     }
+
+    private fun allocatableBytes(directory: File): Long = runCatching {
+        val storage = appContext.getSystemService(StorageManager::class.java)
+        storage.getAllocatableBytes(storage.getUuidForPath(directory))
+    }.getOrElse { StatFs(directory.path).availableBytes }
 
     private fun definitions() = listOf(
         Definition(

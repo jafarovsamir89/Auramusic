@@ -1,10 +1,15 @@
 package az.simplesoft.aura.data
 
 import android.content.Context
+import android.os.StatFs
+import android.os.storage.StorageManager
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -17,10 +22,25 @@ import org.json.JSONObject
  */
 class OfflineTrackStore(
     context: Context,
-    private val httpClient: OkHttpClient = OkHttpClient()
+    private val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(45, TimeUnit.SECONDS)
+        .callTimeout(2, TimeUnit.MINUTES)
+        .build()
 ) {
-    private val root = File(context.applicationContext.filesDir, "offline-music")
+    private val appContext = context.applicationContext
+    private val root = File(appContext.filesDir, "offline-music")
     private val catalogFile = File(root, "catalog.json")
+    private val fileMutex = Mutex()
+
+    init {
+        // A process kill during a download must not leave unusable partial files
+        // that are mistaken for a completed library item later.
+        root.listFiles()
+            ?.filter { it.name.endsWith(".part") }
+            ?.forEach { runCatching { it.delete() } }
+    }
 
     suspend fun load(): List<Track> = withContext(Dispatchers.IO) {
         readRecords().mapNotNull { record ->
@@ -33,6 +53,7 @@ class OfflineTrackStore(
         track: Track,
         onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
     ): Track = withContext(Dispatchers.IO) {
+        fileMutex.withLock {
         require(track.sourceId != "youtube") { "YouTube tracks cannot be downloaded" }
         require(track.sourceId != "radio_browser") { "Radio stations cannot be downloaded" }
         require(track.sourceId in DOWNLOADABLE_SOURCES) {
@@ -65,6 +86,7 @@ class OfflineTrackStore(
                         while (true) {
                             val read = input.read(buffer)
                             if (read < 0) break
+                            check(availableBytes() >= MIN_FREE_BYTES) { "Недостаточно свободного места" }
                             output.write(buffer, 0, read)
                             downloadedBytes += read
                             onProgress(downloadedBytes, totalBytes)
@@ -93,21 +115,26 @@ class OfflineTrackStore(
             target.delete()
             throw error
         }
+        }
     }
 
     suspend fun remove(track: Track): Boolean = withContext(Dispatchers.IO) {
+        fileMutex.withLock {
         val records = readRecords()
         val record = records.firstOrNull { it.id == track.id || it.sourceTrackId == track.id } ?: return@withContext false
         File(record.filePath).delete()
         writeRecords(records.filterNot { it.id == record.id })
         true
+        }
     }
 
     suspend fun removeAll(): Int = withContext(Dispatchers.IO) {
+        fileMutex.withLock {
         val records = readRecords()
         records.forEach { File(it.filePath).delete() }
         writeRecords(emptyList())
         records.size
+        }
     }
 
     suspend fun storageBytes(): Long = withContext(Dispatchers.IO) {
@@ -138,6 +165,11 @@ class OfflineTrackStore(
         temp.writeText(json.toString())
         check(temp.renameTo(catalogFile)) { "Cannot finalize offline catalog" }
     }
+
+    private fun availableBytes(): Long = runCatching {
+        val storage = appContext.getSystemService(StorageManager::class.java)
+        storage.getAllocatableBytes(storage.getUuidForPath(root))
+    }.getOrElse { StatFs(root.path).availableBytes }
 
     private data class OfflineTrackRecord(
         val sourceTrackId: String,
@@ -195,6 +227,7 @@ class OfflineTrackStore(
     private companion object {
         const val USER_AGENT = "AuraMusic/0.7 (offline music library)"
         val DOWNLOADABLE_SOURCES = setOf("muzofond", "vol")
+        const val MIN_FREE_BYTES = 8L * 1024L * 1024L
 
         fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray())

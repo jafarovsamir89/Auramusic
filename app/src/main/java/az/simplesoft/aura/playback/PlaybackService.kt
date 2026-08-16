@@ -20,10 +20,10 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import az.simplesoft.aura.data.plugins.youtube.AuraYouTubePlaybackResolver
 import az.simplesoft.aura.data.plugins.youtube.YouTubePlaybackIdentity
+import az.simplesoft.aura.data.providers.AuraHttpClient
 import android.os.Bundle
 import com.google.common.util.concurrent.Futures
 import java.io.File
-import okhttp3.OkHttpClient
 
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -37,7 +37,7 @@ class PlaybackService : MediaSessionService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .setUsage(C.USAGE_MEDIA)
             .build()
-        val httpClient = OkHttpClient()
+        val httpClient = AuraHttpClient.create()
         val youtubeResolver = AuraYouTubePlaybackResolver(httpClient)
         val httpFactory = OkHttpDataSource.Factory(httpClient)
             .setUserAgent(AURA_PLAYBACK_USER_AGENT)

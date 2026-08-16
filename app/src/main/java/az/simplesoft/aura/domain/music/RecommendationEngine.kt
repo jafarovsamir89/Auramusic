@@ -48,6 +48,11 @@ class PersonalRecommendationEngine(
     private val candidateResolver: (suspend (TrackCandidate) -> Track?)? = null,
     private val searchBrain: MusicSearchBrain = MusicSearchBrain()
 ) : RecommendationEngine {
+    @Volatile private var preferredProviderIds: Set<String> = DEFAULT_PROVIDERS
+
+    fun setPreferredProviderIds(providerIds: Set<String>) {
+        preferredProviderIds = providerIds.toSet().ifEmpty { DEFAULT_PROVIDERS }
+    }
 
     override suspend fun myMix(context: RecommendationContext, limit: Int): List<Track> {
         val seeds = (context.likedTracks + context.recentTracks + listOfNotNull(context.currentTrack))
@@ -112,7 +117,7 @@ class PersonalRecommendationEngine(
     private suspend fun search(query: String, limit: Int): List<TrackCandidate> {
         val request = searchBrain.interpret(MusicSearchRequest(
                 rawQuery = query,
-                preferredProviderId = ONLINE_PROVIDER,
+                preferredProviderId = preferredProviderIds.firstOrNull(),
                 limit = limit.coerceIn(1, 30),
                 autoPlay = false
             ))
@@ -131,8 +136,8 @@ class PersonalRecommendationEngine(
             candidates
         ).asSequence()
             .map { it.candidate }
-            .filter { it.providerId == ONLINE_PROVIDER }
-            .filterNot { "$ONLINE_PROVIDER:${it.id}" in excluded }
+            .filter { it.providerId in preferredProviderIds }
+            .filterNot { "${it.providerId}:${it.id}" in excluded }
             .filterNot { candidate ->
                 val searchable = "${candidate.artist} ${candidate.title}".normalizedArtist()
                 context.dislikedArtists.any { disliked -> searchable.contains(disliked.normalizedArtist()) }
@@ -201,13 +206,13 @@ class PersonalRecommendationEngine(
     }
 
     private fun Track.isRecommendationSeed(): Boolean =
-        isPlayable && id != "aura-placeholder" && sourceId == ONLINE_PROVIDER
+        isPlayable && id != "aura-placeholder" && sourceId in preferredProviderIds
 
     private fun String.normalizedArtist(): String = lowercase().trim().replace(Regex("\\s+"), " ")
 
     companion object {
-        private const val ONLINE_PROVIDER = "youtube"
         private const val MAX_SEEDS = 3
         private const val MAX_PER_ARTIST = 2
+        val DEFAULT_PROVIDERS = setOf("muzofond", "vol", "youtube")
     }
 }

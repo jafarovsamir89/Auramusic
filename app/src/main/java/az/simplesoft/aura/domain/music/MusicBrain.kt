@@ -40,7 +40,7 @@ class MusicBrain(
         val source: PlayableSource
     )
 
-    private val alternativesByTrackId = mutableMapOf<String, List<TrackCandidate>>()
+    private val alternativesByTrackId = LinkedHashMap<String, List<TrackCandidate>>()
 
     suspend fun search(request: MusicSearchRequest): SearchOutcome {
         val interpreted = searchBrain.interpret(request)
@@ -164,9 +164,9 @@ class MusicBrain(
         val resolved = resolveFirst(compatible)
         if (resolved != null) {
             playbackCoordinator.replaceCurrent(resolved.source.track, position)
-            alternativesByTrackId[resolved.source.track.id] = alternatives.filterNot {
+            rememberAlternatives(resolved.source.track.id, alternatives.filterNot {
                 it.providerId == resolved.candidate.providerId && it.id == resolved.candidate.id
-            }
+            })
             return PlaybackOutcome.Started(resolved.source.track, position, compatible.size - 1)
         }
 
@@ -199,9 +199,9 @@ class MusicBrain(
         ) {
             source.track.copy(artworkUrl = unified.metadata.artworkUrl)
         } else source.track
-        alternativesByTrackId[source.track.id] = unified.alternatives.filterNot {
+        rememberAlternatives(source.track.id, unified.alternatives.filterNot {
             it.providerId == resolved.candidate.providerId && it.id == resolved.candidate.id
-        }
+        })
         if (replacing) playbackCoordinator.replaceCurrent(resolvedTrack, positionMs)
         else playbackCoordinator.play(listOf(resolvedTrack), resolvedTrack, positionMs)
         return PlaybackOutcome.Started(
@@ -221,6 +221,14 @@ class MusicBrain(
         return null
     }
 
+    private fun rememberAlternatives(trackId: String, alternatives: List<TrackCandidate>) {
+        alternativesByTrackId.remove(trackId)
+        alternativesByTrackId[trackId] = alternatives.take(MAX_ALTERNATIVES_PER_TRACK)
+        while (alternativesByTrackId.size > MAX_ALTERNATIVE_TRACKS) {
+            alternativesByTrackId.remove(alternativesByTrackId.entries.first().key)
+        }
+    }
+
     private fun durationCompatible(left: Long?, right: Long?): Boolean =
         left == null || right == null || abs(left - right) <= 10_000L
 
@@ -235,4 +243,9 @@ class MusicBrain(
         popularity = popularity?.toLong(),
         year = year
     )
+
+    private companion object {
+        const val MAX_ALTERNATIVE_TRACKS = 128
+        const val MAX_ALTERNATIVES_PER_TRACK = 8
+    }
 }

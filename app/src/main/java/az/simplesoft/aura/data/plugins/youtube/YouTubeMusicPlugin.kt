@@ -10,10 +10,11 @@ import az.simplesoft.aura.data.plugins.core.PluginResult
 import az.simplesoft.aura.data.providers.MusicSearchRequest
 import az.simplesoft.aura.data.providers.PlayableSource
 import az.simplesoft.aura.data.providers.TrackCandidate
+import az.simplesoft.aura.data.providers.AuraHttpClient
 import okhttp3.OkHttpClient
 
 class YouTubeMusicPlugin(
-    httpClient: OkHttpClient = OkHttpClient(),
+    httpClient: OkHttpClient = AuraHttpClient.create(),
     requestContext: YouTubeRequestContext = YouTubeRequestContext(),
     private val searchParser: YouTubeSearchParser = YouTubeSearchParser(),
     private val searchClient: YouTubeSearchClient = YouTubeSearchClient(httpClient, requestContext, searchParser),

@@ -6,11 +6,12 @@ import az.simplesoft.aura.domain.playlist.WorldPlaylistKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import az.simplesoft.aura.data.providers.AuraHttpClient
 import okhttp3.Request
 
 /** Loads Vol.az's public regional charts as metadata-only playlist cards. */
 internal class VolCollectionsClient(
-    private val httpClient: OkHttpClient = OkHttpClient(),
+    private val httpClient: OkHttpClient = AuraHttpClient.create(),
     private val parser: VolSearchParser = VolSearchParser()
 ) {
     suspend fun featured(): List<WorldPlaylist> = withContext(Dispatchers.IO) {
