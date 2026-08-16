@@ -20,7 +20,8 @@ data class Track(
     val isPlayable: Boolean = true,
     val popularity: Int? = null,
     val year: Int? = null,
-    val genre: String? = null
+    val genre: String? = null,
+    val addedAt: Long? = null
 )
 
 object DemoCatalog {

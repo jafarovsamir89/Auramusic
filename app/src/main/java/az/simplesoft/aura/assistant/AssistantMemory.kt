@@ -18,8 +18,15 @@ data class AssistantMemorySnapshot(
     val recentMessages: List<AssistantMessage> = emptyList()
 ) {
     fun promptSummary(): String {
-        if (facts.isEmpty()) return "No durable user facts saved."
-        return facts.joinToString(separator = "\n") { "- ${it.category}.${it.key}: ${it.value}" }
+        if (facts.isEmpty() && recentMessages.isEmpty()) return "No durable user facts saved."
+        val factsText = facts.joinToString(separator = "\n") { "- ${it.category}.${it.key}: ${it.value}" }
+        val recentText = recentMessages.takeLast(4).joinToString(separator = "\n") {
+            "- ${if (it.role == AssistantRole.USER) "user" else "AURA"}: ${it.text}"
+        }
+        return buildString {
+            append(factsText)
+            if (recentText.isNotBlank()) append("\nRecent context:\n").append(recentText)
+        }.take(2_400)
     }
 }
 
@@ -89,6 +96,23 @@ class CompactAssistantMemory(
     suspend fun clear() = mutex.withLock {
         cached = AssistantMemorySnapshot()
         persistence.write(encode(AssistantMemorySnapshot()))
+    }
+
+    suspend fun remember(facts: List<MemoryInsight>) = mutex.withLock {
+        val current = loadLocked()
+        val timestamp = now()
+        val factsByKey = current.facts.associateByTo(linkedMapOf()) { "${it.category}:${it.key}" }
+        facts.forEach { insight ->
+            val safeValue = insight.value.trim().replace(Regex("\\s+"), " ").take(MAX_FACT_CHARS)
+            if (safeValue.isNotBlank()) {
+                factsByKey["${insight.category}:${insight.key}"] = AssistantMemoryFact(
+                    insight.category.take(32), insight.key.take(48), safeValue, timestamp
+                )
+            }
+        }
+        val next = current.copy(facts = factsByKey.values.sortedByDescending(AssistantMemoryFact::updatedAt).take(MAX_FACTS))
+        persistence.write(encode(next).take(MAX_PERSISTED_CHARS))
+        cached = next
     }
 
     private suspend fun loadLocked(): AssistantMemorySnapshot {

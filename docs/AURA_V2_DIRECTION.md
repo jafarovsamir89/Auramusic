@@ -1,52 +1,27 @@
-# AURA v2.0 — направление проекта
+# AURA local companion direction
 
-## Продуктовая цель
+The companion is intentionally a fast illusion of intelligence rather than a
+text generator. A growing dialogue catalog provides branches, variants,
+clarifications and short continuations. SQLite/Room supplies durable state;
+the matcher supplies language, topic, expected reply, emotion and negation
+signals.
 
-AURA — персональный AI-помощник для Android, а не очередной YouTube-клиент. Музыка остаётся первой сильной возможностью продукта, но каждая новая функция должна делать AURA умнее, человечнее, удобнее или экономить время пользователя.
+The catalog is versioned and imported idempotently. Broken links or unknown
+intent names fail the package before it is written. Updating the catalog does
+not delete user memory, learned mappings, playback history, playlists, or
+queue data.
 
-Контрольный вопрос перед разработкой:
+Recognition and music search remain separate: ordinary conversation is never
+silently converted to a music search. Missing tracks and playlists produce a
+real not-found result rather than a false confirmation.
 
-> Сделает ли эта функция AURA помощником, к которому пользователь захочет возвращаться каждый день?
+## Current limitations
 
-Если нет, функция откладывается.
-
-## Неприкосновенные архитектурные решения
-
-- Сохраняем Music Brain, Recommendation Engine, PlaybackService, Media3, Room, Android Tools, Voice Assistant и Jetpack Compose.
-- YouTube остаётся единственным музыкальным онлайн-источником.
-- Локальная музыка и радио остаются отдельными возможностями устройства, а не резервными онлайн-провайдерами.
-- Стабильный YouTube-плагин не переписывается без необходимости.
-- Музыкальные команды всегда сначала обрабатывает локальный Intent Engine.
-- Опасные Android-действия требуют подтверждения пользователя.
-- Не строим серверную архитектуру и не сохраняем временные URL потоков.
-
-## Приоритеты
-
-1. **Music Brain 2.0:** мой микс, продолжение прослушивания, похожее, настроение, жанры, десятилетия, бесконечная очередь и обучение на лайках, пропусках, истории, времени суток и автомобильном контексте.
-2. **Плейлисты:** создание, переименование, удаление, сортировка, добавление трека/очереди, перемешивание и воспроизведение.
-3. **Очередь:** drag-and-drop, играть следующим, добавить в конец, автопродолжение, сохранение и история очереди.
-4. **Комфорт:** таймер сна, плавное затухание, repeat off/one/all, shuffle, нормализация, системный эквалайзер и уровни качества.
-5. **Personality и Context Memory:** короткие живые ответы и контекст текущего диалога без повторения названий.
-6. **Android Tools:** официальные Android API для будильников, таймеров, напоминаний, звонков, SMS, приложений, навигации, календаря, фонарика, Bluetooth, громкости и настроек.
-7. **Автомобильный режим:** Bluetooth-контекст, восстановление музыки, крупные элементы, голос и предложения по длительности поездки.
-8. **Погода и новости:** бесплатные источники, короткие разговорные ответы.
-9. **Семейный режим и игры:** сказки, загадки, викторины и голосовые игры.
-10. **DeepSeek через OpenRouter:** только свободный разговор и генеративные сценарии; локальные действия имеют приоритет.
-11. **Русский и азербайджанский:** интерфейс, команды, TTS, поиск и диалоги.
-
-## Не реализовывать без отдельного решения
-
-- новые музыкальные провайдеры, Spotify, Apple Music, Audius, SoundCloud или Jamendo;
-- офлайн-загрузки и тексты песен;
-- домашний сервер, собственную LLM или облачную синхронизацию;
-- Android Auto;
-- подписки, донаты и маркетплейс;
-- функции, не увеличивающие ежедневную ценность AURA.
-
-## Текущий этап
-
-Первый этап Music Brain 2.0 строится поверх существующей архитектуры. Локально сохраняются только долговечные сигналы поведения (`PLAY`, `SKIP`, `LIKE`, `UNLIKE`) и контекст. Рекомендации получают разнообразие по исполнителям, исключают ранние пропуски и могут автоматически продолжать очередь похожими треками.
-
-Полноценные локальные плейлисты реализованы поверх Room: создание, переименование, удаление, изменение порядка, добавление текущего трека или очереди, перемешивание и воспроизведение. Действия доступны из библиотеки и через локальные голосовые команды; временные URL потоков в плейлистах не сохраняются.
-
-Queue 2.0 синхронизирует все изменения с Media3: играть следующим, добавить в конец, удалить, очистить и изменить порядок перетаскиванием. Автопродолжение управляется пользователем, repeat поддерживает off/one/all, а Room хранит последние очереди для восстановления. Интерфейс переведён на AURA Visual System 2.0 с cinematic-dark основой и доступными индиго/mint-акцентами.
+- Android's system recognizer may use an installed system language service even
+  when `EXTRA_PREFER_OFFLINE` is set. A fully guaranteed offline wake-word
+  detector still requires a separate local detector integration.
+- The first Whisper and Silero downloads are explicit model/voice-pack setup
+  work, not hidden first-query work. Until a pack is verified, AURA stays
+  silent rather than using robotic Android TTS.
+- Actual latency, RAM and model sizes must be measured on the target Helio G96
+  device; repository constants are not a benchmark.

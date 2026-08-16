@@ -44,11 +44,20 @@ class CandidateRankerV2 {
         val reliability = context.providerReliability[candidate.providerId]?.coerceIn(0.0, 1.0) ?: .75
         val normalizedQuery = TrackMatcher.normalize(request.rawQuery)
         val normalizedCandidate = TrackMatcher.normalize("${candidate.artist} ${candidate.title}")
+        val normalizedChannel = TrackMatcher.normalize(candidate.channel.orEmpty())
+        val semanticHits = request.semanticTags.count { tag ->
+            val normalizedTag = TrackMatcher.normalize(tag)
+            normalizedCandidate.contains(normalizedTag) || normalizedChannel.contains(normalizedTag)
+        }
         val exactMusicMatch = if (
             normalizedQuery == normalizedCandidate ||
             normalizedQuery == TrackMatcher.normalize("${candidate.title} ${candidate.artist}")
         ) 1.0 else .0
         val artwork = if (candidate.artworkUrl.isNullOrBlank()) .0 else 1.0
+        // The preferred source is the product's default playback path (Muzofond for
+        // normal search).  A tiny bonus is not enough to win against YouTube's
+        // official/bitrate bonuses, so the source preference must be explicit while
+        // metadata similarity still remains the dominant part of the score.
         val preference = if (candidate.providerId in context.preferredProviderIds) 1.0 else .0
         val history = context.playbackHistoryBoost["${candidate.providerId}:${candidate.id}"]
             ?.coerceIn(0.0, 1.0) ?: .0
@@ -60,6 +69,8 @@ class CandidateRankerV2 {
             if (exactMusicMatch == 1.0) add("full-query-exact")
             if (candidate.isOfficial) add("official")
             if (artwork == 1.0) add("artwork")
+            if (preference == 1.0) add("preferred-source")
+            if (semanticHits > 0) add("semantic-match:$semanticHits")
         }
         val penalties = variantPenalties(request, candidate)
         val penaltyScore = penalties.sumOf(::penaltyFor).coerceAtMost(.40)
@@ -71,8 +82,9 @@ class CandidateRankerV2 {
                 reliability * .08 +
                 exactMusicMatch * .08 +
                 artwork * .02 +
-                preference * .03 +
+                preference * .12 +
                 history * .02 +
+                semanticHits.coerceAtMost(3) * .06 +
                 official -
                 penaltyScore
             ).coerceIn(0.0, 1.0)
@@ -96,18 +108,25 @@ class CandidateRankerV2 {
     private fun variantPenalties(request: MusicSearchRequest, candidate: TrackCandidate): List<String> {
         val requestText = TrackMatcher.normalize(request.rawQuery)
         val candidateText = TrackMatcher.normalize("${candidate.title} ${candidate.channel.orEmpty()}")
-        return VARIANTS.mapNotNull { (label, markers) ->
+        val variants = VARIANTS.mapNotNull { (label, markers) ->
             val candidateHas = markers.any(candidateText::contains)
             val requested = markers.any(requestText::contains)
             label.takeIf { candidateHas && !requested }
         }
+        val semanticExclusions = request.excludedTerms.mapNotNull { term ->
+            val normalizedTerm = TrackMatcher.normalize(term)
+            "semantic-excluded:$term".takeIf {
+                normalizedTerm.isNotBlank() && candidateText.contains(normalizedTerm) && !requestText.contains(normalizedTerm)
+            }
+        }
+        return variants + semanticExclusions
     }
 
     private fun penaltyFor(label: String): Double = when (label) {
         "short", "teaser", "interview", "reaction" -> .18
         "cover", "karaoke", "instrumental" -> .16
         "live", "remix", "slowed", "reverb", "lyrics-video" -> .12
-        else -> .10
+        else -> if (label.startsWith("semantic-excluded:")) .14 else .10
     }
 
     companion object {

@@ -15,6 +15,9 @@ data class RecommendationContext(
     val recentTracks: List<Track>,
     val likedTrackIds: Set<String>,
     val skippedTrackIds: Set<String> = emptySet(),
+    val preferredArtists: Set<String> = emptySet(),
+    val preferredGenres: Set<String> = emptySet(),
+    val dislikedArtists: Set<String> = emptySet(),
     val hourOfDay: Int,
     val carMode: Boolean = false
 ) {
@@ -42,8 +45,14 @@ class PersonalRecommendationEngine(
     private val providerManager: ProviderManager,
     private val candidateRanker: CandidateRankerV2,
     private val identityResolver: TrackIdentityResolver,
-    private val candidateResolver: (suspend (TrackCandidate) -> Track?)? = null
+    private val candidateResolver: (suspend (TrackCandidate) -> Track?)? = null,
+    private val searchBrain: MusicSearchBrain = MusicSearchBrain()
 ) : RecommendationEngine {
+    @Volatile private var preferredProviderIds: Set<String> = DEFAULT_PROVIDERS
+
+    fun setPreferredProviderIds(providerIds: Set<String>) {
+        preferredProviderIds = providerIds.toSet().ifEmpty { DEFAULT_PROVIDERS }
+    }
 
     override suspend fun myMix(context: RecommendationContext, limit: Int): List<Track> {
         val seeds = (context.likedTracks + context.recentTracks + listOfNotNull(context.currentTrack))
@@ -84,10 +93,13 @@ class PersonalRecommendationEngine(
             Mood.FOCUS -> "музыка для концентрации focus mix"
             Mood.ENERGY -> "энергичная музыка workout mix"
             Mood.NIGHT -> "ночная музыка night drive mix"
-            Mood.SAD -> "грустная музыка sad mix"
+            Mood.SAD -> "грустные песни melancholic acoustic piano sad playlist"
             Mood.HAPPY -> "весёлая музыка happy mix"
+            Mood.LULLABY -> "колыбельная для сна ребёнка lullaby bedtime nursery song"
         }
-        return resolvePersonalized(search(query, limit * 2), context, limit)
+        val request = searchBrain.interpret(MusicSearchRequest(rawQuery = query, autoPlay = false))
+        val candidates = (providerManager.search(request) as? PluginResult.Success)?.value.orEmpty()
+        return resolvePersonalized(candidates, context, limit, request)
     }
 
     override suspend fun extendQueue(context: RecommendationContext, limit: Int): List<Track> {
@@ -102,29 +114,34 @@ class PersonalRecommendationEngine(
     private suspend fun related(track: Track): List<TrackCandidate> =
         (providerManager.related(track) as? PluginResult.Success)?.value.orEmpty()
 
-    private suspend fun search(query: String, limit: Int): List<TrackCandidate> =
-        (providerManager.search(
-            MusicSearchRequest(
+    private suspend fun search(query: String, limit: Int): List<TrackCandidate> {
+        val request = searchBrain.interpret(MusicSearchRequest(
                 rawQuery = query,
-                preferredProviderId = ONLINE_PROVIDER,
+                preferredProviderId = preferredProviderIds.firstOrNull(),
                 limit = limit.coerceIn(1, 30),
                 autoPlay = false
-            )
-        ) as? PluginResult.Success)?.value.orEmpty()
+            ))
+        return (providerManager.search(request) as? PluginResult.Success)?.value.orEmpty()
+    }
 
     private suspend fun resolvePersonalized(
         candidates: List<TrackCandidate>,
         context: RecommendationContext,
-        limit: Int
+        limit: Int,
+        rankingRequest: MusicSearchRequest = MusicSearchRequest(rawQuery = context.currentTrack?.artist.orEmpty(), autoPlay = false)
     ): List<Track> {
         val excluded = context.skippedTrackIds + context.queue.map(Track::id)
         val ranked = candidateRanker.rank(
-            MusicSearchRequest(rawQuery = context.currentTrack?.artist.orEmpty(), autoPlay = false),
+            rankingRequest,
             candidates
         ).asSequence()
             .map { it.candidate }
-            .filter { it.providerId == ONLINE_PROVIDER }
-            .filterNot { "$ONLINE_PROVIDER:${it.id}" in excluded }
+            .filter { it.providerId in preferredProviderIds }
+            .filterNot { "${it.providerId}:${it.id}" in excluded }
+            .filterNot { candidate ->
+                val searchable = "${candidate.artist} ${candidate.title}".normalizedArtist()
+                context.dislikedArtists.any { disliked -> searchable.contains(disliked.normalizedArtist()) }
+            }
             .distinctBy { "${it.providerId}:${it.id}" }
             .sortedByDescending { personalizedScore(it, context) }
             .toList()
@@ -152,9 +169,16 @@ class PersonalRecommendationEngine(
         val likedArtists = context.likedTracks.map { it.artist.normalizedArtist() }
         val recentArtists = context.recentTracks.map { it.artist.normalizedArtist() }
         val currentArtist = context.currentTrack?.artist?.normalizedArtist()
+        val preferredArtists = context.preferredArtists.map { it.normalizedArtist() }
+        val dislikedArtists = context.dislikedArtists.map { it.normalizedArtist() }
+        val preferredGenres = context.preferredGenres.map { it.normalizedArtist() }
+        val candidateText = "${candidate.artist} ${candidate.title}".normalizedArtist()
         return candidate.confidence * 10.0 +
             likedArtists.count { it == artist } * 8.0 +
             recentArtists.count { it == artist } * 2.5 +
+            preferredArtists.count { candidateText.contains(it) } * 6.0 +
+            preferredGenres.count { candidateText.contains(it) } * 1.5 -
+            dislikedArtists.count { candidateText.contains(it) } * 12.0 +
             (if (artist == currentArtist) 5.0 else 0.0) +
             (if (candidate.isOfficial) 1.5 else 0.0) +
             ((candidate.popularity ?: 0L).coerceAtMost(10_000_000L) / 10_000_000.0)
@@ -173,6 +197,8 @@ class PersonalRecommendationEngine(
     }
 
     private fun fallbackQuery(context: RecommendationContext): String = when {
+        context.preferredArtists.isNotEmpty() -> "${context.preferredArtists.take(2).joinToString(" ")} лучшие песни"
+        context.preferredGenres.isNotEmpty() -> "${context.preferredGenres.take(2).joinToString(" ")} музыка"
         context.carMode -> "музыка в дорогу популярные песни"
         context.hourOfDay in 5..10 -> "музыка для доброго утра"
         context.hourOfDay in 22..23 || context.hourOfDay in 0..4 -> "спокойная ночная музыка"
@@ -180,13 +206,13 @@ class PersonalRecommendationEngine(
     }
 
     private fun Track.isRecommendationSeed(): Boolean =
-        isPlayable && id != "aura-placeholder" && sourceId == ONLINE_PROVIDER
+        isPlayable && id != "aura-placeholder" && sourceId in preferredProviderIds
 
     private fun String.normalizedArtist(): String = lowercase().trim().replace(Regex("\\s+"), " ")
 
     companion object {
-        private const val ONLINE_PROVIDER = "youtube"
         private const val MAX_SEEDS = 3
         private const val MAX_PER_ARTIST = 2
+        val DEFAULT_PROVIDERS = setOf("muzofond", "vol", "youtube")
     }
 }

@@ -45,13 +45,55 @@ class CandidateRankerV2Test {
         assertEquals("near", ranked.first().candidate.id)
     }
 
+    @Test
+    fun semanticLullabyBeatsChillVariant() {
+        val request = MusicSearchRequest(
+            rawQuery = "колыбельная для ребёнка",
+            semanticTags = setOf("lullaby", "bedtime", "nursery"),
+            excludedTerms = setOf("chill", "lofi")
+        )
+        val ranked = ranker.rank(request, listOf(
+            candidate("chill", "Chill Lofi Mix"),
+            candidate("lullaby", "Lullaby Nursery Bedtime Song")
+        ))
+
+        assertEquals("lullaby", ranked.first().candidate.id)
+        assertTrue(ranked.first().reasons.any { it.startsWith("semantic-match") })
+        assertTrue(ranked.last().penalties.any { it.startsWith("semantic-excluded") })
+    }
+
+    @Test
+    fun preferredMuzofondSourceBeatsHigherQualityYouTubeDuplicate() {
+        val request = MusicSearchRequest(
+            rawQuery = "The Weeknd Blinding Lights",
+            artist = "The Weeknd",
+            title = "Blinding Lights"
+        )
+        val ranked = ranker.rank(
+            request,
+            listOf(
+                candidate("muzofond-track", "Blinding Lights", official = false, provider = "muzofond")
+                    .copy(bitrateKbps = 128),
+                candidate("youtube-track", "Blinding Lights", official = true, provider = "youtube")
+                    .copy(bitrateKbps = 256)
+            ),
+            RankingContext(
+                providerReliability = mapOf("muzofond" to .65, "youtube" to 1.0),
+                preferredProviderIds = setOf("muzofond")
+            )
+        )
+
+        assertEquals("muzofond", ranked.first().candidate.providerId)
+    }
+
     private fun candidate(
         id: String,
         title: String,
         official: Boolean = false,
-        durationMs: Long = 185_000
+        durationMs: Long = 185_000,
+        provider: String = "youtube"
     ) = TrackCandidate(
-        providerId = "youtube",
+        providerId = provider,
         id = id,
         title = title,
         artist = "Linkin Park",

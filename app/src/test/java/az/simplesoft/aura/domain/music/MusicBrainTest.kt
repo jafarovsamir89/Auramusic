@@ -73,6 +73,57 @@ class MusicBrainTest {
         assertEquals(PluginFailureReason.NETWORK, result.reason)
     }
 
+    @Test
+    fun strictArtistSearchRejectsWrongProviderArtist() = runBlocking {
+        val youtube = SearchOnlyPlugin(
+            "youtube",
+            200,
+            listOf(
+                candidate("youtube", "good", 180_000, true).copy(artist = "Aygün Kazımova"),
+                candidate("youtube", "wrong", 180_000, true).copy(artist = "Teymur Əmrah")
+            )
+        )
+        val brain = MusicBrain(
+            ProviderManager(setOf(youtube)), CandidateRankerV2(), TrackIdentityResolver(),
+            EmptyRecommendationEngine, RecordingPlaybackCoordinator()
+        )
+
+        val result = brain.search(
+            MusicSearchRequest("Aygun Kazimova", artist = "Aygün Kazımova", artistStrict = true)
+        ) as SearchOutcome.Success
+
+        assertEquals(1, result.tracks.size)
+        assertEquals("Aygün Kazımova", result.tracks.single().alternatives.single().artist)
+    }
+
+    @Test
+    fun strictArtistSearchRetriesMorphologyAndAcceptsTitleEvidence() = runBlocking {
+        val youtube = SearchOnlyPlugin(
+            "youtube",
+            200,
+            listOf(candidate("youtube", "title-evidence", 180_000, true).copy(
+                title = "Aygun Kazimova - Mahni",
+                artist = "YouTube Music"
+            ))
+        )
+        val brain = MusicBrain(
+            ProviderManager(setOf(youtube)), CandidateRankerV2(), TrackIdentityResolver(),
+            EmptyRecommendationEngine, RecordingPlaybackCoordinator()
+        )
+
+        val result = brain.search(
+            MusicSearchRequest(
+                "Aygün Kazımovanın",
+                artist = "Aygün Kazımovanın",
+                artistStrict = true,
+                allowUnattributedArtistMetadata = true
+            )
+        )
+
+        assertTrue(result is SearchOutcome.Success)
+        assertTrue(youtube.requests.map(MusicSearchRequest::query).distinct().size >= 3)
+    }
+
     private fun candidate(provider: String, id: String, duration: Long, official: Boolean) = TrackCandidate(
         providerId = provider,
         id = id,
@@ -89,9 +140,10 @@ private class SearchOnlyPlugin(
     override val priority: Int,
     private val candidates: List<TrackCandidate>
 ) : MusicPlugin {
+    val requests = mutableListOf<MusicSearchRequest>()
     override val displayName = id
     override val capabilities = setOf(PluginCapability.SEARCH, PluginCapability.STREAM)
-    override suspend fun search(request: MusicSearchRequest) = PluginResult.Success(candidates)
+    override suspend fun search(request: MusicSearchRequest) = PluginResult.Success(candidates).also { requests += request }
     override suspend fun resolve(candidate: TrackCandidate): PluginResult<PlayableSource> =
         PluginResult.Failure(PluginFailureReason.NOT_PLAYABLE, "not used")
 }

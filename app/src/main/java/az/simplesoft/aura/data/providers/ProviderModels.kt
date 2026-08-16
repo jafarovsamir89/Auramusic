@@ -2,6 +2,19 @@ package az.simplesoft.aura.data.providers
 
 import android.net.Uri
 import az.simplesoft.aura.data.Track
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
+
+/** Shared bounded network policy for catalog providers. */
+object AuraHttpClient {
+    fun create(): OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(35, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+}
 
 enum class SearchMediaKind {
     TRACK,
@@ -15,11 +28,24 @@ data class MusicSearchRequest(
     val album: String? = null,
     val year: Int? = null,
     val preferredProviderId: String? = null,
-    val limit: Int = 10,
+    // Search screens start with a 20-result page; callers can request up to the
+    // provider-supported maximum when the user taps "Загрузить ещё".
+    val limit: Int = 20,
     val autoPlay: Boolean = true,
-    val mediaKind: SearchMediaKind = SearchMediaKind.TRACK
+    val mediaKind: SearchMediaKind = SearchMediaKind.TRACK,
+    /** Optional provider-facing query produced by the music-search brain. */
+    val providerQuery: String? = null,
+    /** Positive semantic hints used by candidate ranking (for example, lullaby or bedtime). */
+    val semanticTags: Set<String> = emptySet(),
+    /** Variants that should be down-ranked unless explicitly requested. */
+    val excludedTerms: Set<String> = emptySet(),
+    /** True only for a resolved artist command; provider results are filtered before playback. */
+    val artistStrict: Boolean = false,
+    /** Permit a result with generic/missing artist metadata only when its title contains the requested artist. */
+    val allowUnattributedArtistMetadata: Boolean = false
 ) {
-    val query: String get() = listOfNotNull(artist, title).joinToString(" ").ifBlank { rawQuery }
+    val query: String get() = providerQuery?.takeIf(String::isNotBlank)
+        ?: listOfNotNull(artist, title).joinToString(" ").ifBlank { rawQuery }
 }
 
 data class TrackCandidate(

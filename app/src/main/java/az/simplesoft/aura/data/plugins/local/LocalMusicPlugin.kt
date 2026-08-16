@@ -48,7 +48,7 @@ class LocalMusicPlugin(
     }
 
     override suspend fun resolve(candidate: TrackCandidate): PluginResult<PlayableSource> {
-        if (candidate.providerId != id || !candidate.detailUrl.startsWith("content://")) {
+        if (candidate.providerId != id || !(candidate.detailUrl.startsWith("content://") || candidate.detailUrl.startsWith("file://"))) {
             return PluginResult.Failure(PluginFailureReason.NOT_PLAYABLE, "Invalid local media URI")
         }
         val track = Track(

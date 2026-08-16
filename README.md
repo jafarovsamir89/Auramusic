@@ -2,29 +2,41 @@
 
 AURA is a native Android personal music assistant. Online catalog search and playback use YouTube; local files and internet radio remain separate device features rather than fallback music providers.
 
-## AURA AI
+## Local Assistant Boundary
 
-AURA AI uses a hybrid architecture:
+AURA keeps the existing deterministic/local assistant as an offline fallback and adds an optional Gemini Live Smart Voice mode. When configured, `gemini-3.1-flash-live-preview` is the online conversational brain and returns native audio directly; no Whisper → text → cloud → TTS chain is used in that mode. A cloud connection requires explicit user configuration and internet access:
 
 ```text
 voice or text
-  -> local multilingual intent router
-  -> local action OR OpenRouter / DeepSeek reasoning
-  -> validated structured action
+  -> Gemini Live persistent WebSocket (online Smart Voice)
+  -> native Gemini AUDIO + AURA function tools
   -> Music Brain / PlaybackService / Android API
-  -> concise reply + optional Android TTS
+
+offline voice/text
+  -> existing deterministic local intent and dialogue library
+  -> Music Brain / PlaybackService / Android API
+  -> local Silero TTS (Russian only; no Android TTS fallback)
 ```
 
-Greetings, questions and ordinary conversation never fall back to music search. Russian, Azerbaijani and English are supported by the intent layer, conversation context and TTS. Durable user facts and only ten recent messages are kept in a bounded Room-backed JSON record (maximum 16,000 characters); complete transcripts are not retained.
+Commands, dialogue branches, memory, and reply variants work without a network. Russian, Azerbaijani, and English are supported by the local dialogue layer. Durable user facts and recent messages are stored in bounded Room records; complete transcripts are not retained.
 
-DeepSeek is optional. Without a key, local music/control commands and common conversation continue to work. For a private development build, add these untracked lines to `local.properties`:
+Music catalog search, YouTube playback, and Radio Browser station catalogs are network features. Local files, playlists, favorites, queue, history, and assistant memory remain usable without them. Android's system `SpeechRecognizer` only receives `EXTRA_PREFER_OFFLINE`; that flag is a preference and does not guarantee that the vendor recognizer stays off the network. Install the bundled Whisper resource for a fully local speech path.
 
-```properties
-OPENROUTER_API_KEY=your_key_here
-OPENROUTER_MODEL=~deepseek/deepseek-v4-flash-latest
-```
+## Gemini Smart Voice (debug)
 
-Never commit a real key. A key embedded in a client APK can be extracted, so public distribution will require a small authenticated token broker rather than a permanent provider key in the app.
+For a local debug build, add `GEMINI_API_KEY=...` to the ignored `local.properties` file. The key is never committed. Without it, AURA keeps the offline voice fallback. Smart Voice uses a persistent WSS session, 16 kHz mono PCM input, 24 kHz mono PCM native output, automatic transcription, synchronous music function calling, session resumption and context-window compression. Production should replace the debug key provider with a backend-issued ephemeral token provider.
+
+## Voice Resources
+
+Downloads are explicit and visible in the debug Diagnostics storage screen. No speech request starts a download. Android system TTS is deliberately not used: if the verified Russian Silero pack is absent, AURA stays silent instead of producing a robotic fallback. Online Smart Voice speaks through Gemini native audio.
+
+| Resource | Exact size | Languages | Install behavior |
+| --- | ---: | --- | --- |
+| Whisper `ggml-base-q5_1.bin` | 59,707,625 bytes | RU/AZ/EN | Manual install, SHA-256 verified |
+| Silero Kseniya `v1_kseniya_16000.jit` | 142,264,026 bytes | RU | Manual install, SHA-256 verified |
+| Android system voices | — | — | Not used by AURA |
+
+Each download uses a `.part` file, validates HTTP size and SHA-256, atomically moves the model first, then creates an atomic `.sha256` sidecar. Cancelled or failed downloads remove only the partial resource. On restart, stale `IN_PROGRESS` assistant commands are requeued up to three attempts for UI work or failed for background work.
 
 ## Playback flow
 
@@ -54,15 +66,12 @@ Signed `googlevideo` URLs are not stored in the queue or Room. They are resolved
 - AURA Visual System 2.1: reference-led compact cinematic UI, violet/magenta energy accents, central AURA character and 48 dp interaction targets.
 - Free Radio Browser catalog by country with secure station streams, retry states, playback and playlist persistence.
 - Local-device music, voice intents and automotive UI.
-- AURA AI Core 0.3: non-search conversation routing, structured DeepSeek actions through OpenRouter, compact bounded memory, multilingual dialogue history and spoken replies.
+- AURA assistant core: local intent recognition, dialogue branches, compact memory and spoken replies.
+- Optional local Silero voice pack for Russian with pinned size/SHA-256 metadata. Azerbaijani uses the best available real system `az-AZ` voice until a properly trained local pack is validated; normal replies never start a hidden download.
 
 The source review and the architecture derived from NewPipe, InnerTune, ViMusic and Harmony Music are recorded in [`docs/YOUTUBE_ARCHITECTURE_RESEARCH.md`](docs/YOUTUBE_ARCHITECTURE_RESEARCH.md).
 
-The product direction, priorities and explicit non-goals for AURA 2.0 are recorded in [`docs/AURA_V2_DIRECTION.md`](docs/AURA_V2_DIRECTION.md).
-
 The visual tokens and interaction principles are recorded in [`docs/AURA_DESIGN_SYSTEM.md`](docs/AURA_DESIGN_SYSTEM.md).
-
-The assistant seam, memory limits and action-safety rules are recorded in [`docs/AURA_AI_ARCHITECTURE.md`](docs/AURA_AI_ARCHITECTURE.md).
 
 ## Start on a clean computer
 

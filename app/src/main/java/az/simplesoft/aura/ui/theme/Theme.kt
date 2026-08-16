@@ -7,19 +7,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
 private val AuraColors = darkColorScheme(
-    primary = Color(0xFF7C3CFF),
-    onPrimary = Color.White,
-    secondary = Color(0xFFC13DFF),
-    onSecondary = Color.White,
-    tertiary = Color(0xFF2467FF),
-    background = Color(0xFF050A11),
-    onBackground = Color(0xFFF7F6FC),
-    surface = Color(0xFF111720),
-    onSurface = Color(0xFFF7F5FF),
-    surfaceVariant = Color(0xFF1A202A),
-    onSurfaceVariant = Color(0xFFA9AFBB),
-    outline = Color(0xFF353C48),
-    error = Color(0xFFFF6B7D)
+    primary = Color(0xFFCBB9FF),
+    onPrimary = Color(0xFF25232D),
+    secondary = Color(0xFFAFA4CD),
+    onSecondary = Color(0xFF24222B),
+    tertiary = Color(0xFF9294B2),
+    background = Color(0xFF28282F),
+    onBackground = Color(0xFFF2EFF7),
+    surface = Color(0xFF303039),
+    onSurface = Color(0xFFF2EFF7),
+    surfaceVariant = Color(0xFF393842),
+    onSurfaceVariant = Color(0xFFB5B1BD),
+    outline = Color(0xFF55535F),
+    error = Color(0xFFFF8B9A)
 )
 
 @Composable

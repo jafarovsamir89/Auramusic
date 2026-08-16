@@ -12,6 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TrackEntity::class,
         TrackSourceEntity::class,
         ArtistEntity::class,
+        ArtistAliasCorrectionEntity::class,
         AlbumEntity::class,
         FavoriteEntity::class,
         PlayHistoryEntity::class,
@@ -29,9 +30,18 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BlockedArtistEntity::class,
         CachedSearchResultEntity::class,
         CachedPlayableSourceEntity::class,
-        UserPreferenceEntity::class
+        UserPreferenceEntity::class,
+        AssistantDialogueNodeEntity::class,
+        AssistantDialogueVariantEntity::class,
+        AssistantIntentPatternEntity::class,
+        AssistantConversationStateEntity::class,
+        AssistantPendingCommandEntity::class,
+        AssistantUserMemoryEntity::class,
+        AssistantLearnedPhraseEntity::class,
+        AssistantUnknownUtteranceEntity::class,
+        AssistantResponseStatEntity::class
     ],
-    version = 2,
+    version = 6,
     exportSchema = true
 )
 abstract class AuraDatabase : RoomDatabase() {
@@ -45,7 +55,7 @@ abstract class AuraDatabase : RoomDatabase() {
                 context.applicationContext,
                 AuraDatabase::class.java,
                 "aura_music.db"
-            ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { instance = it }
         }
 
         internal val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -73,6 +83,77 @@ abstract class AuraDatabase : RoomDatabase() {
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_queue_snapshot_items_trackId ON queue_snapshot_items(trackId)")
             }
+        }
+
+        internal val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_dialogue_nodes (id TEXT NOT NULL PRIMARY KEY, topic TEXT NOT NULL, language TEXT NOT NULL, nextNodeId TEXT, priority INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_dialogue_nodes_topic ON assistant_dialogue_nodes(topic)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_dialogue_nodes_language ON assistant_dialogue_nodes(language)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_dialogue_variants (id TEXT NOT NULL PRIMARY KEY, nodeId TEXT NOT NULL, language TEXT NOT NULL, tone TEXT NOT NULL, text TEXT NOT NULL, weight INTEGER NOT NULL, cooldownKey TEXT)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_dialogue_variants_nodeId ON assistant_dialogue_variants(nodeId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_dialogue_variants_language ON assistant_dialogue_variants(language)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_intent_patterns (id TEXT NOT NULL PRIMARY KEY, intent TEXT NOT NULL, language TEXT NOT NULL, pattern TEXT NOT NULL, emotion TEXT, priority INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_intent_patterns_intent ON assistant_intent_patterns(intent)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_intent_patterns_language ON assistant_intent_patterns(language)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_conversation_state (id TEXT NOT NULL PRIMARY KEY, nodeId TEXT, topic TEXT, emotion TEXT, updatedAt INTEGER NOT NULL)")
+            }
+        }
+
+        internal val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_conversation_state (id TEXT NOT NULL PRIMARY KEY, nodeId TEXT, topic TEXT, emotion TEXT, updatedAt INTEGER NOT NULL)")
+                if (!hasColumn(db, "assistant_conversation_state", "expectedIntent")) {
+                    db.execSQL("ALTER TABLE assistant_conversation_state ADD COLUMN expectedIntent TEXT")
+                }
+                if (!hasColumn(db, "assistant_conversation_state", "failureCount")) {
+                    db.execSQL("ALTER TABLE assistant_conversation_state ADD COLUMN failureCount INTEGER NOT NULL DEFAULT 0")
+                }
+                if (!hasColumn(db, "assistant_conversation_state", "lastBranch")) {
+                    db.execSQL("ALTER TABLE assistant_conversation_state ADD COLUMN lastBranch TEXT")
+                }
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_pending_commands (commandId TEXT NOT NULL PRIMARY KEY, text TEXT NOT NULL, fingerprint TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, requiresUi INTEGER NOT NULL DEFAULT 1)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_pending_commands_status ON assistant_pending_commands(status)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_pending_commands_fingerprint ON assistant_pending_commands(fingerprint)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_pending_commands_createdAt ON assistant_pending_commands(createdAt)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_user_memory (key TEXT NOT NULL PRIMARY KEY, category TEXT NOT NULL, value TEXT NOT NULL, confirmed INTEGER NOT NULL, updatedAt INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_user_memory_category ON assistant_user_memory(category)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_user_memory_updatedAt ON assistant_user_memory(updatedAt)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_learned_phrases (id TEXT NOT NULL PRIMARY KEY, phrase TEXT NOT NULL, normalizedPhrase TEXT NOT NULL, intent TEXT NOT NULL, slotsJson TEXT NOT NULL, confirmed INTEGER NOT NULL, errorCount INTEGER NOT NULL, confidence REAL NOT NULL, lastUsedAt INTEGER)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_assistant_learned_phrases_normalizedPhrase ON assistant_learned_phrases(normalizedPhrase)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_learned_phrases_intent ON assistant_learned_phrases(intent)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_unknown_utterances (id TEXT NOT NULL PRIMARY KEY, normalizedText TEXT NOT NULL, language TEXT NOT NULL, topic TEXT, result TEXT NOT NULL, frequency INTEGER NOT NULL, firstSeenAt INTEGER NOT NULL, lastSeenAt INTEGER NOT NULL)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_assistant_unknown_utterances_normalizedText ON assistant_unknown_utterances(normalizedText)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_assistant_unknown_utterances_lastSeenAt ON assistant_unknown_utterances(lastSeenAt)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS assistant_response_stats (variantId TEXT NOT NULL PRIMARY KEY, usedCount INTEGER NOT NULL, lastUsedAt INTEGER)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_assistant_response_stats_variantId ON assistant_response_stats(variantId)")
+            }
+        }
+
+        internal val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!hasColumn(db, "assistant_intent_patterns", "nodeId")) {
+                    db.execSQL("ALTER TABLE assistant_intent_patterns ADD COLUMN nodeId TEXT NOT NULL DEFAULT ''")
+                }
+            }
+        }
+
+        internal val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS artist_alias_corrections (normalizedAlias TEXT NOT NULL PRIMARY KEY, artistId TEXT NOT NULL, canonicalName TEXT NOT NULL, confirmed INTEGER NOT NULL, updatedAt INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_artist_alias_corrections_artistId ON artist_alias_corrections(artistId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_artist_alias_corrections_updatedAt ON artist_alias_corrections(updatedAt)")
+            }
+        }
+
+        private fun hasColumn(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
+            db.query("PRAGMA table_info(`$table`)").use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                while (cursor.moveToNext()) {
+                    if (nameIndex >= 0 && cursor.getString(nameIndex) == column) return true
+                }
+            }
+            return false
         }
     }
 }

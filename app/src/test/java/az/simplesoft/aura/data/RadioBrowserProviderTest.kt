@@ -1,5 +1,6 @@
 package az.simplesoft.aura.data
 
+import az.simplesoft.aura.domain.music.RadioPlaybackSelector
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -33,5 +34,20 @@ class RadioBrowserProviderTest {
         assertEquals("https://radio.test/live", stations.single().streamUrl)
         assertEquals(stations.single().streamUrl, stations.single().sourcePageUrl)
         assertTrue(stations.single().artist.contains("192 kbps"))
+        assertEquals(stations.single(), RadioPlaybackSelector.firstPlayable(stations))
+    }
+
+    @Test
+    fun `radio selector cycles to adjacent station`() {
+        val stations = RadioBrowserProvider.parseStations(
+            """[
+              {"stationuuid":"one","name":"One","url_resolved":"https://radio.test/one"},
+              {"stationuuid":"two","name":"Two","url_resolved":"https://radio.test/two"},
+              {"stationuuid":"three","name":"Three","url_resolved":"https://radio.test/three"}
+            ]"""
+        )
+
+        assertEquals("two", RadioPlaybackSelector.next(stations, stations[0].id)?.id)
+        assertEquals("three", RadioPlaybackSelector.previous(stations, stations[0].id)?.id)
     }
 }

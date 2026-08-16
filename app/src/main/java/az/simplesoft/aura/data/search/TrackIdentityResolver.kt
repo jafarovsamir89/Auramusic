@@ -2,6 +2,7 @@ package az.simplesoft.aura.data.search
 
 import az.simplesoft.aura.data.PlaybackType
 import az.simplesoft.aura.data.Track
+import az.simplesoft.aura.data.ArtistArtworkLookup
 import az.simplesoft.aura.data.providers.TrackCandidate
 import kotlin.math.abs
 
@@ -67,7 +68,9 @@ class TrackIdentityResolver(
                     id = "${candidate.providerId}:${candidate.id}",
                     title = candidate.title,
                     artist = candidate.artist,
-                    artworkUrl = candidate.artworkUrl,
+                    artworkUrl = group.asSequence()
+                        .map { it.candidate.artworkUrl }
+                        .firstOrNull(ArtistArtworkLookup::isUsable),
                     durationMs = candidate.durationMs,
                     sourceId = candidate.providerId,
                     sourcePageUrl = candidate.detailUrl,

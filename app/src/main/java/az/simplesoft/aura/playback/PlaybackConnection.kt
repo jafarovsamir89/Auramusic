@@ -2,6 +2,7 @@ package az.simplesoft.aura.playback
 
 import android.content.ComponentName
 import android.content.Context
+import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -12,7 +13,10 @@ import androidx.media3.session.SessionToken
 import az.simplesoft.aura.data.Track
 import az.simplesoft.aura.data.plugins.youtube.YouTubePlaybackIdentity
 import az.simplesoft.aura.domain.music.AuraRepeatMode
+import az.simplesoft.aura.assistant.EqualizerPreset
 import com.google.common.util.concurrent.ListenableFuture
+import androidx.media3.session.SessionCommand
+import java.util.ArrayDeque
 
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackConnection(
@@ -23,12 +27,13 @@ class PlaybackConnection(
         fun onPlaybackChanged(isPlaying: Boolean, isBuffering: Boolean)
         fun onTrackChanged(trackId: String)
         fun onPlaybackError(trackId: String?, message: String)
+        fun onAudioSessionIdChanged(sessionId: Int) = Unit
     }
 
     private val appContext = context.applicationContext
     private val controllerFuture: ListenableFuture<MediaController>
     private var controller: MediaController? = null
-    private val pendingActions = mutableListOf<(MediaController) -> Unit>()
+    private val pendingActions = ArrayDeque<(MediaController) -> Unit>()
 
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -36,6 +41,10 @@ class PlaybackConnection(
                 isPlaying = player.isPlaying,
                 isBuffering = player.playbackState == Player.STATE_BUFFERING
             )
+        }
+
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            listener.onAudioSessionIdChanged(audioSessionId)
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -59,10 +68,12 @@ class PlaybackConnection(
                         isPlaying = it.isPlaying,
                         isBuffering = it.playbackState == Player.STATE_BUFFERING
                     )
-                    val actions = pendingActions.toList()
-                    pendingActions.clear()
+                    val actions = synchronized(pendingActions) {
+                        pendingActions.toList().also { pendingActions.clear() }
+                    }
                     actions.forEach { action -> action(it) }
                 }.onFailure {
+                    synchronized(pendingActions) { pendingActions.clear() }
                     listener.onPlaybackError(null, "Не удалось подключить системный плеер.")
                 }
             },
@@ -143,6 +154,16 @@ class PlaybackConnection(
             it.play()
         }
     }
+
+    /** Selects by media id so AURA's non-playable placeholder cannot shift the index. */
+    fun playTrack(trackId: String) = withController { player ->
+        val mediaIds = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }
+        val mediaIndex = PlaybackQueueMapping.mediaIndexForTrack(mediaIds, trackId)
+        if (mediaIndex >= 0) {
+            player.seekToDefaultPosition(mediaIndex)
+            player.play()
+        }
+    }
     fun setShuffle(enabled: Boolean) = withController { it.shuffleModeEnabled = enabled }
     fun setRepeat(mode: AuraRepeatMode) = withController {
         it.repeatMode = when (mode) {
@@ -151,18 +172,45 @@ class PlaybackConnection(
             AuraRepeatMode.ALL -> Player.REPEAT_MODE_ALL
         }
     }
+    fun setEqualizer(preset: EqualizerPreset) = withController { player ->
+        player.sendCustomCommand(
+            SessionCommand(PlaybackService.CUSTOM_COMMAND_SET_EQUALIZER, Bundle.EMPTY),
+            Bundle().apply { putString(PlaybackService.EXTRA_EQUALIZER_PRESET, preset.name.lowercase()) }
+        )
+    }
+    fun setEqualizerBands(bands: List<Float>) = withController { player ->
+        player.sendCustomCommand(
+            SessionCommand(PlaybackService.CUSTOM_COMMAND_SET_EQUALIZER, Bundle.EMPTY),
+            Bundle().apply {
+                putFloatArray(PlaybackService.EXTRA_EQUALIZER_BANDS, bands.toFloatArray())
+            }
+        )
+    }
     fun seekTo(positionMs: Long) = withController { it.seekTo(positionMs.coerceAtLeast(0L)) }
     fun currentPositionMs(): Long = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
     fun durationMs(): Long = controller?.duration?.takeIf { it > 0L } ?: 0L
+    fun nowPlayingLabel(): String? = controller?.currentMediaItem?.mediaMetadata?.let { metadata ->
+        listOfNotNull(metadata.title?.toString(), metadata.artist?.toString())
+            .joinToString(" — ")
+            .takeIf(String::isNotBlank)
+    }
 
     fun release() {
         controller?.removeListener(playerListener)
+        synchronized(pendingActions) { pendingActions.clear() }
         MediaController.releaseFuture(controllerFuture)
         controller = null
     }
 
     private fun withController(action: (MediaController) -> Unit) {
-        controller?.let(action) ?: pendingActions.add(action)
+        controller?.let(action) ?: synchronized(pendingActions) {
+            if (pendingActions.size >= MAX_PENDING_ACTIONS) pendingActions.removeFirst()
+            pendingActions.addLast(action)
+        }
+    }
+
+    private companion object {
+        const val MAX_PENDING_ACTIONS = 64
     }
 
     private fun toMediaItem(track: Track): MediaItem {

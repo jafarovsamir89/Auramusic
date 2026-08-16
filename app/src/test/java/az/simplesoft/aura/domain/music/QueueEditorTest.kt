@@ -50,6 +50,14 @@ class QueueEditorTest {
     }
 
     @Test
+    fun removeLastKeepsCurrentTrackIndexValid() {
+        val result = QueueEditor.removeLast(listOf(one, two, three), 1)
+
+        assertEquals(listOf(one, two), result.tracks)
+        assertEquals(1, result.currentIndex)
+    }
+
+    @Test
     fun repeatModeCyclesThroughAllSupportedStates() {
         assertEquals(AuraRepeatMode.ONE, AuraRepeatMode.OFF.next())
         assertEquals(AuraRepeatMode.ALL, AuraRepeatMode.ONE.next())

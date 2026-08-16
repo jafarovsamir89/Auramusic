@@ -11,6 +11,11 @@ import az.simplesoft.aura.data.search.CandidateRankerV2
 import az.simplesoft.aura.data.search.RankingContext
 import az.simplesoft.aura.data.search.TrackIdentityResolver
 import az.simplesoft.aura.data.search.UnifiedTrack
+import az.simplesoft.aura.domain.artist.ArtistSearchResultValidator
+import az.simplesoft.aura.domain.artist.ArtistQueryVariants
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlin.math.abs
 
 class MusicBrain(
@@ -18,29 +23,74 @@ class MusicBrain(
     private val candidateRanker: CandidateRankerV2,
     private val identityResolver: TrackIdentityResolver,
     private val recommendationEngine: RecommendationEngine,
-    private val playbackCoordinator: PlaybackCoordinator
+    private val playbackCoordinator: PlaybackCoordinator,
+    private val searchBrain: MusicSearchBrain = MusicSearchBrain(),
+    private val artistValidator: ArtistSearchResultValidator = ArtistSearchResultValidator(),
+    preferredProviderIds: Set<String> = emptySet()
 ) {
+    @Volatile
+    private var activePreferredProviderIds: Set<String> = preferredProviderIds
+
+    fun setPreferredProviderIds(providerIds: Set<String>) {
+        activePreferredProviderIds = providerIds.toSet()
+    }
+
     private data class ResolvedAlternative(
         val candidate: TrackCandidate,
         val source: PlayableSource
     )
 
-    private val alternativesByTrackId = mutableMapOf<String, List<TrackCandidate>>()
+    private val alternativesByTrackId = LinkedHashMap<String, List<TrackCandidate>>()
 
-    suspend fun search(request: MusicSearchRequest): SearchOutcome =
-        when (val result = providerManager.search(request)) {
-            is PluginResult.Success -> {
+    suspend fun search(request: MusicSearchRequest): SearchOutcome {
+        val interpreted = searchBrain.interpret(request)
+        val searchRequests = if (interpreted.artistStrict && !interpreted.artist.isNullOrBlank()) {
+            ArtistQueryVariants.forSearch(interpreted.rawQuery, interpreted.artist).map { variant ->
+                interpreted.copy(rawQuery = variant, providerQuery = variant)
+            }
+        } else listOf(interpreted)
+        val providerResults = coroutineScope {
+            searchRequests.map { query -> async { providerManager.search(query) } }.awaitAll()
+        }
+        val successful = providerResults.filterIsInstance<PluginResult.Success<List<TrackCandidate>>>()
+        if (successful.isEmpty()) {
+            val failure = providerResults.filterIsInstance<PluginResult.Failure>().firstOrNull()
+                ?: return SearchOutcome.Failure(az.simplesoft.aura.data.plugins.core.PluginFailureReason.NOT_FOUND, "No tracks found")
+            return SearchOutcome.Failure(failure.reason, failure.message)
+        }
+        val candidates = successful.flatMap { it.value }.distinctBy { "${it.providerId}:${it.id}" }
+        return run {
                 val reliability = providerManager.stats().mapValues { (_, value) -> value.successRate }
                 val ranked = candidateRanker.rank(
-                    request,
-                    result.value,
-                    RankingContext(providerReliability = reliability)
+                    interpreted,
+                    candidates,
+                    RankingContext(
+                        providerReliability = reliability,
+                        preferredProviderIds = activePreferredProviderIds
+                    )
                 )
-                val unified = identityResolver.unify(ranked)
-                SearchOutcome.Success(unified, result.diagnostics)
+                val validated = if (interpreted.artistStrict && !interpreted.artist.isNullOrBlank()) {
+                    val validation = artistValidator.validate(
+                        interpreted.artist,
+                        ranked.map { it.candidate },
+                        allowUnattributed = interpreted.allowUnattributedArtistMetadata
+                    )
+                    if (validation.accepted.isEmpty()) {
+                        return SearchOutcome.Failure(
+                            az.simplesoft.aura.data.plugins.core.PluginFailureReason.NOT_FOUND,
+                            "No confident track found for ${interpreted.artist}"
+                        )
+                    }
+                    ranked.filter { rankedCandidate -> validation.accepted.any { it.providerId == rankedCandidate.candidate.providerId && it.id == rankedCandidate.candidate.id } }
+                } else ranked
+                val unified = identityResolver.unify(validated)
+                SearchOutcome.Success(
+                    unified,
+                    successful.first().diagnostics + mapOf("artistSearchVariants" to searchRequests.size.toString()) +
+                        if (interpreted.artistStrict) mapOf("artistValidator" to "${validated.size}/${ranked.size}") else emptyMap()
+                )
             }
-            is PluginResult.Failure -> SearchOutcome.Failure(result.reason, result.message)
-        }
+    }
 
     suspend fun searchAndPlay(request: MusicSearchRequest): PlaybackOutcome {
         val search = search(request)
@@ -114,9 +164,9 @@ class MusicBrain(
         val resolved = resolveFirst(compatible)
         if (resolved != null) {
             playbackCoordinator.replaceCurrent(resolved.source.track, position)
-            alternativesByTrackId[resolved.source.track.id] = alternatives.filterNot {
+            rememberAlternatives(resolved.source.track.id, alternatives.filterNot {
                 it.providerId == resolved.candidate.providerId && it.id == resolved.candidate.id
-            }
+            })
             return PlaybackOutcome.Started(resolved.source.track, position, compatible.size - 1)
         }
 
@@ -144,13 +194,18 @@ class MusicBrain(
         val resolved = resolveFirst(unified.alternatives)
             ?: return PlaybackOutcome.Failure("No playable source")
         val source = resolved.source
-        alternativesByTrackId[source.track.id] = unified.alternatives.filterNot {
+        val resolvedTrack = if (!az.simplesoft.aura.data.ArtistArtworkLookup.isUsable(source.track.artworkUrl) &&
+            az.simplesoft.aura.data.ArtistArtworkLookup.isUsable(unified.metadata.artworkUrl)
+        ) {
+            source.track.copy(artworkUrl = unified.metadata.artworkUrl)
+        } else source.track
+        rememberAlternatives(source.track.id, unified.alternatives.filterNot {
             it.providerId == resolved.candidate.providerId && it.id == resolved.candidate.id
-        }
-        if (replacing) playbackCoordinator.replaceCurrent(source.track, positionMs)
-        else playbackCoordinator.play(listOf(source.track), source.track, positionMs)
+        })
+        if (replacing) playbackCoordinator.replaceCurrent(resolvedTrack, positionMs)
+        else playbackCoordinator.play(listOf(resolvedTrack), resolvedTrack, positionMs)
         return PlaybackOutcome.Started(
-            source.track,
+            resolvedTrack,
             resumedAtMs = positionMs,
             alternativesAvailable = (unified.alternatives.size - 1).coerceAtLeast(0)
         )
@@ -164,6 +219,14 @@ class MusicBrain(
             }
         }
         return null
+    }
+
+    private fun rememberAlternatives(trackId: String, alternatives: List<TrackCandidate>) {
+        alternativesByTrackId.remove(trackId)
+        alternativesByTrackId[trackId] = alternatives.take(MAX_ALTERNATIVES_PER_TRACK)
+        while (alternativesByTrackId.size > MAX_ALTERNATIVE_TRACKS) {
+            alternativesByTrackId.remove(alternativesByTrackId.entries.first().key)
+        }
     }
 
     private fun durationCompatible(left: Long?, right: Long?): Boolean =
@@ -180,4 +243,9 @@ class MusicBrain(
         popularity = popularity?.toLong(),
         year = year
     )
+
+    private companion object {
+        const val MAX_ALTERNATIVE_TRACKS = 128
+        const val MAX_ALTERNATIVES_PER_TRACK = 8
+    }
 }

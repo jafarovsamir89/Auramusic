@@ -7,9 +7,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import az.simplesoft.aura.data.providers.AuraHttpClient
 
 class YouTubeSearchClient(
-    private val httpClient: OkHttpClient = OkHttpClient(),
+    private val httpClient: OkHttpClient = AuraHttpClient.create(),
     private val requestContext: YouTubeRequestContext = YouTubeRequestContext(),
     private val parser: YouTubeSearchParser = YouTubeSearchParser()
 ) {

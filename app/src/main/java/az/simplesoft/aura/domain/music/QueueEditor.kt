@@ -42,6 +42,18 @@ object QueueEditor {
         return QueueEditResult(listOf(current), 0)
     }
 
+    fun removeLast(queue: List<Track>, currentIndex: Int): QueueEditResult {
+        if (queue.size <= 1) return normalized(queue, currentIndex)
+        val current = queue.getOrNull(currentIndex)
+        val updated = queue.dropLast(1)
+        return QueueEditResult(
+            tracks = updated,
+            currentIndex = current?.let { updated.indexOfFirst { track -> track.id == it.id } }
+                ?.coerceAtLeast(0)
+                ?: currentIndex.coerceIn(0, updated.lastIndex)
+        )
+    }
+
     private fun insert(
         queue: List<Track>,
         currentIndex: Int,

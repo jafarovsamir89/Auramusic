@@ -6,7 +6,10 @@ import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class LocalMusicProvider(private val context: Context) {
+class LocalMusicProvider(
+    private val context: Context,
+    private val offlineStore: OfflineTrackStore = OfflineTrackStore(context)
+) {
     suspend fun load(): List<Track> = withContext(Dispatchers.IO) {
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
@@ -17,7 +20,7 @@ class LocalMusicProvider(private val context: Context) {
             MediaStore.Audio.Media.YEAR
         )
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} > 30000"
-        val tracks = mutableListOf<Track>()
+        val tracks = offlineStore.load().toMutableList()
         runCatching {
             context.contentResolver.query(
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
@@ -53,6 +56,6 @@ class LocalMusicProvider(private val context: Context) {
                 }
             }
         }
-        tracks
+        tracks.distinctBy(Track::id)
     }
 }
